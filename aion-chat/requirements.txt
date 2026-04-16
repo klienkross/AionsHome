@@ -10,6 +10,9 @@ webrtcvad-wheels
 pyncm
 pydantic
 python-multipart
+ebooklib
+beautifulsoup4
+lxml
 websockets
 pywin32
 psutil

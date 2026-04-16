@@ -11,6 +11,8 @@ log = logging.getLogger("ws")
 class ConnectionManager:
     def __init__(self):
         self.active: list[WebSocket] = []
+        self.tts_clients: dict[WebSocket, dict] = {}  # {ws: {"enabled": bool, "voice": str}}
+        self._tts_fallback: dict = {}  # {"enabled": bool, "voice": str} — 来自 HTTP 请求的备用 TTS 状态
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
@@ -20,7 +22,34 @@ class ConnectionManager:
     def disconnect(self, ws: WebSocket):
         if ws in self.active:
             self.active.remove(ws)
+        self.tts_clients.pop(ws, None)
         log.info("WS disconnected, total=%d", len(self.active))
+
+    def set_tts_state(self, ws: WebSocket, enabled: bool, voice: str = ""):
+        if enabled and voice:
+            self.tts_clients[ws] = {"enabled": True, "voice": voice}
+        else:
+            self.tts_clients.pop(ws, None)
+
+    def set_tts_fallback(self, enabled: bool, voice: str = ""):
+        """从 HTTP 请求更新备用 TTS 状态（当 WS tts_state 未送达时的保底）"""
+        if enabled and voice:
+            self._tts_fallback = {"enabled": True, "voice": voice}
+        else:
+            self._tts_fallback = {}
+
+    def any_tts_enabled(self) -> bool:
+        if any(c.get("enabled") for c in self.tts_clients.values()):
+            return True
+        return bool(self._tts_fallback.get("enabled"))
+
+    def get_tts_voice(self) -> str | None:
+        for c in self.tts_clients.values():
+            if c.get("enabled"):
+                return c.get("voice")
+        if self._tts_fallback.get("enabled"):
+            return self._tts_fallback.get("voice")
+        return None
 
     async def broadcast(self, data: dict, exclude: WebSocket = None):
         msg = json.dumps(data, ensure_ascii=False)

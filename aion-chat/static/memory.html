@@ -199,6 +199,8 @@ function editMemory(id) {
   // 进入聚焦编辑模式
   document.querySelector('.sub-page').classList.add('editing-focus');
   entry.classList.add('mem-editing');
+  const curType = mem.type || 'event';
+  const typeOptions = Object.entries(MEM_TYPE_LABELS).map(([k,v]) => `<option value="${k}"${k === curType ? ' selected' : ''}>${v}</option>`).join('');
   entry.innerHTML = `
     <div style="flex:1;display:flex;flex-direction:column;gap:8px;padding:4px 0">
       <div style="display:flex;justify-content:space-between;align-items:center">
@@ -207,6 +209,8 @@ function editMemory(id) {
       </div>
       <textarea class="mem-content-edit" id="me_${escHtml(id)}">${escHtml(mem.content)}</textarea>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:11px;color:var(--text2)">标签:</label>
+        <select id="mt_${escHtml(id)}" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;outline:none">${typeOptions}</select>
         <label style="font-size:11px;color:var(--text2)">关键词:</label>
         <input type="text" id="mk_${escHtml(id)}" value="${escHtml(kws)}" placeholder="逗号分隔" style="flex:1;min-width:120px;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;outline:none">
         <label style="font-size:11px;color:var(--text2)">重要度:</label>
@@ -234,15 +238,18 @@ async function saveMemoryEdit(id) {
   if (!newContent) return;
   const kwEl = document.getElementById("mk_" + id);
   const impEl = document.getElementById("mi_" + id);
+  const typeEl = document.getElementById("mt_" + id);
   const kwStr = kwEl ? kwEl.value.trim() : '';
   const kwArr = kwStr ? kwStr.split(/[,，]/).map(s => s.trim()).filter(Boolean) : [];
   const imp = impEl ? parseFloat(impEl.value) : null;
+  const newType = typeEl ? typeEl.value : null;
   const body = { content: newContent, keywords: JSON.stringify(kwArr) };
+  if (newType) body.type = newType;
   if (imp != null && !isNaN(imp)) body.importance = Math.max(0, Math.min(1, imp));
   try {
     await api("PUT", `/api/memories/${id}`, body);
     const mem = _allMemories.find(m => m.id === id);
-    if (mem) { mem.content = newContent; mem.keywords = body.keywords; if (body.importance != null) mem.importance = body.importance; }
+    if (mem) { mem.content = newContent; mem.keywords = body.keywords; if (newType) mem.type = newType; if (body.importance != null) mem.importance = body.importance; }
     document.querySelector('.sub-page').classList.remove('editing-focus');
     renderMemories();
   } catch(e) { alert("保存失败"); }

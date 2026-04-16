@@ -14,13 +14,15 @@ from config import DEFAULT_MODEL, load_worldbook, SETTINGS
 from database import get_db
 from ws import manager
 from ai_providers import stream_ai
-from memory import recall_memories, instant_digest, fetch_source_details, build_surfacing_memories
+from memory import recall_memories, instant_digest, fetch_source_details, build_surfacing_memories, get_embedding, _pack_embedding
 from camera import cam, CAM_CHECK_CMD, perform_cam_check
 from activity import is_activity_tracking_enabled, get_activity_summary_for_prompt
 from routes.files import export_conversation
 from routes.music import MUSIC_CMD_PATTERN
+from tts import TTSStreamer
 
 HEART_CMD_PATTERN = re.compile(r'\[HEART:([^\]]+)\]')
+MEMORY_CMD_PATTERN = re.compile(r'\[MEMORY:([^\]]+)\]')
 ACTIVITY_CHECK_PATTERN = re.compile(r'\[查看动态:(\d+)\]')
 
 # 允许进入上下文的 system 消息关键词（点歌、查看监控、查看动态）
@@ -32,6 +34,7 @@ router = APIRouter()
 
 POI_SEARCH_PATTERN = re.compile(r'\[POI_SEARCH:([^\]]+)\]')
 TOY_CMD_PATTERN = re.compile(r'\[TOY:(\d|STOP)\]')
+META_TAG_PATTERN = re.compile(r'\s*<meta>.*?</meta>', re.DOTALL)
 
 TOY_PRESET_NAMES = {1:'微风轻拂',2:'春水初生',3:'暗流涌动',4:'如梦似幻',5:'情潮渐涨',6:'烈焰焚身',7:'极乐之巅',8:'魂飞魄散',9:'失控'}
 
@@ -74,6 +77,8 @@ class MsgCreate(BaseModel):
     whisper_mode: bool = False
     fast_mode: bool = False
     temperature: Optional[float] = None
+    tts_enabled: bool = False
+    tts_voice: str = ""
 
 class MsgUpdate(BaseModel):
     content: str
@@ -235,7 +240,8 @@ async def send_message(conv_id: str, body: MsgCreate):
                 continue
             try: d["attachments"] = json.loads(d.get("attachments") or "[]") if d.get("attachments") else []
             except: d["attachments"] = []
-            # 在每条上下文消息末尾用<meta>标签附加发送时间
+            # 清洗消息中可能已有的 <meta> 标签（AI 模仿产生的），再附加系统时间戳
+            d["content"] = META_TAG_PATTERN.sub("", d["content"]).strip()
             if d.get("created_at"):
                 dt = datetime.fromtimestamp(d["created_at"])
                 d["content"] = f"{d['content']}\n<meta>发送时间：{dt.month}月{dt.day}日 {dt.strftime('%H:%M')}</meta>"
@@ -256,6 +262,9 @@ async def send_message(conv_id: str, body: MsgCreate):
     if wb.get("user_persona"):
         prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
         prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
+    if wb.get("system_prompt"):
+        prefix.append({"role": "user", "content": f"[系统提示]\n{wb['system_prompt']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会遵循这些规则。"})
     if prefix:
         history = prefix + history
 
@@ -290,9 +299,10 @@ async def send_message(conv_id: str, body: MsgCreate):
         pass
     if body.whisper_mode:
         abilities.append(f"[TOY:1]~[TOY:9] — 控制{user_name}身上的情趣玩具切换到对应预设档位（1最温柔，9最强烈）。[TOY:STOP] — 停止玩具。你可以根据对话氛围自然地使用这些指令来挑逗和调教{user_name}，配合你的话语循序渐进，不要一上来就用高档位。")
-    abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（觉得值得长期记录、内心os，想偷偷记住的小秘密等），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，不必每次都用，只在真正有感触时使用。")
+    abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
+    abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。")
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
-    ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不需要包含任何<meta>标签或时间信息。"
+    ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     # 注入当前日程列表
     schedules = await get_active_schedules()
     schedule_text = build_schedule_prompt(schedules)
@@ -395,6 +405,13 @@ async def send_message(conv_id: str, body: MsgCreate):
     # ── 后台任务 + SSE 转发：AI 生成和保存在后台任务中完成，即使客户端断开也不丢失 ──
     _q: asyncio.Queue = asyncio.Queue()
 
+    # 创建 TTS streamer（如果请求方开了 TTS）
+    tts_streamer = None
+    if body.tts_enabled and body.tts_voice:
+        tts_streamer = TTSStreamer(ai_msg_id, body.tts_voice, manager)
+    # 同步备用 TTS 状态，供 cam_check / schedule 等服务端触发场景使用
+    manager.set_tts_fallback(body.tts_enabled, body.tts_voice)
+
     async def _bg_generate():
         """后台任务：AI 流式生成 → 后处理 → 存 DB → WS 广播。始终运行到结束。"""
         full_text = ""
@@ -405,6 +422,8 @@ async def send_message(conv_id: str, body: MsgCreate):
                 async for chunk in stream_ai(history, model_key, usage_meta):
                     full_text += chunk
                     await _q.put({"type": "chunk", "content": chunk})
+                    if tts_streamer:
+                        tts_streamer.feed(chunk)
             except Exception as e:
                 has_error = True
                 error_text = f"\n[请求出错: {str(e)}]"
@@ -480,6 +499,36 @@ async def send_message(conv_id: str, body: MsgCreate):
                         hw_data = {'type': 'heart_whisper', 'id': hw_id, 'msg_id': ai_msg_id, 'content': hw_content, 'created_at': hw_now}
                         await _q.put(hw_data)
                         await manager.broadcast({"type": "heart_whisper", "data": hw_data})
+
+            # 检测 [MEMORY:xxx] 记忆录入指令
+            memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
+            if memory_matches:
+                full_text = MEMORY_CMD_PATTERN.sub("", full_text).strip()
+                for mem_content in memory_matches:
+                    mem_content = mem_content.strip()
+                    if mem_content:
+                        mem_now = time.time()
+                        mem_id = f"mem_{int(mem_now*1000)}"
+                        vec = await get_embedding(mem_content)
+                        async with get_db() as mem_db:
+                            await mem_db.execute(
+                                "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts, unresolved) "
+                                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                (mem_id, mem_content, "重要事件", mem_now, conv_id,
+                                 _pack_embedding(vec) if vec else None, '', 0.5, None, None, 0)
+                            )
+                            await mem_db.commit()
+                        mem_data = {"id": mem_id, "content": mem_content, "type": "重要事件",
+                                    "created_at": mem_now, "keywords": "", "importance": 0.5,
+                                    "source_start_ts": None, "source_end_ts": None}
+                        await manager.broadcast({"type": "memory_added", "data": mem_data})
+                        mr_data = {'type': 'memory_record', 'msg_id': ai_msg_id, 'content': mem_content, 'mem_id': mem_id}
+                        await _q.put(mr_data)
+                        await manager.broadcast({"type": "memory_record", "data": mr_data})
+                        print(f"[MEMORY] AI 主动录入记忆: {mem_content[:50]}")
+
+            # 清洗 AI 回复中模仿产生的 <meta> 标签
+            full_text = META_TAG_PATTERN.sub("", full_text).strip()
 
             # 将音乐点歌信息存入 attachments，刷新后可显示胶囊
             music_atts = [{"type": "music", "name": s["name"], "artist": s["artist"], "id": s["id"]} for s in music_cards] if music_cards else []
@@ -557,6 +606,11 @@ async def send_message(conv_id: str, body: MsgCreate):
             import traceback
             traceback.print_exc()
         finally:
+            if tts_streamer:
+                try:
+                    await tts_streamer.flush()
+                except Exception:
+                    pass
             await _q.put({"type": "done"})
 
     asyncio.create_task(_bg_generate())
@@ -687,6 +741,9 @@ async def perform_poi_check(conv_id: str, model_key: str, categories: list[str])
     if wb.get("user_persona"):
         prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
         prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
+    if wb.get("system_prompt"):
+        prefix.append({"role": "user", "content": f"[系统提示]\n{wb['system_prompt']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会遵循这些规则。"})
 
     # 获取最近对话上下文
     import aiosqlite
@@ -710,11 +767,21 @@ async def perform_poi_check(conv_id: str, model_key: str, categories: list[str])
         {"role": "user", "content": poi_prompt}
     ]
 
+    # 预生成 msg_id + TTS
+    msg_id = f"msg_{int(time.time()*1000)}_poi"
+    poi_tts = None
+    if manager.any_tts_enabled():
+        tts_voice = manager.get_tts_voice()
+        if tts_voice:
+            poi_tts = TTSStreamer(msg_id, tts_voice, manager)
+
     full_text = ""
     try:
         _temp = SETTINGS.get("temperature")
         async for chunk in stream_ai(messages, model_key, temperature=_temp):
             full_text += chunk
+            if poi_tts:
+                poi_tts.feed(chunk)
     except Exception as e:
         full_text = f"[周边搜索完成但回复生成失败] {e}"
 
@@ -737,7 +804,6 @@ async def perform_poi_check(conv_id: str, model_key: str, categories: list[str])
     await manager.broadcast({"type": "msg_created", "data": sys_msg})
 
     now = time.time()
-    msg_id = f"msg_{int(now*1000)}_poi"
     async with get_db() as db:
         await db.execute(
             "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
@@ -748,7 +814,12 @@ async def perform_poi_check(conv_id: str, model_key: str, categories: list[str])
 
     ai_msg = {"id": msg_id, "conv_id": conv_id, "role": "assistant",
               "content": full_text, "created_at": now, "attachments": []}
-    await manager.broadcast({"type": "msg_created", "data": ai_msg, "tts": True})
+    await manager.broadcast({"type": "msg_created", "data": ai_msg})
+    if poi_tts:
+        try:
+            await poi_tts.flush()
+        except Exception:
+            pass
     await export_conversation(conv_id)
     print(f"[POI_CHECK] 搜索完成，已自动追加回复: {searched_cats}")
 
@@ -774,6 +845,9 @@ async def perform_activity_check(conv_id: str, model_key: str, n: int = 6):
     if wb.get("user_persona"):
         prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
         prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
+    if wb.get("system_prompt"):
+        prefix.append({"role": "user", "content": f"[系统提示]\n{wb['system_prompt']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会遵循这些规则。"})
 
     import aiosqlite
     async with get_db() as db:
@@ -794,11 +868,21 @@ async def perform_activity_check(conv_id: str, model_key: str, n: int = 6):
         {"role": "user", "content": activity_prompt}
     ]
 
+    # 预生成 msg_id + TTS
+    msg_id = f"msg_{int(time.time()*1000)}_ac"
+    ac_tts = None
+    if manager.any_tts_enabled():
+        tts_voice = manager.get_tts_voice()
+        if tts_voice:
+            ac_tts = TTSStreamer(msg_id, tts_voice, manager)
+
     full_text = ""
     try:
         _temp = SETTINGS.get("temperature")
         async for chunk in stream_ai(messages, model_key, temperature=_temp):
             full_text += chunk
+            if ac_tts:
+                ac_tts.feed(chunk)
     except Exception as e:
         full_text = f"[查看动态失败] {e}"
 
@@ -819,7 +903,6 @@ async def perform_activity_check(conv_id: str, model_key: str, n: int = 6):
     await manager.broadcast({"type": "msg_created", "data": sys_msg})
 
     now = time.time()
-    msg_id = f"msg_{int(now*1000)}_ac"
     async with get_db() as db:
         await db.execute(
             "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
@@ -830,14 +913,19 @@ async def perform_activity_check(conv_id: str, model_key: str, n: int = 6):
 
     ai_msg = {"id": msg_id, "conv_id": conv_id, "role": "assistant",
               "content": full_text, "created_at": now, "attachments": []}
-    await manager.broadcast({"type": "msg_created", "data": ai_msg, "tts": True})
+    await manager.broadcast({"type": "msg_created", "data": ai_msg})
+    if ac_tts:
+        try:
+            await ac_tts.flush()
+        except Exception:
+            pass
     await export_conversation(conv_id)
     print(f"[ACTIVITY_CHECK] 查看动态完成，n={n}，已自动追加回复")
 
 
 # ── 重新生成 AI 回复 ──────────────────────────────
 @router.post("/api/conversations/{conv_id}/regenerate")
-async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode: bool = False, fast_mode: bool = False, temperature: Optional[float] = None):
+async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode: bool = False, fast_mode: bool = False, temperature: Optional[float] = None, tts_enabled: bool = False, tts_voice: str = ""):
     async with get_db() as db:
         db.row_factory = __import__('aiosqlite').Row
         cur = await db.execute("SELECT model FROM conversations WHERE id=?", (conv_id,))
@@ -863,7 +951,8 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 continue
             try: d["attachments"] = json.loads(d.get("attachments") or "[]") if d.get("attachments") else []
             except: d["attachments"] = []
-            # 在每条上下文消息末尾用<meta>标签附加发送时间
+            # 清洗消息中可能已有的 <meta> 标签（AI 模仿产生的），再附加系统时间戳
+            d["content"] = META_TAG_PATTERN.sub("", d["content"]).strip()
             if d.get("created_at"):
                 dt = datetime.fromtimestamp(d["created_at"])
                 d["content"] = f"{d['content']}\n<meta>发送时间：{dt.month}月{dt.day}日 {dt.strftime('%H:%M')}</meta>"
@@ -890,6 +979,9 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     if wb.get("user_persona"):
         prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
         prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
+    if wb.get("system_prompt"):
+        prefix.append({"role": "user", "content": f"[系统提示]\n{wb['system_prompt']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会遵循这些规则。"})
     if prefix:
         history = prefix + history
 
@@ -922,9 +1014,10 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
         pass
     if whisper_mode:
         abilities.append(f"[TOY:1]~[TOY:9] — 控制{user_name}身上的情趣玩具切换到对应预设档位（1最温柔，9最强烈）。[TOY:STOP] — 停止玩具。你可以根据对话氛围自然地使用这些指令来挑逗和调教{user_name}，配合你的话语循序渐进，不要一上来就用高档位。")
-    abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（觉得值得长期记录、内心os，想偷偷记住的小秘密等），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用，只在真正有感触时使用。")
-    ability_block = "[系统能力] 你可以在回复中使用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
-    ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不需要也不应该包含任何<meta>标签或时间信息。"
+    abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
+    abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。")
+    ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
+    ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     schedules = await get_active_schedules()
     schedule_text = build_schedule_prompt(schedules)
     ability_block += f"\n\n【当前日程列表】\n{schedule_text}"
@@ -1024,6 +1117,12 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     # ── 后台任务 + SSE 转发：AI 生成和保存在后台任务中完成，即使客户端断开也不丢失 ──
     _q: asyncio.Queue = asyncio.Queue()
 
+    # 创建 TTS streamer（如果请求方开了 TTS）
+    regen_tts = None
+    if tts_enabled and tts_voice:
+        regen_tts = TTSStreamer(ai_msg_id, tts_voice, manager)
+    manager.set_tts_fallback(tts_enabled, tts_voice)
+
     async def _bg_generate():
         """后台任务：AI 流式生成 → 后处理 → 存 DB → WS 广播。始终运行到结束。"""
         full_text = ""
@@ -1034,6 +1133,8 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 async for chunk in stream_ai(history, model_key, usage_meta, temperature):
                     full_text += chunk
                     await _q.put({"type": "chunk", "content": chunk})
+                    if regen_tts:
+                        regen_tts.feed(chunk)
             except Exception as e:
                 has_error = True
                 error_text = f"\n[请求出错: {str(e)}]"
@@ -1109,6 +1210,36 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                         hw_data = {'type': 'heart_whisper', 'id': hw_id, 'msg_id': ai_msg_id, 'content': hw_content, 'created_at': hw_now}
                         await _q.put(hw_data)
                         await manager.broadcast({"type": "heart_whisper", "data": hw_data})
+
+            # 检测 [MEMORY:xxx] 记忆录入指令
+            memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
+            if memory_matches:
+                full_text = MEMORY_CMD_PATTERN.sub("", full_text).strip()
+                for mem_content in memory_matches:
+                    mem_content = mem_content.strip()
+                    if mem_content:
+                        mem_now = time.time()
+                        mem_id = f"mem_{int(mem_now*1000)}"
+                        vec = await get_embedding(mem_content)
+                        async with get_db() as mem_db:
+                            await mem_db.execute(
+                                "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts, unresolved) "
+                                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                (mem_id, mem_content, "重要事件", mem_now, conv_id,
+                                 _pack_embedding(vec) if vec else None, '', 0.5, None, None, 0)
+                            )
+                            await mem_db.commit()
+                        mem_data = {"id": mem_id, "content": mem_content, "type": "重要事件",
+                                    "created_at": mem_now, "keywords": "", "importance": 0.5,
+                                    "source_start_ts": None, "source_end_ts": None}
+                        await manager.broadcast({"type": "memory_added", "data": mem_data})
+                        mr_data = {'type': 'memory_record', 'msg_id': ai_msg_id, 'content': mem_content, 'mem_id': mem_id}
+                        await _q.put(mr_data)
+                        await manager.broadcast({"type": "memory_record", "data": mr_data})
+                        print(f"[MEMORY] AI 主动录入记忆: {mem_content[:50]}")
+
+            # 清洗 AI 回复中模仿产生的 <meta> 标签
+            full_text = META_TAG_PATTERN.sub("", full_text).strip()
 
             # 将音乐点歌信息存入 attachments，刷新后可显示胶囊
             music_atts = [{"type": "music", "name": s["name"], "artist": s["artist"], "id": s["id"]} for s in music_cards] if music_cards else []
@@ -1186,6 +1317,11 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
             import traceback
             traceback.print_exc()
         finally:
+            if regen_tts:
+                try:
+                    await regen_tts.flush()
+                except Exception:
+                    pass
             await _q.put({"type": "done"})
 
     asyncio.create_task(_bg_generate())

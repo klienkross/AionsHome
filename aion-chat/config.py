@@ -68,7 +68,7 @@ def load_worldbook():
             return json.loads(WORLDBOOK_PATH.read_text(encoding='utf-8'))
         except:
             pass
-    return {"ai_persona": "", "user_persona": "", "ai_name": "AI", "user_name": "你"}
+    return {"ai_persona": "", "user_persona": "", "system_prompt": "", "ai_name": "AI", "user_name": "你"}
 
 def save_worldbook(data: dict):
     WORLDBOOK_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -118,15 +118,20 @@ def sanitize_filename(name):
 
 # ── 模型配置 ─────────────────────────────────────
 MODELS = {
-    "GLM-5":        {"provider": "siliconflow", "model": "Pro/zai-org/GLM-5"},
-    "Pro/MiniMaxAI/MiniMax-M2.5":      {"provider": "siliconflow", "model": "Pro/MiniMaxAI/MiniMax-M2.5"},
-    "Kimi-K2.5":    {"provider": "siliconflow", "model": "Pro/moonshotai/Kimi-K2.5"},
+    "硅基GLM-5":        {"provider": "siliconflow", "model": "Pro/zai-org/GLM-5"},
+    "硅基GLM-5.1":      {"provider": "siliconflow", "model": "Pro/zai-org/GLM-5.1"},
+    "硅基Kimi-K2.5":    {"provider": "siliconflow", "model": "Pro/moonshotai/Kimi-K2.5"},
     "gemini-3.1-flash-lite": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
     "gemini-2.5-pro":        {"provider": "gemini", "model": "gemini-2.5-pro"},
     "gemini-3-flash":        {"provider": "gemini", "model": "gemini-3-flash-preview"},
     "gemini-3.1-pro":        {"provider": "gemini", "model": "gemini-3.1-pro-preview"},
     "claude-sonnet-4-6":  {"provider": "aipro", "model": "claude-sonnet-4-6"},
-    "claude-opus-4-6":    {"provider": "aipro", "model": "claude-opus-4-6"},
+    "claude-opus4.6":    {"provider": "aipro", "model": "claude-opus-4-6"},
+    "claude-opus4.6T":    {"provider": "aipro", "model": "claude-opus-4-6-thinking"},
+    "哈基米3.1pro":    {"provider": "aipro", "model": "gemini-3.1-pro-high"},
+    "哈基米2.5pro":    {"provider": "aipro", "model": "gemini-2.5-pro"},
+    
+    
 }
 
 DEFAULT_MODEL = "gemini-3-flash"

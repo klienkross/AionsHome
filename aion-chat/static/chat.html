@@ -151,8 +151,30 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 
 /* ── [HEART] 心语提示 ── */
 .msg-avatar-col { position: relative; }
-.heart-whisper-hint { position: absolute; top: -4px; right: -4px; font-size: 14px; line-height: 1; cursor: default; opacity: 0; animation: heartFadeIn 0.6s ease forwards; pointer-events: none; z-index: 2; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.15)); }
+.heart-whisper-hint { position: absolute; top: -4px; right: -4px; font-size: 14px; line-height: 1; cursor: pointer; opacity: 0; animation: heartFadeIn 0.6s ease forwards; pointer-events: auto; z-index: 2; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.15)); transition: transform 0.15s; }
+.heart-whisper-hint:hover { transform: scale(1.25); }
 @keyframes heartFadeIn { 0% { opacity: 0; transform: scale(0.3); } 50% { transform: scale(1.2); } 100% { opacity: 1; transform: scale(1); } }
+
+/* ── 心语卡片弹窗 ── */
+.hw-card-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 1000; display: flex; align-items: center; justify-content: center; animation: hwOverlayIn 0.2s ease; }
+@keyframes hwOverlayIn { from { opacity: 0; } to { opacity: 1; } }
+.hw-card-popup { position: relative; background: linear-gradient(145deg, #fffaf6, #fff3eb); border: 1px solid rgba(255,131,89,0.18); border-radius: 16px; padding: 22px 24px 20px; min-width: 260px; max-width: 380px; width: 85vw; box-shadow: 0 12px 40px rgba(0,0,0,0.12), 0 2px 8px rgba(255,131,89,0.08); animation: hwCardIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes hwCardIn { from { opacity: 0; transform: scale(0.85) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+.hw-card-popup .hw-card-label { font-size: 12px; color: #b0a39a; margin-bottom: 12px; letter-spacing: 1px; }
+.hw-card-popup .hw-card-text { font-size: 15px; color: #4a3b32; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.hw-card-popup .hw-card-close { position: absolute; top: 12px; right: 14px; background: none; border: none; color: #b0a39a; font-size: 18px; cursor: pointer; padding: 4px 6px; border-radius: 6px; line-height: 1; transition: color 0.15s, background 0.15s; }
+.hw-card-popup .hw-card-close:hover { color: #4a3b32; background: rgba(0,0,0,0.05); }
+
+/* ── [MEMORY] 记忆录入提示 ── */
+.memory-record-hint { position: absolute; bottom: -14px; left: 50%; transform: translateX(-50%); font-size: 16px; line-height: 1; cursor: pointer; opacity: 0; animation: memHintIn 0.6s 0.3s ease forwards; pointer-events: auto; z-index: 2; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.12)); transition: transform 0.15s; }
+.memory-record-hint:hover { transform: translateX(-50%) scale(1.3); }
+@keyframes memHintIn { 0% { opacity: 0; transform: translateX(-50%) scale(0.3); } 50% { transform: translateX(-50%) scale(1.2); } 100% { opacity: 1; transform: translateX(-50%) scale(1); } }
+.mr-card-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.25); z-index: 1000; display: flex; align-items: center; justify-content: center; animation: hwOverlayIn 0.2s ease; }
+.mr-card-popup { position: relative; background: linear-gradient(145deg, #f6faff, #ebf3ff); border: 1px solid rgba(89,131,255,0.18); border-radius: 16px; padding: 22px 24px 20px; min-width: 260px; max-width: 380px; width: 85vw; box-shadow: 0 12px 40px rgba(0,0,0,0.12), 0 2px 8px rgba(89,131,255,0.08); animation: hwCardIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.mr-card-popup .mr-card-label { font-size: 12px; color: #9aa5b0; margin-bottom: 12px; letter-spacing: 1px; }
+.mr-card-popup .mr-card-text { font-size: 15px; color: #324a5e; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+.mr-card-popup .mr-card-close { position: absolute; top: 12px; right: 14px; background: none; border: none; color: #9aa5b0; font-size: 18px; cursor: pointer; padding: 4px 6px; border-radius: 6px; line-height: 1; transition: color 0.15s, background 0.15s; }
+.mr-card-popup .mr-card-close:hover { color: #324a5e; background: rgba(0,0,0,0.05); }
 
 /* ── AI 输入等待动画 ── */
 .typing-bubble { display:inline-flex; align-items:center; gap:4px; }
@@ -192,11 +214,11 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 .msg-row.system .system-notice { font-size: 12px; color: #888; background: #f0f0f0; border: 1px solid #e0e0e0; border-radius: 16px; padding: 4px 14px; text-align: center; }
 
 /* ── 语音通话状态指示器 ── */
-.voice-indicator { display:none; align-items:center; gap:6px; padding:6px 14px; font-size:12px; border-radius:20px; margin:0 16px 4px; }
+.voice-indicator { display:none; align-items:center; gap:6px; padding:6px 14px; font-size:12px; border-radius:20px; position:absolute; top:50px; left:16px; right:16px; z-index:9; }
 .voice-indicator.active { display:flex; }
-.voice-indicator.waiting { background:rgba(0,206,201,0.1); color:#00cec9; border:1px solid rgba(0,206,201,0.25); }
-.voice-indicator.in-call { background:rgba(225,112,85,0.1); color:#e17055; border:1px solid rgba(225,112,85,0.25); }
-.voice-indicator.ai-speaking { background:rgba(108,92,231,0.1); color:#6c5ce7; border:1px solid rgba(108,92,231,0.25); }
+.voice-indicator.waiting { background:rgba(0,206,201,0.92); color:#fff; border:1px solid rgba(0,206,201,0.8); text-shadow:0 1px 2px rgba(0,0,0,0.15); }
+.voice-indicator.in-call { background:rgba(225,112,85,0.92); color:#fff; border:1px solid rgba(225,112,85,0.8); text-shadow:0 1px 2px rgba(0,0,0,0.15); }
+.voice-indicator.ai-speaking { background:rgba(108,92,231,0.92); color:#fff; border:1px solid rgba(108,92,231,0.8); text-shadow:0 1px 2px rgba(0,0,0,0.15); }
 .voice-pulse { width:8px; height:8px; border-radius:50%; background:currentColor; animation: voicePulse 1.5s infinite; }
 @keyframes voicePulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(0.7); } }
 
@@ -1512,20 +1534,30 @@ const remoteVoice = {
   $('voiceMicSource').value = voiceMicSource;
 })();
 
-// ── TTS 语音合成 ──
+// ── TTS 语音合成（服务端流式 TTS via WebSocket） ──
 let ttsEnabled = localStorage.getItem('aion_tts_enabled') === 'true';
 let ttsVoiceId = localStorage.getItem('aion_tts_voice') || '';
 let ttsAudio = new Audio();
-let ttsQueue = [];
 let ttsPlaying = false;
+// 分段播放队列：{ msgId: { nextPlay: 0, chunks: {seq: url}, playing: bool } }
+let ttsChunkQueues = {};
+let ttsPlayOrder = []; // 按到达顺序记录 msgId，确保跨消息顺序播放
+
+function _sendTTSState() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({type: 'tts_state', enabled: ttsEnabled, voice: ttsVoiceId}));
+  }
+}
 
 function toggleTTS() {
   ttsEnabled = $('ttsToggle').checked;
   localStorage.setItem('aion_tts_enabled', ttsEnabled);
+  _sendTTSState();
   if (!ttsEnabled) {
     ttsAudio.pause();
     ttsAudio.src = '';
-    ttsQueue = [];
+    ttsChunkQueues = {};
+    ttsPlayOrder = [];
     ttsPlaying = false;
   }
 }
@@ -1533,6 +1565,7 @@ function toggleTTS() {
 function changeTTSVoice() {
   ttsVoiceId = $('ttsVoiceSelect').value;
   localStorage.setItem('aion_tts_voice', ttsVoiceId);
+  _sendTTSState();
 }
 
 async function refreshTTSVoices() {
@@ -1558,57 +1591,116 @@ async function refreshTTSVoices() {
   }
 }
 
-function ttsSpeak(text, msgId) {
-  if (!ttsEnabled || !ttsVoiceId || !text || !text.trim()) return;
+function enqueueTTSChunk(msgId, seq, url) {
+  if (!ttsEnabled) return;
+  // 忽略小剧场的 TTS（tm_ 前缀），避免重复播放
+  if (msgId.startsWith('tm_')) return;
+  if (!ttsChunkQueues[msgId]) {
+    ttsChunkQueues[msgId] = { nextPlay: 0, chunks: {} };
+    ttsPlayOrder.push(msgId);
+  }
+  ttsChunkQueues[msgId].chunks[seq] = url;
   // 通话中时通知语音模块 AI 开始说话
-  if (voiceInCall) {
+  if (voiceInCall && !ttsPlaying) {
     notifyVoiceAiSpeaking(true);
   }
-  ttsQueue.push({text: text.trim(), msgId: msgId || null});
-  if (!ttsPlaying) playNextTTS();
+  if (!ttsPlaying) playNextTTSChunk();
 }
 
-async function playNextTTS() {
-  if (ttsQueue.length === 0 || !ttsEnabled) {
-    ttsPlaying = false;
-    // TTS 队列空了 → AI 说完了，通知语音模块
-    if (voiceInCall) {
-      notifyVoiceAiSpeaking(false);
+async function playNextTTSChunk() {
+  if (!ttsEnabled) { ttsPlaying = false; return; }
+
+  // 找到当前应该播放的 msgId
+  while (ttsPlayOrder.length > 0) {
+    const msgId = ttsPlayOrder[0];
+    const q = ttsChunkQueues[msgId];
+    if (!q) { ttsPlayOrder.shift(); continue; }
+
+    const nextSeq = q.nextPlay;
+    const url = q.chunks[nextSeq];
+    if (url === undefined) {
+      // 如果该消息已标记完成且所有分段已播完，清理并继续下一条
+      if (q.finished) {
+        const maxSeq = Object.keys(q.chunks).length > 0 ? Math.max(...Object.keys(q.chunks).map(Number)) : -1;
+        if (nextSeq > maxSeq) {
+          ttsPlayOrder.shift();
+          delete ttsChunkQueues[msgId];
+          continue; // 继续处理下一条消息
+        }
+      }
+      // 下一个分段还没到，等待
+      ttsPlaying = false;
+      return;
     }
-    return;
+
+    // 播放这个分段
+    ttsPlaying = true;
+    try {
+      ttsAudio.src = url;
+      ttsAudio.onended = () => {
+        ttsPlaying = false;
+        q.nextPlay++;
+        playNextTTSChunk();
+      };
+      ttsAudio.onerror = () => {
+        ttsPlaying = false;
+        q.nextPlay++;
+        playNextTTSChunk();
+      };
+      await ttsAudio.play().catch(() => {
+        ttsPlaying = false;
+        q.nextPlay++;
+        playNextTTSChunk();
+      });
+      return;
+    } catch(e) {
+      console.error('TTS chunk播放失败:', e);
+      ttsPlaying = false;
+      q.nextPlay++;
+    }
   }
-  ttsPlaying = true;
-  const item = ttsQueue.shift();
-  const text = item.text;
-  const msgId = item.msgId;
-  try {
-    const reqBody = { text: text, voice: ttsVoiceId };
-    if (msgId) reqBody.msg_id = msgId;
-    const resp = await fetch('/api/tts', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(reqBody)
-    });
-    if (!resp.ok || !ttsEnabled) { ttsPlaying = false; playNextTTS(); return; }
-    const blob = await resp.blob();
-    if (blob.type && blob.type.includes('json')) {
-      // 返回了错误 JSON 而非音频
-      ttsPlaying = false; playNextTTS(); return;
-    }
-    const url = URL.createObjectURL(blob);
-    ttsAudio.src = url;
-    ttsAudio.onended = () => { URL.revokeObjectURL(url); ttsPlaying = false; playNextTTS(); };
-    ttsAudio.onerror = () => { URL.revokeObjectURL(url); ttsPlaying = false; playNextTTS(); };
-    await ttsAudio.play().catch(() => { ttsPlaying = false; playNextTTS(); });
-  } catch(e) {
-    console.error('TTS失败:', e);
-    ttsPlaying = false;
-    playNextTTS();
+
+  // 所有消息播完
+  ttsPlaying = false;
+  if (voiceInCall) {
+    notifyVoiceAiSpeaking(false);
   }
 }
 
-// 重听 TTS 音频（从服务器缓存播放）
+function finishTTSForMsg(msgId) {
+  // 标记某条消息的 TTS 分段全部到达，如果已经播完所有分段则清理
+  const q = ttsChunkQueues[msgId];
+  if (!q) return;
+  q.finished = true;
+  _cleanupFinishedTTS();
+}
+
+function _cleanupFinishedTTS() {
+  let cleaned = false;
+  while (ttsPlayOrder.length > 0) {
+    const msgId = ttsPlayOrder[0];
+    const q = ttsChunkQueues[msgId];
+    if (!q || !q.finished) break;
+    // 检查是否所有分段都已播完
+    const maxSeq = Object.keys(q.chunks).length > 0 ? Math.max(...Object.keys(q.chunks).map(Number)) : -1;
+    if (q.nextPlay > maxSeq) {
+      ttsPlayOrder.shift();
+      delete ttsChunkQueues[msgId];
+      cleaned = true;
+    } else {
+      break;
+    }
+  }
+  // 清理后如果播放器空闲，重新触发播放流程（可能会走到"所有播完"逻辑）
+  if (cleaned && !ttsPlaying) {
+    playNextTTSChunk();
+  }
+}
+
+// 重听 TTS 音频（从服务器缓存播放，支持分段）
 let replayAudio = new Audio();
+let replayChunks = []; // 当前重听的分段URL列表
+let replayIdx = 0;
 async function replayTTS(msgId) {
   try {
     const btn = document.querySelector(`#m_${msgId} .tts-replay-btn`);
@@ -1616,25 +1708,56 @@ async function replayTTS(msgId) {
     if (btn && btn.classList.contains('playing')) {
       replayAudio.pause();
       replayAudio.src = '';
+      replayChunks = [];
       btn.classList.remove('playing');
       return;
     }
     // 停止之前的播放
     replayAudio.pause();
+    replayChunks = [];
     document.querySelectorAll('.tts-replay-btn.playing').forEach(b => b.classList.remove('playing'));
 
-    const resp = await fetch(`/api/tts/audio/${msgId}`);
-    if (!resp.ok) return;
-    const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    replayAudio.src = url;
+    // 尝试加载分段音频（s0, s1, s2...）
+    let chunks = [];
+    for (let i = 0; i < 50; i++) {
+      const resp = await fetch(`/api/tts/audio/${msgId}_s${i}`, { method: 'HEAD' });
+      if (!resp.ok) break;
+      chunks.push(`/api/tts/audio/${msgId}_s${i}`);
+    }
+
+    // 回退：尝试完整文件（旧的缓存格式）
+    if (chunks.length === 0) {
+      const resp = await fetch(`/api/tts/audio/${msgId}`);
+      if (!resp.ok) return;
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      replayAudio.src = url;
+      if (btn) btn.classList.add('playing');
+      replayAudio.onended = () => { URL.revokeObjectURL(url); if (btn) btn.classList.remove('playing'); };
+      replayAudio.onerror = () => { URL.revokeObjectURL(url); if (btn) btn.classList.remove('playing'); };
+      await replayAudio.play().catch(() => { if (btn) btn.classList.remove('playing'); });
+      return;
+    }
+
+    // 顺序播放分段
+    replayChunks = chunks;
+    replayIdx = 0;
     if (btn) btn.classList.add('playing');
-    replayAudio.onended = () => { URL.revokeObjectURL(url); if (btn) btn.classList.remove('playing'); };
-    replayAudio.onerror = () => { URL.revokeObjectURL(url); if (btn) btn.classList.remove('playing'); };
-    await replayAudio.play().catch(() => { if (btn) btn.classList.remove('playing'); });
+    _playReplayChunk(btn);
   } catch(e) {
     console.error('重听TTS失败:', e);
   }
+}
+
+function _playReplayChunk(btn) {
+  if (replayIdx >= replayChunks.length) {
+    if (btn) btn.classList.remove('playing');
+    return;
+  }
+  replayAudio.src = replayChunks[replayIdx];
+  replayAudio.onended = () => { replayIdx++; _playReplayChunk(btn); };
+  replayAudio.onerror = () => { replayIdx++; _playReplayChunk(btn); };
+  replayAudio.play().catch(() => { if (btn) btn.classList.remove('playing'); });
 }
 
 
@@ -1670,6 +1793,7 @@ async function api(method, url, body) {
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onopen = () => { _sendTTSState(); };
   ws.onmessage = e => handleSync(JSON.parse(e.data));
   ws.onclose = () => setTimeout(connectWS, 2000);
 }
@@ -1714,11 +1838,9 @@ function handleSync(msg) {
         if (data.role === 'assistant' && poiSearchMsgId) dismissPoiSearchIndicator();
         if (data.role === 'assistant' && activityCheckMsgId) dismissActivityCheckIndicator();
         renderMessages();
-        // TTS：语音通话中自动播报 AI 回复 / Core 主动发言（带 tts 标记）
-        if (data.role === 'assistant' && (voiceInCall || msg.tts)) {
-          ttsSpeak(data.content, data.id);
-        } else if (data.role === 'assistant' && voiceInCall && !ttsEnabled) {
-          // TTS 未启用但在通话中，通知语音模块 AI 说完了
+        // TTS 现在由服务端流式推送 tts_chunk，不再需要前端主动合成
+        // 语音通话中但 TTS 未启用时，通知语音模块 AI 说完了
+        if (data.role === 'assistant' && voiceInCall && !ttsEnabled) {
           notifyVoiceAiSpeaking(false);
         }
       }
@@ -1797,8 +1919,19 @@ function handleSync(msg) {
   } else if (type === "heart_whisper") {
     // 通过 WebSocket 收到心语（语音发送时前端没有 SSE 流）
     if (data.msg_id && !streamingAiId) {
-      showHeartWhisperHint(data.msg_id);
+      showHeartWhisperHint(data.msg_id, data.content);
     }
+  } else if (type === "memory_record") {
+    // 通过 WebSocket 收到记忆录入
+    if (data.msg_id && !streamingAiId) {
+      showMemoryRecordHint(data.msg_id, data.content);
+    }
+  } else if (type === "tts_chunk") {
+    // 服务端流式 TTS 分段音频到达
+    enqueueTTSChunk(data.msg_id, data.seq, data.url);
+  } else if (type === "tts_done") {
+    // 服务端通知该消息的所有 TTS 分段已推送完毕
+    finishTTSForMsg(data.msg_id);
   }
 }
 
@@ -1860,10 +1993,11 @@ function renderMessages() {
     const actionsHtml = `${isUser ? `<button onclick="editMsg('${m.id}');closeMsgMenus()">编辑</button>` : `<button onclick="regenerateMsg('${m.id}');closeMsgMenus()">重新生成</button>`}<button onclick="delMsg('${m.id}');closeMsgMenus()">删除</button><button onclick="copyMsg('${m.id}');closeMsgMenus()">复制</button>`;
     const dotsLeft = isUser ? `<button class="msg-dots" onclick="event.stopPropagation();toggleMsgMenu('${m.id}')">&#8943;</button>` : '';
     const dotsRight = !isUser ? `<button class="msg-dots" onclick="event.stopPropagation();toggleMsgMenu('${m.id}')">&#8943;</button>` : '';
-    const parts = isUser ? m.content.split(/\n+/).filter(p => p.trim()) : m.content.split(/\n{2,}/).filter(p => p.trim());
+    const displayContent = isUser ? m.content : m.content.replace(/<meta>[\s\S]*?<\/meta>/g, '').trim();
+    const parts = isUser ? displayContent.split(/\n+/).filter(p => p.trim()) : displayContent.split(/\n{2,}/).filter(p => p.trim());
     const bubblesHtml = parts.length > 1
       ? '<div class="msg-bubbles">' + parts.map(p => `<div class="msg-bubble">${formatMsg(p)}</div>`).join('') + renderAttachments(m.attachments) + '</div>'
-      : `<div class="msg-bubble">${formatMsg(m.content)}${renderAttachments(m.attachments)}</div>`;
+      : `<div class="msg-bubble">${formatMsg(displayContent)}${renderAttachments(m.attachments)}</div>`;
     const avatarSrc = isUser ? '/public/UserIcon.png' : '/public/AIIcon.png';
     const ttsBtn = !isUser ? `<button class="tts-replay-btn" onclick="replayTTS('${m.id}')" title="重听语音">🔊</button>` : '';
     return `
@@ -1929,6 +2063,10 @@ function renderMessages() {
   // 恢复 [HEART] 心语气泡
   for (const hwMsgId of _heartWhisperMsgIds) {
     _applyHeartHint(hwMsgId);
+  }
+  // 恢复 [MEMORY] 记忆录入提示
+  for (const mrMsgId of _memoryRecordMsgIds) {
+    _applyMemoryHint(mrMsgId);
   }
   scrollBottom();
 }
@@ -2279,12 +2417,36 @@ async function selectConv(id) {
   currentConvId = id;
   localStorage.setItem('aion_last_conv', id);
   msgDebugData = {};
+  _heartWhisperMsgIds.clear();
+  Object.keys(_heartWhisperContent).forEach(k => delete _heartWhisperContent[k]);
+  _memoryRecordMsgIds.clear();
+  Object.keys(_memoryRecordContent).forEach(k => delete _memoryRecordContent[k]);
   const conv = conversations.find(c => c.id === id);
   if (conv) {
     $("chatTitle").textContent = conv.title;
     $("modelSelect").value = conv.model;
   }
   currentMessages = await api("GET", `/api/conversations/${id}/messages?limit=${MSG_PAGE_SIZE}`);
+  // 加载该对话的心语数据
+  try {
+    const hwList = await api("GET", `/api/heart-whispers/by-conv/${id}`);
+    for (const hw of hwList) {
+      _heartWhisperMsgIds.add(hw.msg_id);
+      _heartWhisperContent[hw.msg_id] = hw.content;
+    }
+  } catch (e) { console.warn('加载心语失败:', e); }
+  // 加载该对话的 AI 主动记忆数据
+  try {
+    const mrList = await api("GET", `/api/memories/by-conv/${id}`);
+    for (const mr of mrList) {
+      _memoryRecordMsgIds.add(mr.msg_id);
+      if (_memoryRecordContent[mr.msg_id]) {
+        _memoryRecordContent[mr.msg_id] += '\n' + mr.content;
+      } else {
+        _memoryRecordContent[mr.msg_id] = mr.content;
+      }
+    }
+  } catch (e) { console.warn('加载记忆记录失败:', e); }
   hasMoreMessages = currentMessages.length >= MSG_PAGE_SIZE;
   renderConvList();
   renderMessages();
@@ -2360,7 +2522,7 @@ async function send() {
     const res = await fetch(`/api/conversations/${currentConvId}/send`, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ content: text, context_limit: contextLimit, attachments, whisper_mode: whisperMode, temperature })
+      body: JSON.stringify({ content: text, context_limit: contextLimit, attachments, whisper_mode: whisperMode, temperature, tts_enabled: ttsEnabled, tts_voice: ttsVoiceId })
     });
 
     const reader = res.body.getReader();
@@ -2388,7 +2550,7 @@ async function send() {
           } else if (data.type === "chunk") {
             _stopTypingAnim();
             aiContent += data.content;
-            const display = aiContent.replace(/\[CAM_CHECK\]/g, '').replace(/\[POI_SEARCH:[^\]]*\]/g, '').replace(/\[MUSIC:[^\]]*\]/g, '').replace(/\[ALARM:[^\]]*\]/g, '').replace(/\[REMINDER:[^\]]*\]/g, '').replace(/\[Monitor:[^\]]*\]/g, '').replace(/\[SCHEDULE_DEL:[^\]]*\]/g, '').replace(/\[SCHEDULE_LIST\]/g, '').replace(/\[TOY:[^\]]*\]/g, '').replace(/\[HEART:[^\]]*\]/g, '').replace(/\[查看动态:\d+\]/g, '').trim();
+            const display = aiContent.replace(/\[CAM_CHECK\]/g, '').replace(/\[POI_SEARCH:[^\]]*\]/g, '').replace(/\[MUSIC:[^\]]*\]/g, '').replace(/\[ALARM:[^\]]*\]/g, '').replace(/\[REMINDER:[^\]]*\]/g, '').replace(/\[Monitor:[^\]]*\]/g, '').replace(/\[SCHEDULE_DEL:[^\]]*\]/g, '').replace(/\[SCHEDULE_LIST\]/g, '').replace(/\[TOY:[^\]]*\]/g, '').replace(/\[HEART:[^\]]*\]/g, '').replace(/\[MEMORY:[^\]]*\]/g, '').replace(/\[查看动态:\d+\]/g, '').replace(/<meta>[\s\S]*?<\/meta>/g, '').trim();
             const mi = currentMessages.findIndex(m => m.id === aiMsgId);
             if (mi >= 0) currentMessages[mi].content = display;
             const container = document.getElementById(`m_${aiMsgId}`);
@@ -2431,12 +2593,15 @@ async function send() {
           } else if (data.type === "toy_command") {
             if (toyConnected) data.commands.forEach(c => toyExecCmd(c));
           } else if (data.type === "heart_whisper") {
-            showHeartWhisperHint(data.msg_id);
+            showHeartWhisperHint(data.msg_id, data.content);
+          } else if (data.type === "memory_record") {
+            showMemoryRecordHint(data.msg_id, data.content);
           }
         } catch {}
       }
     }
-    if (aiContent) ttsSpeak(aiContent.replace(/\[CAM_CHECK\]/g, '').replace(/\[POI_SEARCH:[^\]]*\]/g, '').replace(/\[MUSIC:[^\]]*\]/g, '').replace(/\[ALARM:[^\]]*\]/g, '').replace(/\[REMINDER:[^\]]*\]/g, '').replace(/\[Monitor:[^\]]*\]/g, '').replace(/\[SCHEDULE_DEL:[^\]]*\]/g, '').replace(/\[SCHEDULE_LIST\]/g, '').replace(/\[TOY:[^\]]*\]/g, '').replace(/\[HEART:[^\]]*\]/g, '').replace(/\[查看动态:\d+\]/g, '').trim(), aiMsgId);
+    // TTS 由服务端流式推送，标记该消息 TTS 分段完成
+    if (aiMsgId) finishTTSForMsg(aiMsgId);
     // TTS 关闭时直接通知语音模块 AI 说完了
     if (voiceInCall && !ttsEnabled) {
       notifyVoiceAiSpeaking(false);
@@ -2521,7 +2686,7 @@ async function regenerateMsg(aiMsgId) {
   try {
     const cl = parseInt($("contextSlider").value) || 30;
     const temperature = parseFloat($("tempSlider").value);
-    const res = await fetch(`/api/conversations/${currentConvId}/regenerate?context_limit=${cl}&whisper_mode=${whisperMode}&temperature=${temperature}`, {
+    const res = await fetch(`/api/conversations/${currentConvId}/regenerate?context_limit=${cl}&whisper_mode=${whisperMode}&temperature=${temperature}&tts_enabled=${ttsEnabled}&tts_voice=${encodeURIComponent(ttsVoiceId)}`, {
       method: "POST", headers: {"Content-Type": "application/json"}
     });
     const reader = res.body.getReader();
@@ -2547,7 +2712,7 @@ async function regenerateMsg(aiMsgId) {
           } else if (d.type === "chunk") {
             _stopTypingAnim();
             aiContent += d.content;
-            const display = aiContent.replace(/\[CAM_CHECK\]/g, '').replace(/\[POI_SEARCH:[^\]]*\]/g, '').replace(/\[MUSIC:[^\]]*\]/g, '').replace(/\[ALARM:[^\]]*\]/g, '').replace(/\[REMINDER:[^\]]*\]/g, '').replace(/\[Monitor:[^\]]*\]/g, '').replace(/\[SCHEDULE_DEL:[^\]]*\]/g, '').replace(/\[SCHEDULE_LIST\]/g, '').replace(/\[TOY:[^\]]*\]/g, '').replace(/\[HEART:[^\]]*\]/g, '').replace(/\[查看动态:\d+\]/g, '').trim();
+            const display = aiContent.replace(/\[CAM_CHECK\]/g, '').replace(/\[POI_SEARCH:[^\]]*\]/g, '').replace(/\[MUSIC:[^\]]*\]/g, '').replace(/\[ALARM:[^\]]*\]/g, '').replace(/\[REMINDER:[^\]]*\]/g, '').replace(/\[Monitor:[^\]]*\]/g, '').replace(/\[SCHEDULE_DEL:[^\]]*\]/g, '').replace(/\[SCHEDULE_LIST\]/g, '').replace(/\[TOY:[^\]]*\]/g, '').replace(/\[HEART:[^\]]*\]/g, '').replace(/\[MEMORY:[^\]]*\]/g, '').replace(/\[查看动态:\d+\]/g, '').replace(/<meta>[\s\S]*?<\/meta>/g, '').trim();
             const mi = currentMessages.findIndex(m => m.id === newId);
             if (mi >= 0) currentMessages[mi].content = display;
             const b = document.querySelector(`#m_${newId} .msg-bubble`);
@@ -2572,13 +2737,15 @@ async function regenerateMsg(aiMsgId) {
           } else if (d.type === "toy_command") {
             if (toyConnected) d.commands.forEach(c => toyExecCmd(c));
           } else if (d.type === "heart_whisper") {
-            showHeartWhisperHint(d.msg_id);
+            showHeartWhisperHint(d.msg_id, d.content);
+          } else if (d.type === "memory_record") {
+            showMemoryRecordHint(d.msg_id, d.content);
           }
         } catch {}
       }
     }
-    // TTS：重新生成完成后自动播报
-    if (aiContent) ttsSpeak(aiContent.replace(/\[CAM_CHECK\]/g, '').replace(/\[POI_SEARCH:[^\]]*\]/g, '').replace(/\[MUSIC:[^\]]*\]/g, '').replace(/\[ALARM:[^\]]*\]/g, '').replace(/\[REMINDER:[^\]]*\]/g, '').replace(/\[Monitor:[^\]]*\]/g, '').replace(/\[SCHEDULE_DEL:[^\]]*\]/g, '').replace(/\[SCHEDULE_LIST\]/g, '').replace(/\[TOY:[^\]]*\]/g, '').replace(/\[HEART:[^\]]*\]/g, '').replace(/\[查看动态:\d+\]/g, '').trim(), newId);
+    // TTS 由服务端流式推送，标记该消息 TTS 分段完成
+    if (newId) finishTTSForMsg(newId);
     if (voiceInCall && !ttsEnabled) {
       notifyVoiceAiSpeaking(false);
     }
@@ -2692,9 +2859,11 @@ function handleActivityCheck(convId, n, msgId) {
 
 // ── [HEART] 心语提示 ──
 const _heartWhisperMsgIds = new Set();
-function showHeartWhisperHint(msgId) {
+const _heartWhisperContent = {};  // msgId -> content
+function showHeartWhisperHint(msgId, content) {
   if (!msgId) return;
   _heartWhisperMsgIds.add(msgId);
+  if (content) _heartWhisperContent[msgId] = content;
   _applyHeartHint(msgId);
 }
 function _applyHeartHint(msgId) {
@@ -2705,7 +2874,62 @@ function _applyHeartHint(msgId) {
   const hint = document.createElement('span');
   hint.className = 'heart-whisper-hint';
   hint.textContent = '💭';
+  hint.onclick = (e) => { e.stopPropagation(); _showHeartWhisperCard(msgId); };
   avatarCol.appendChild(hint);
+}
+function _showHeartWhisperCard(msgId) {
+  const content = _heartWhisperContent[msgId];
+  if (!content) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'hw-card-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="hw-card-popup">
+    <div class="hw-card-label">—— 心语 ——</div>
+    <button class="hw-card-close" onclick="this.closest('.hw-card-overlay').remove()">✕</button>
+    <div class="hw-card-text">${escHtml(content)}</div>
+  </div>`;
+  document.body.appendChild(overlay);
+}
+
+// ── [MEMORY] 记忆录入提示 ──
+const _memoryRecordMsgIds = new Set();
+const _memoryRecordContent = {};  // msgId -> content (多条用换行拼接)
+function showMemoryRecordHint(msgId, content) {
+  if (!msgId) return;
+  _memoryRecordMsgIds.add(msgId);
+  if (content) {
+    if (_memoryRecordContent[msgId]) {
+      _memoryRecordContent[msgId] += '\n' + content;
+    } else {
+      _memoryRecordContent[msgId] = content;
+    }
+  }
+  _applyMemoryHint(msgId);
+}
+function _applyMemoryHint(msgId) {
+  const msgRow = document.getElementById('m_' + msgId);
+  if (!msgRow) return;
+  const avatarCol = msgRow.querySelector('.msg-avatar-col');
+  if (!avatarCol || avatarCol.querySelector('.memory-record-hint')) return;
+  const hint = document.createElement('span');
+  hint.className = 'memory-record-hint';
+  hint.textContent = '💡';
+  hint.title = '已记录到记忆库';
+  hint.onclick = (e) => { e.stopPropagation(); _showMemoryRecordCard(msgId); };
+  avatarCol.appendChild(hint);
+}
+function _showMemoryRecordCard(msgId) {
+  const content = _memoryRecordContent[msgId];
+  if (!content) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'mr-card-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="mr-card-popup">
+    <div class="mr-card-label">—— 💡 已记录到记忆库 ——</div>
+    <button class="mr-card-close" onclick="this.closest('.mr-card-overlay').remove()">✕</button>
+    <div class="mr-card-text">${escHtml(content)}</div>
+  </div>`;
+  document.body.appendChild(overlay);
 }
 
 function showCamOfflineNotice() {

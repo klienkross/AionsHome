@@ -110,6 +110,8 @@ echo [5/5] 检查安装结果...
 .venv\Scripts\python -c "import numpy; print('    NumPy  ', numpy.__version__)"
 .venv\Scripts\python -c "import pyncm; print('    PyNCM   OK')"
 .venv\Scripts\python -c "import psutil; print('    psutil ', psutil.__version__)"
+.venv\Scripts\python -c "import ebooklib; print('    ebooklib OK')"
+.venv\Scripts\python -c "import bs4; print('    BeautifulSoup4 OK')"
 
 echo.
 echo ========================================

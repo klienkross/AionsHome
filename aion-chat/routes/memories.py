@@ -101,6 +101,19 @@ async def toggle_unresolved(mem_id: str):
         await db.commit()
     return {"ok": True, "unresolved": new_val}
 
+@router.get("/api/memories/by-conv/{conv_id}")
+async def get_memories_by_conv(conv_id: str):
+    """获取某对话中 AI 主动录入的记忆（有 source_msg_id 的）"""
+    import aiosqlite
+    async with get_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT id, content, source_msg_id FROM memories WHERE source_conv=? AND source_msg_id IS NOT NULL",
+            (conv_id,)
+        )
+        rows = await cur.fetchall()
+    return [{"mem_id": r["id"], "content": r["content"], "msg_id": r["source_msg_id"]} for r in rows]
+
 @router.post("/api/memories/digest")
 async def trigger_digest():
     """手动触发记忆总结"""

@@ -17,6 +17,7 @@ from ai_providers import stream_ai
 from memory import recall_memories
 from music import search_songs, get_audio_url
 from routes.music import MUSIC_CMD_PATTERN
+from tts import TTSStreamer
 
 log = logging.getLogger("schedule")
 
@@ -222,11 +223,23 @@ class ScheduleManager:
 
         messages = prefix + mem_inject + history + [{"role": "user", "content": trigger_prompt}]
 
+        # 预生成 ai_msg_id（TTS 分段文件命名需要）
+        ai_msg_id = f"msg_{int(time.time()*1000)}_sa"
+
+        # TTS：检查是否有前端开了 TTS
+        alarm_tts = None
+        if manager.any_tts_enabled():
+            tts_voice = manager.get_tts_voice()
+            if tts_voice:
+                alarm_tts = TTSStreamer(ai_msg_id, tts_voice, manager)
+
         full_text = ""
         try:
             _temp = SETTINGS.get("temperature")
             async for chunk in stream_ai(messages, model_key, temperature=_temp):
                 full_text += chunk
+                if alarm_tts:
+                    alarm_tts.feed(chunk)
         except Exception as e:
             full_text = f"[闹铃提醒回复失败] {e}"
 
@@ -272,7 +285,6 @@ class ScheduleManager:
         await manager.broadcast({"type": "msg_created", "data": sys_msg})
 
         now2 = time.time()
-        ai_msg_id = f"msg_{int(now2*1000)}_sa"
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
@@ -282,7 +294,14 @@ class ScheduleManager:
             await db.commit()
         ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant",
                   "content": full_text, "created_at": now2, "attachments": music_atts}
-        await manager.broadcast({"type": "msg_created", "data": ai_msg, "tts": True})
+        await manager.broadcast({"type": "msg_created", "data": ai_msg})
+
+        # 刷新 TTS 剩余文本
+        if alarm_tts:
+            try:
+                await alarm_tts.flush()
+            except Exception:
+                pass
 
         # 推送音乐卡片（带 autoplay 标记，前端自动播放）
         if music_cards:
@@ -431,11 +450,23 @@ class ScheduleManager:
             {"role": "user", "content": trigger_prompt, "attachments": [f"/uploads/{fname}"]}
         ]
 
+        # 预生成 ai_msg_id（TTS 分段文件命名需要）
+        ai_msg_id = f"msg_{int(time.time()*1000)}_sm"
+
+        # TTS：检查是否有前端开了 TTS
+        monitor_tts = None
+        if manager.any_tts_enabled():
+            tts_voice = manager.get_tts_voice()
+            if tts_voice:
+                monitor_tts = TTSStreamer(ai_msg_id, tts_voice, manager)
+
         full_text = ""
         try:
             _temp = SETTINGS.get("temperature")
             async for chunk in stream_ai(messages, model_key, temperature=_temp):
                 full_text += chunk
+                if monitor_tts:
+                    monitor_tts.feed(chunk)
         except Exception as e:
             full_text = f"[定时监控回复失败] {e}"
 
@@ -481,7 +512,6 @@ class ScheduleManager:
         await manager.broadcast({"type": "msg_created", "data": sys_msg})
 
         now2 = time.time()
-        ai_msg_id = f"msg_{int(now2*1000)}_sm"
         async with get_db() as db:
             await db.execute(
                 "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
@@ -491,7 +521,14 @@ class ScheduleManager:
             await db.commit()
         ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant",
                   "content": full_text, "created_at": now2, "attachments": music_atts}
-        await manager.broadcast({"type": "msg_created", "data": ai_msg, "tts": True})
+        await manager.broadcast({"type": "msg_created", "data": ai_msg})
+
+        # 刷新 TTS 剩余文本
+        if monitor_tts:
+            try:
+                await monitor_tts.flush()
+            except Exception:
+                pass
 
         # 推送音乐卡片（带 autoplay 标记）
         if music_cards:

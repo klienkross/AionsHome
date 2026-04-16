@@ -248,14 +248,23 @@ class VoiceWakeup:
 
         # 通过 HTTP 调用自己的 send API
         try:
+            # 语音通话时，让服务端也走 TTS 流式合成（前端通过 WS 接收音频分段）
+            tts_enabled = False
+            tts_voice = ""
+            if self._ws_manager:
+                tts_enabled = self._ws_manager.any_tts_enabled()
+                if tts_enabled:
+                    tts_voice = self._ws_manager.get_tts_voice() or ""
+
             async with httpx.AsyncClient() as client:
                 resp = await client.post(
                     "http://127.0.0.1:8080/api/conversations/" + conv_id + "/send",
-                    json={"content": text, "context_limit": 20, "fast_mode": True},
+                    json={"content": text, "context_limit": 20, "fast_mode": True,
+                          "tts_enabled": tts_enabled, "tts_voice": tts_voice},
                     timeout=60,
                 )
                 # SSE 流 — 读取完毕即表示 AI 文本已生成
-                # TTS 播放状态由前端 ttsAudio 控制
+                # TTS 播放由前端通过 WS tts_chunk 消息触发
         except Exception as e:
             print(f"[Voice] Send error: {e}")
 

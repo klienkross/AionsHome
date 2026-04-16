@@ -33,6 +33,8 @@ from routes import schedule as schedule_routes
 from routes import location as location_routes
 from routes import heart_whispers as heart_whispers_routes
 from routes import activity as activity_routes
+from routes import book as book_routes
+from routes import theater as theater_routes
 from activity import pc_tracker
 
 
@@ -84,12 +86,14 @@ app.include_router(schedule_routes.router)
 app.include_router(location_routes.router)
 app.include_router(heart_whispers_routes.router)
 app.include_router(activity_routes.router)
+app.include_router(book_routes.router)
+app.include_router(theater_routes.router)
 
 
 # 页面
 @app.get("/")
 async def home():
-    return FileResponse(BASE_DIR / "static" / "home.html")
+    return FileResponse(BASE_DIR / "static" / "home.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 @app.get("/chat")
 async def chat_page():
@@ -131,6 +135,14 @@ async def heart_whispers_page():
 async def activity_logs_page():
     return FileResponse(BASE_DIR / "static" / "activity-logs.html")
 
+@app.get("/reading")
+async def reading_page():
+    return FileResponse(BASE_DIR / "static" / "reading.html")
+
+@app.get("/theater")
+async def theater_page():
+    return FileResponse(BASE_DIR / "static" / "theater.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
 # PWA：Service Worker 必须从根路径提供，作用域才能覆盖所有页面
 @app.get("/sw.js")
 async def service_worker():
@@ -147,11 +159,12 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             text = await ws.receive_text()
-            # 处理来自客户端的 ping 心跳（Android 推送服务定期发送）
             try:
                 msg = json.loads(text)
                 if msg.get("type") == "ping":
                     await ws.send_text(json.dumps({"type": "pong"}))
+                elif msg.get("type") == "tts_state":
+                    manager.set_tts_state(ws, msg.get("enabled", False), msg.get("voice", ""))
             except (json.JSONDecodeError, Exception):
                 pass
     except WebSocketDisconnect:

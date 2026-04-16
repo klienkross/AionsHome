@@ -15,6 +15,7 @@ from database import get_db
 from ws import manager
 from ai_providers import stream_ai
 from memory import recall_memories
+from tts import TTSStreamer
 
 
 # ── 监控日志文件读写 ──────────────────────────────
@@ -683,11 +684,23 @@ call_core判断依据：
 
         messages = prefix + mem_inject + history + [last_msg]
 
+        # 预生成 msg_id（TTS 分段文件命名需要）
+        core_msg_id = f"msg_{int(time.time()*1000)}_cr"
+
+        # TTS：检查是否有前端开了 TTS
+        core_tts = None
+        if manager.any_tts_enabled():
+            tts_voice = manager.get_tts_voice()
+            if tts_voice:
+                core_tts = TTSStreamer(core_msg_id, tts_voice, manager)
+
         full_text = ""
         try:
             _temp = SETTINGS.get("temperature")
             async for chunk in stream_ai(messages, model_key, temperature=_temp):
                 full_text += chunk
+                if core_tts:
+                    core_tts.feed(chunk)
         except Exception as e:
             full_text = f"[Core 回复失败] {e}"
 
@@ -716,7 +729,6 @@ call_core判断依据：
 
         async with get_db() as db:
             now2 = time.time()
-            core_msg_id = f"msg_{int(now2*1000)}_cr"
             await db.execute(
                 "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
                 (core_msg_id, conv_id, "assistant", full_text, now2, "[]")
@@ -726,7 +738,14 @@ call_core判断依据：
 
         core_msg = {"id": core_msg_id, "conv_id": conv_id, "role": "assistant",
                     "content": full_text, "created_at": now2, "attachments": []}
-        await manager.broadcast({"type": "msg_created", "data": core_msg, "tts": True})
+        await manager.broadcast({"type": "msg_created", "data": core_msg})
+
+        # 刷新 TTS 剩余文本
+        if core_tts:
+            try:
+                await core_tts.flush()
+            except Exception:
+                pass
 
         # 延迟导入避免循环
         from routes.files import export_conversation
@@ -801,11 +820,23 @@ async def perform_cam_check(conv_id: str, model_key: str):
         {"role": "user", "content": cam_prompt, "attachments": [f"/uploads/{fname}"]}
     ]
 
+    # 预生成 msg_id（TTS 分段文件命名需要）
+    msg_id = f"msg_{int(time.time()*1000)}_cc"
+
+    # TTS：检查是否有前端开了 TTS
+    cam_tts = None
+    if manager.any_tts_enabled():
+        tts_voice = manager.get_tts_voice()
+        if tts_voice:
+            cam_tts = TTSStreamer(msg_id, tts_voice, manager)
+
     full_text = ""
     try:
         _temp = SETTINGS.get("temperature")
         async for chunk in stream_ai(messages, model_key, temperature=_temp):
             full_text += chunk
+            if cam_tts:
+                cam_tts.feed(chunk)
     except Exception as e:
         full_text = f"[监控查看失败] {e}"
 
@@ -830,7 +861,6 @@ async def perform_cam_check(conv_id: str, model_key: str):
     await manager.broadcast({"type": "msg_created", "data": sys_msg})
 
     now = time.time()
-    msg_id = f"msg_{int(now*1000)}_cc"
     async with get_db() as db:
         await db.execute(
             "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
@@ -841,7 +871,14 @@ async def perform_cam_check(conv_id: str, model_key: str):
 
     ai_msg = {"id": msg_id, "conv_id": conv_id, "role": "assistant",
               "content": full_text, "created_at": now, "attachments": []}
-    await manager.broadcast({"type": "msg_created", "data": ai_msg, "tts": True})
+    await manager.broadcast({"type": "msg_created", "data": ai_msg})
+
+    # 刷新 TTS 剩余文本
+    if cam_tts:
+        try:
+            await cam_tts.flush()
+        except Exception:
+            pass
 
     from routes.files import export_conversation
     await export_conversation(conv_id)

@@ -52,6 +52,7 @@ async def init_db():
             ("source_start_ts", "REAL"),
             ("source_end_ts", "REAL"),
             ("unresolved", "INTEGER DEFAULT 0"),
+            ("source_msg_id", "TEXT"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE memories ADD COLUMN {col} {defn}")
@@ -80,6 +81,78 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_heart_whispers_created ON heart_whispers(created_at DESC)")
+        # ── 书籍表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS books (
+                book_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                author TEXT DEFAULT '未知作者',
+                cover_path TEXT,
+                total_chapters INTEGER DEFAULT 0,
+                current_chapter INTEGER DEFAULT 0,
+                current_paragraph INTEGER DEFAULT 0,
+                import_time REAL NOT NULL
+            )
+        """)
+        # ── 书籍章节表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS book_chapters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id TEXT NOT NULL,
+                chapter_index INTEGER NOT NULL,
+                title TEXT,
+                html_content TEXT,
+                text_content TEXT,
+                paragraphs TEXT,
+                char_count INTEGER DEFAULT 0,
+                segment_count INTEGER DEFAULT 0,
+                segments_meta TEXT DEFAULT '[]',
+                FOREIGN KEY (book_id) REFERENCES books(book_id) ON DELETE CASCADE,
+                UNIQUE(book_id, chapter_index)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_book_chapters_book ON book_chapters(book_id, chapter_index)")
+        # ── 书籍批注表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS book_annotations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id TEXT NOT NULL,
+                chapter_index INTEGER NOT NULL,
+                segment_index INTEGER NOT NULL,
+                annotations TEXT DEFAULT '[]',
+                summary TEXT DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL,
+                FOREIGN KEY (book_id) REFERENCES books(book_id) ON DELETE CASCADE,
+                UNIQUE(book_id, chapter_index, segment_index)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_book_annotations_ch ON book_annotations(book_id, chapter_index)")
+        # ── 小剧场对话表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS theater_conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                persona_id TEXT,
+                model TEXT NOT NULL DEFAULT 'gemini-3-flash',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_theater_conv_updated ON theater_conversations(updated_at DESC)")
+        # ── 小剧场消息表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS theater_messages (
+                id TEXT PRIMARY KEY,
+                conv_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                attachments TEXT DEFAULT '[]',
+                FOREIGN KEY (conv_id) REFERENCES theater_conversations(id) ON DELETE CASCADE
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_theater_msg_conv ON theater_messages(conv_id, created_at)")
         await db.commit()
 
 

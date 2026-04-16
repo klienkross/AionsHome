@@ -12,7 +12,8 @@
 - **Embedding**：Gemini `gemini-embedding-001`（3072维），余弦相似度检索
 - **Android App**：Java，WebView + 前台推送服务（OkHttp 4.12.0 WebSocket），compileSdk 34 / minSdk 24
 - **音乐**：pyncm（网易云音乐 API，搜索/歌曲详情/音频URL，支持 MUSIC_U Cookie VIP 登录 + 服务端代理推流）
-- **依赖库**：fastapi, uvicorn, httpx, aiosqlite, opencv-python, Pillow, sounddevice, numpy, webrtcvad-wheels, pyncm, pywin32, psutil
+- **EPUB 解析**：ebooklib（EPUB 读取）+ BeautifulSoup4 / lxml（HTML 解析）
+- **依赖库**：fastapi, uvicorn, httpx, aiosqlite, opencv-python, Pillow, sounddevice, numpy, webrtcvad-wheels, pyncm, pywin32, psutil, ebooklib, beautifulsoup4, lxml
 
 ## 模块化文件结构
 项目已从单文件拆分为 12 个模块化文件：
@@ -42,16 +43,20 @@
 └── aion-chat/
     ├── main.py                   # 入口：lifespan、路由注册、静态挂载、WebSocket、PWA 路由
     ├── config.py                 # 全局路径、常量、settings/worldbook/chat_status/cam_config 读写
-    ├── database.py               # SQLite 初始化（conversations/messages/memories/schedules 四表 + 性能索引）
-    ├── ws.py                     # WebSocket ConnectionManager 单例
+    ├── database.py               # SQLite 初始化（conversations/messages/memories/schedules/theater 等表 + 性能索引）
+    ├── ws.py                     # WebSocket ConnectionManager 单例，含 tts_clients 状态追踪 + _tts_fallback HTTP 回落机制
     ├── ai_providers.py           # AI 调用：硅基流动/Gemini/AiPro中转站 流式 + 多模态消息构建
     ├── memory.py                 # 向量记忆：embedding、综合评分召回、手动总结、即时哨兵(RAG路由)、原文追溯
     ├── camera.py                 # 摄像头：CameraMonitor 类、Sentinel 分析（注入设备活动摘要）、Core 唤醒、[CAM_CHECK]
     ├── location.py               # 高德地图定位：GPS心跳处理、三级研判、状态机(at_home/outside)、哨兵通知、POI搜索
-    ├── voice.py                  # 语音唤醒 + 半双工通话（WebRTC VAD + 硬基流动 ASR）
+    ├── voice.py                  # 语音唤醒 + 半双工通话（WebRTC VAD + 硬基流动 ASR），通话中自动携带 TTS 参数
+    ├── tts.py                    # 服务端流式 TTS：按句切分（100-200字）+ 异步并行合成 + WebSocket 推送音频分片
     ├── schedule.py               # 日程/闹铃/定时监控管理器：ScheduleManager、文本指令解析、闹铃触发Core唤醒、定时监控截图+Core分析（注入设备活动摘要）
+    ├── book.py                    # EPUB 解析模块：书籍导入、章节拆分、段落标注、图片提取
     ├── routes/
     │   ├── __init__.py
+    │   ├── book.py               # 阅读功能 API：书籍上传/列表/章节/进度/删除/图片/AI批注（单段+全章SSE）
+    │   ├── theater.py            # 小剧场 API：独立对话CRUD、消息CRUD、角色CRUD、SSE流式回复（无记忆/系统能力注入）+ TTS
     ├── chat.py               # 对话/消息 CRUD、send_message(SSE)、regenerate、cam-check-trigger、[MUSIC:xxx]/[ALARM:...]/[REMINDER:...]/[Monitor:...]/[TOY:x]/[查看动态:n] 检测
     │   ├── music.py              # 音乐搜索/详情/播放/代理推流 API（pyncm）
     │   ├── schedule.py           # 日程 CRUD API（列表/添加/删除）
@@ -81,6 +86,8 @@
     │   ├── location.html         # 定位页 → /location（状态/POI/配置）
     │   ├── heart-whispers.html   # 心语页 → /heart-whispers（AI秘密日记查看/删除）
     │   ├── activity-logs.html    # 活动日志页 → /activity-logs（双设备活动查看/筛选/清理/10分钟摘要弹窗/AI联动开关）
+    │   ├── reading.html          # 阅读页 → /reading（书架+阅读器+AI批注+选文聊天+音乐播放）
+    │   ├── theater.html          # 小剧场页 → /theater（独立聊天+多角色管理+TTS，茶色暗色主题）
     │   ├── manifest.json         # PWA Web App Manifest（从 /manifest.json 提供）
     │   └── sw.js                 # PWA Service Worker（从 /sw.js 提供）
     └── data/                     # ★ 备份只需复制此文件夹
@@ -96,7 +103,9 @@
         ├── chats/                # 导出的 .md 聊天记录 + _index.json
         ├── screenshots/          # 摄像头截图（自动清理）
         ├── monitor_logs/         # Sentinel 监控日志（JSONL，按日期，3天自动清理）
-        └── activity_logs/        # 设备活动日志（JSONL，按日期，保留最近 3 小时）
+        ├── activity_logs/        # 设备活动日志（JSONL，按日期，保留最近 3 小时）
+        ├── books/                # EPUB 书籍数据（解析后的章节+图片+批注数据库）
+        └── theater_personas.json # 小剧场角色预设（多套人设，JSON数组）
 ```
 
 ## 路由
@@ -113,6 +122,8 @@
 | `/location` | location.html 定位地图页 |
 | `/heart-whispers` | heart-whispers.html 心语页（AI秘密日记） |
 | `/activity-logs` | activity-logs.html 活动日志页（双设备活动查看） |
+| `/reading` | reading.html 阅读页（书架+阅读器+AI批注+选文聊天） |
+| `/theater` | theater.html 小剧场页（独立聊天+多角色+TTS） |
 | `/manifest.json` | PWA Web App Manifest |
 | `/sw.js` | PWA Service Worker（根路径提供，作用域覆盖全站） |
 | `/public/*` | 公共资源 |
@@ -178,12 +189,14 @@
 22. **总结锚点管理** — 锚点持久化在 `data/digest_anchor.json`，UI 显示当前锚点时间 + 日期选择器可回退
 23. **可视化管理** — 侧边栏「🧠 记忆库」按钮，支持搜索/添加/编辑/删除，编辑后自动重新向量化。每条记忆显示关键词标签 + 重要度分数，编辑时可修改关键词和重要度。有 source 时间范围的记忆可点击 📜 查看原文。📌 按钮可切换记忆的“待办/未完成”状态，unresolved 的记忆以橙色高亮显示
 
-### 语音合成 (TTS)
-24. **AI 回复自动语音播报** — 聊天头部右上角 🔊 开关，开启后 AI 回复自动送往硅基流动 TTS 合成并播放
-25. **多场景触发** — 用户发消息后的 AI 流式回复、重新生成、Core 主动发言均自动触发 TTS
-26. **音色选择** — 齿轮配置面板内选择硅基流动账号下的自定义音色
-27. **队列播放** — 多条消息自动排队，按序播放，开关关闭时立即停止
-28. **多端 TTS 去重** — 普通对话的 AI 回复仅由发送方（SSE 端）播报 TTS，WebSocket 同步的其他端不重复播报；Core/哨兵主动发言通过 WebSocket `tts: true` 标记，所有端统一播报
+### 语音合成 (TTS) — 服务端流式推送架构
+24. **服务端流式 TTS** — AI 流式输出过程中，后端 `tts.py` 的 `TTSStreamer` 实时按句切分文本（100-200 字，按句号/问号/感叹号/换行等断句），每句异步调用硅基流动 CosyVoice2-0.5B 合成 mp3，合成完成后立即通过 WebSocket 推送 `tts_chunk` 事件给前端，前端收到即可开始播放，无需等待全文生成完毕
+25. **多场景触发** — 用户发消息后的 AI 流式回复、重新生成、Core 主动发言（哨兵唤醒/闹铃/定时监控/[CAM_CHECK] 跟进）均自动创建 TTSStreamer 进行流式合成
+26. **音色选择** — 齿轮配置面板内选择硅基流动账号下的自定义音色，通过 WebSocket `tts_state` 消息同步到服务端
+27. **前端队列播放** — 前端维护 `ttsQueue`（Map 结构，key 为 msg_id），每条消息的分片按 seq 顺序播放，多条消息按到达顺序排队；播放完最后一片后服务端广播 `tts_done` 事件，前端清理队列并继续下一条
+28. **多端 TTS 状态同步** — 前端开启 TTS 后通过 WebSocket 发送 `tts_state` 消息（含 enabled/voice），服务端 `ConnectionManager` 在 `tts_clients` 字典中跟踪各客户端状态；同时 HTTP POST（send_message/regenerate）的 body 中也携带 `tts_enabled`/`tts_voice` 作为 `_tts_fallback` 回落，确保服务端发起的消息（cam_check/闹铃/监控）也能获取 TTS 状态
+28b. **TTS 音频缓存** — 合成的音频分片存储在 `data/tts_cache/` 目录，文件名为 `{msg_id}_s{seq}.mp3`，前端可通过 `/api/tts/audio/{chunk_name}` 获取；点击 AI 消息的 🔊 图标可重播已缓存的 TTS 分片
+28c. **TTS 重播** — 点击聊天气泡下的喇叭图标，前端通过 HEAD 请求探测 `{msg_id}_s0`、`{msg_id}_s1`... 是否存在，依次播放所有分片；支持 GET 和 HEAD 两种 HTTP 方法
 
 ### 摄像头智能监控（Sentinel/Core 双脑架构）
 28. **摄像头集成** — OpenCV DirectShow 后端，支持多摄像头切换，绿屏检测，智能预热验证
@@ -236,7 +249,7 @@
 41. **语音唤醒** — 聊天配置面板开关，支持自定义唤醒词，后台持续监听麦克风
 42. **WebRTC VAD** — 使用 Google WebRTC VAD 频谱分析检测人声，不靠音量阈值，嗰杂环境（狗叫/风扇/空调）也能稳定工作
 43. **半双工通话模式** — 唤醒后进入通话：用户说话 → ASR 识别 → 发送到聊天 → AI 回复 + TTS 播放 → 轮到用户说话，循环往复
-44. **麦克风协调** — AI 说话（TTS 播放 / [CAM_CHECK] 处理）期间暂停录音，TTS 播完后自动恢复
+44. **麦克风协调** — AI 说话（TTS 播放 / [CAM_CHECK] 处理）期间暂停录音，服务端 `tts_done` 事件触发前端 `notifyVoiceAiSpeaking(false)` 自动恢复录音；voice.py 发送消息时自动携带 `tts_enabled`/`tts_voice` 参数
 45. **语音挂断** — 说“再见/拜拜/挂断”自动挂断通话，继续监听唤醒词；60 秒无人说话自动挂断
 46. **唤醒回复音频** — 唤醒成功后播放 `public/AIonResponse.mp3`（“诶，我在呢”）
 47. **通话状态指示器** — 前端顶部实时显示：等待唤醒 / 聆听中 / AI 思考中 / 通话结束，含挂断按钮
@@ -259,7 +272,9 @@
 
 【状态同步】
   voice.py 通过 WebSocket 广播 voice_state 事件
-  前端通过 /api/voice/ai-speaking 通知后端 TTS 播放状态
+  voice.py 发送消息时携带 tts_enabled/tts_voice 参数 → 服务端创建 TTSStreamer
+  → TTS 分片通过 WebSocket tts_chunk 推送 → 前端按序播放
+  → 全部合成完毕 → 服务端广播 tts_done → 前端 notifyVoiceAiSpeaking(false) → 恢复录音
   [CAM_CHECK] 触发时通知后端保持 AI 说话状态
 ```
 
@@ -532,6 +547,68 @@
   → 每条显示时间 + 内容，支持删除
   → WebSocket 实时推送新心语到列表顶部
 ```
+
+### AI 陪伴阅读（EPUB 书架 + AI 批注 + 选文聊天）
+185. **EPUB 导入** — 支持上传 `.epub` 格式电子书，后端使用 `ebooklib` 解析，自动提取目录、章节内容、封面与内嵌图片。书籍数据存储在 `data/books/{book_id}/` 目录下，每本书有独立的 SQLite 数据库（`book.db`）存储章节和批注
+186. **书架界面** — `/reading` 页面上半部分为书架，网格展示已导入书籍（封面+标题+作者+章节数），支持上传新书和删除
+187. **阅读器** — 点击书籍进入阅读器，显示章节标题、正文内容（含字数统计）、上/下章导航，阅读进度自动保存并恢复
+188. **AI 批注系统** — 每章支持 AI 逐段批注，批注由 AI 模型（默认 `gemini-3-flash`）根据世界书人设、聊天上下文、前章摘要生成，包含批注类型（情感共振/知识延伸/个人联想等）和内容
+189. **批注气泡** — 有批注的段落右侧显示 AI 头像+💭气泡图标，点击弹出批注弹窗，显示批注类型和内容
+190. **[MUSIC:xxx] 批注点歌** — AI 批注中可使用 `[MUSIC:歌曲名 歌手名]` 指令点歌，批注弹窗中以音乐卡片形式展示，点击通过网易云 API 搜索并在页内在线播放
+191. **批注 SSE 流式生成** — 单段批注（`/api/books/{id}/chapters/{ch}/annotate`）和全章批注（`/annotate-all`）均使用 SSE 流式输出，前端逐条实时渲染批注气泡
+192. **批注提示词** — 批注 Prompt 注入书名、世界书人设（AI+用户）、当前时间、前章摘要（最近 3 章、每章≤200字）、最近 15 条聊天上下文，让 AI 批注贴合人设和聊天氛围
+193. **选文快捊提问** — 阅读器内选中文字后弹出「💬 问问{AI名}」工具栏，点击后打开提问弹窗（可附加问题或直接发送），消息发送到主聊天对话（调用 `/api/conversations/{conv_id}/send`），回复保存在主聊天历史中
+194. **嵌入式聊天面板** — 提问后在阅读页底部弹出聊天面板，显示最近 6 条主聊天消息作为上下文 + 分割线 + 当前对话，AI 回复以流式气泡展示，支持继续追问。气泡样式与 `/chat` 页面一致（多段落自动拆分为多气泡）
+195. **聊天面板音乐播放** — AI 在聊天面板中点歌时（`[MUSIC:xxx]` 指令），自动触发页内在线播放并显示音乐卡片
+196. **章节目录** — 左上角「☰ 目录」按钮展开章节列表弹窗，可快速跳转到任意章节
+197. **进度记忆** — 每次切换章节或关闭页面自动保存阅读进度（当前章节索引），重新打开自动恢复到上次阅读位置
+198. **依赖库** — `ebooklib`（EPUB 解析）、`beautifulsoup4` + `lxml`（HTML 内容提取），已包含在 `requirements.txt` 中
+
+### AI 陪伴阅读工作流程
+```
+【导入书籍】
+  上传 EPUB 文件 → POST /api/books/upload
+  → ebooklib 解析 EPUB → 提取 spine 项（HTML 章节）→ BeautifulSoup 解析
+  → 章节拆分（按 <h1>/<h2>/<h3> 或 <body> 分割）→ 段落提取
+  → 图片提取（封面 + 正文图片）→ 存储到 data/books/{book_id}/
+  → 写入 book.db（books 表 + book_chapters 表）
+  → 返回 book_id
+
+【阅读 + 批注】
+  GET /api/books/{id}/chapters/{ch} → 返回章节内容（段落数组）+ 已有批注 + AI名/用户名
+  → 前端渲染段落 + 批注气泡
+  → 用户点击「AI 批注」→ POST /api/books/{id}/chapters/{ch}/annotate-all
+  → 后端逐段处理：
+    ├ 加载世界书人设 + 查询书名
+    ├ 获取前 3 章摘要（每章≤200字）
+    ├ 获取最近 15 条聊天消息
+    ├ 构建批注 Prompt（人设+时间+书名+上下文+段落文本）
+    ├ stream_ai() 流式生成 → 解析 JSON 批注
+    └ 存入 book_annotations 表 → SSE 推送前端
+  → 前端实时渲染批注气泡
+
+【选文聊天】
+  选中文字 → 弹出工具栏「💬 问问AI」→ 点击 → 弹出提问窗
+  → 输入问题（可选）→ 提交
+  → 打开聊天面板 → 加载最近 6 条主聊天消息（GET /api/conversations/{conv_id}/messages?limit=6）
+  → 显示上下文 + 分割线 + 用户消息
+  → POST /api/conversations/{conv_id}/send（SSE 流式）
+  → AI 回复流式渲染为多气泡（按 \n\n 分段）
+  → 支持继续在面板内追问（同一对话）
+  → 所有消息保存在主聊天历史中
+```
+
+### 小剧场（独立角色扮演聊天）
+194. **完全独立** — 小剧场使用独立的数据库表（`theater_conversations` + `theater_messages`），与主聊天完全隔离，所有对话记录**不计入记忆库**，记忆总结时不会涉及小剧场内容
+195. **极简 Prompt** — 仅注入选中角色的人设 + 最近 N 条上下文，不注入系统能力（`[MUSIC]`/`[CAM_CHECK]`/`[ALARM]` 等）、不注入记忆/日程/位置/活动日志，干净纯粹的对话体验
+196. **多角色管理** — 支持创建/编辑/删除多套角色人设，每个角色可配置独立的名称、人设内容（system prompt）、默认模型、默认温度、默认上下文条数。角色数据存储在 `data/theater_personas.json`
+197. **对话管理** — 侧栏对话列表，支持新建/删除/重命名剧场，每个对话绑定一个角色，切换角色时自动更新对话设置
+198. **SSE 流式回复** — 与主聊天一致的 SSE 流式输出，逐字显示，等待时显示「思考中/正在输入」循环动画 + 弹跳小圆点
+199. **TTS 语音合成** — 完整保留服务端流式 TTS（复用 `tts.py` 的 `TTSStreamer`），支持音色选择和重播。TTS 事件通过 `tm_` 消息前缀与主聊天互相隔离，避免多页面同时播放
+200. **茶色暗色主题** — 深棕色背景（`#1e1a16`）+ 茶色强调色（`#c8956c`），与主聊天的暖光风格形成差异化视觉区分
+201. **多端同步** — WebSocket 广播 `theater_conv_created/updated/deleted`、`theater_msg_created/updated/deleted` 事件，多设备实时同步
+202. **图片上传** — 支持多模态，可上传图片/视频作为附件发送
+203. **重新生成** — AI 消息支持一键重新生成
 
 ### 设备活动日志系统（PC + 手机）
 170. **双设备活动采集** — 自动记录 PC 前台窗口和手机前台 App 的使用情况，存储为 JSONL 日志，按日期分文件，保留最近 3 小时
@@ -825,6 +902,7 @@
 |------|------|------|
 | `/api/tts` | POST | TTS 合成代理，接收 `{text, voice}`，返回 mp3 音频流 |
 | `/api/tts/voices` | GET | 获取硅基流动账号下的可用音色列表 |
+| `/api/tts/audio/{name}` | GET/HEAD | 获取 TTS 缓存音频分片（`{msg_id}_s{seq}.mp3`），HEAD 用于前端探测分片是否存在 |
 
 ### 文件管理
 | 端点 | 方法 | 说明 |
@@ -910,6 +988,9 @@
 | `location_update` | 定位状态更新广播（地址、天气、状态变更等） |
 | `poi_search` | POI 搜索触发广播（SSE + WS 双通道，前端显示搜索指示器） |
 | `activity_log` | 新设备活动日志推送（含 device/app/title/time，前端实时追加） |
+| `tts_chunk` | TTS 音频分片推送（含 msg_id/seq/url），前端收到即加入播放队列 |
+| `tts_done` | TTS 合成完毕通知（含 msg_id），前端标记该消息队列已结束，播完最后一片后清理 |
+| `tts_state` | 客户端→服务端：TTS 开关/音色同步（`{enabled, voice}`），服务端据此判断是否需要合成 |
 
 ### 消息角色说明
 | 角色 | 说明 | 是否显示在聊天 |
@@ -949,18 +1030,19 @@
 - **[CAM_CHECK] 流程**：后端在 SSE 中发 `cam_check` 事件 + WebSocket 广播 → 前端播放音频+5秒 setTimeout → POST trigger API → 后端 asyncio.create_task 异步截图+AI分析
 - **cam_check 加载指示器**：前端用 `camCheckMsgId` 全局变量跟踪，`renderMessages()` 重建 DOM 后自动恢复指示器
 - **语音唤醒架构**：voice.py 运行在独立线程，通过 `asyncio.run_coroutine_threadsafe` 桥接主事件循环；WebRTC VAD (mode=2) 做帧级人声检测（30ms/帧），不需要噪底校准
-- **半双工协调**：`ai_speaking` 标志由前端 TTS 播放状态驱动（通过 `/api/voice/ai-speaking` 通知），暂停录音期间持续 `stream.read()` 丢弃数据防止缓冲区溢出
+- **半双工协调**：`ai_speaking` 标志由服务端 `tts_done` WebSocket 事件驱动（前端收到后调用 `notifyVoiceAiSpeaking(false)`），暂停录音期间持续 `stream.read()` 丢弃数据防止缓冲区溢出；voice.py 的 `_async_send` 在 HTTP POST body 中携带 `tts_enabled`/`tts_voice` 参数
 - **消息分页**：后端 `?limit=50&before=时间戳` 参数，前端 `loadOlderMessages()` 滚动到顶部自动加载，保持滚动位置
 - **SSE + WS 双通道**：cam_check 和 debug 事件同时写入 SSE 流和 WebSocket 广播，确保语音发送的消息（无 SSE 流读取端）也能被前端接收
 - **文件导出**：消息变动自动同步到 `chats/{conv_id}.md`，含 YAML front matter，导出跳过 cam_* 角色
 - **监控定时器**：基于时间戳比较（`_next_capture_at`），非 sleep 阻塞，间隔修改即时生效
 - **摄像头 DirectShow + 验证机制**：所有 `cv2.VideoCapture` 使用 `CAP_DSHOW` 后端（Windows MSMF 后端对 USB 摄像头不稳定）；`_verify_camera()` 最多等 8 秒读到非垃圾帧（`frame.mean() > 5` 排除绿屏/黑屏）才算成功；`_capture_loop` 运行时也检测绿屏帧，连续 100 帧无效触发重连；重连逐个尝试 index 0-4 并验证，失败后 30 秒重试
 - **Sentinel 日志压缩**：哨兵每次分析时输出历史概况摘要（summary），避免 Core 唤醒时全量日志导致 token 过高
-- **TTS 代理**：后端 `/api/tts` 代理硅基流动 CosyVoice2-0.5B，使用 settings.json 中的 siliconflow_key
+- **TTS 流式推送架构**：`tts.py` 的 `TTSStreamer` 在 AI 流式输出过程中实时接收文本（`feed()`），按标点（句号/问号/感叹号/换行等）切分为 100-200 字的片段（`_try_split()` + `_find_cut_position()`），每段 `asyncio.create_task` 异步调用硅基流动 CosyVoice2-0.5B 合成 mp3（`_synthesize()`），合成完成后通过 `_dispatch()` 将音频保存到 `data/tts_cache/{msg_id}_s{seq}.mp3` 并 WebSocket 广播 `tts_chunk` 事件；`flush()` 在 AI 输出结束后处理剩余文本并等待所有合成任务完成，最后广播 `tts_done` 事件
+- **TTS 多端状态同步**：前端开启 TTS 后通过 WebSocket 发送 `tts_state` 消息，`ConnectionManager.tts_clients` 字典跟踪各连接的 TTS 状态；HTTP POST（send_message/regenerate）body 中的 `tts_enabled`/`tts_voice` 通过 `set_tts_fallback()` 存入 `_tts_fallback` 作为回落，确保 cam_check/闹铃/定时监控等服务端发起的消息也能正确获取 TTS 状态（`any_tts_enabled()` + `get_tts_voice()` 同时检查两处）
 - **PC 活动采集**：`PCActivityTracker` 守护线程通过 `win32gui.GetForegroundWindow()` + `psutil.Process.name()` 每 15 秒检测前台窗口变化，通过 `asyncio.run_coroutine_threadsafe()` 桥接主事件循环上报；`pywin32` 和 `psutil` 必须安装在项目 `.venv` 中（系统 Python 中的无效）
 - **App 名称解析**：服务端 `KNOWN_APPS` 字典映射 80+ 常见包名/进程名→中文名，`resolve_app_name()` 返回 `None` 表示需过滤的系统应用（桌面、SystemUI 等），读取历史日志时 `_resolve_entries()` 对旧条目重新解析确保名称一致
 - **活动日志清理**：`cleanup_old_activity_logs()` 读取→过滤→重写 JSONL 文件，仅保留 `KEEP_HOURS=8` 小时内的条目，每次上报时顺带执行
-- **TTS 多端去重**：前端 WebSocket handler 在 `voiceInCall`（语音通话中）或 `data.tts`（Core/哨兵主动发言）时自动播报 TTS；普通对话 AI 回复由 SSE 发送方独立播报，避免多端重复语音
+- **TTS 前端播放流程**：前端 `ttsQueue`（Map，key=msg_id）维护各消息的播放队列，`playNextTTSChunk()` 按 seq 顺序取出分片 URL 播放；收到 `tts_done` WebSocket 事件后标记 `q.finished = true`，当最后一片播放完毕且队列标记结束时，调用 `finishTTSForMsg()` 清理并通知语音模块（`notifyVoiceAiSpeaking(false)`）恢复录音
 - **消息编辑 attachments 修复**：后端 `update_message` 广播前 `json.loads` 解析 attachments，避免前端收到字符串导致渲染崩溃
 - **PWA 架构**：`sw.js` 和 `manifest.json` 物理存放在 `static/` 目录，但通过 `main.py` 的独立路由从根路径 `/sw.js`、`/manifest.json` 提供，确保 Service Worker 作用域覆盖全站
 - **外网访问**：通过 Tailscale 组建虚拟局域网，WireGuard 端到端加密，无需暴露公网端口；代码层面零改动，仅需两端安装 Tailscale 并登录同一账号
@@ -971,7 +1053,7 @@
 - **Web Notification**：`sendSystemNotification()` 封装 Notification API，闹铃弹窗和监控提醒时同时发送系统推送，需用户授权 `Notification.requestPermission()`
 - **AudioBridge 架构**：`AudioBridge.java` 使用 `AudioRecord(VOICE_RECOGNITION, 16000, MONO, PCM_16BIT)`，录音线程每 40ms 读取 1280 字节（640 samples），base64 编码后通过 `evaluateJavascript` 注入 JS；JS 端 `remoteVoice._onNativeChunk()` 解码 → 存入环形 buffer → 能量 VAD 判断语音段 → 静音截断 → 拼接 WAV 头 → POST 到 `/api/voice/remote-asr`
 - **远程 ASR 端点**：`routes/voice.py` 的 `/api/voice/remote-asr` 接收 multipart WAV 文件，用 httpx 转发到硅基流动 `https://api.siliconflow.cn/v1/audio/transcriptions`（model=FunAudioLLM/SenseVoiceSmall），返回 `{text}` JSON
-- **手机端语音协调**：`remoteVoice` 对象维护 `aiSpeaking` 状态，通过 `notifyVoiceAiSpeaking()` 和 `notifyVoiceCamCheckStart()` 统一分发给 PC 端 `/api/voice/ai-speaking` 或手机端 `remoteVoice._onAiSpeaking()`，TTS 播放完毕后自动恢复录音
+- **手机端语音协调**：`remoteVoice` 对象维护 `aiSpeaking` 状态，通过 `notifyVoiceAiSpeaking()` 和 `notifyVoiceCamCheckStart()` 统一分发给 PC 端 `/api/voice/ai-speaking` 或手机端 `remoteVoice._onAiSpeaking()`，TTS 播放完毕（`tts_done` 事件触发）后自动恢复录音
 - **音乐点歌架构**：`music.py` 封装 pyncm（`_ensure_session` 线程安全匿名登录），`routes/music.py` 提供 REST API 并导出 `MUSIC_CMD_PATTERN` 正则；`routes/chat.py` 在 send_message 和 regenerate 流结束后检测 `[MUSIC:xxx]`，搜索并通过 SSE `music` 事件 + WebSocket 广播发送卡片数据
 - **能力提示合并**：[MUSIC:xxx] 和 [CAM_CHECK] 合并为单个 `[系统能力]` user+assistant 对注入，减少 token 消耗（从 4 条消息降为 2 条）
 - **音乐前端渲染**：`msgMusicCards` 字典按消息 ID 存储卡片数据，`renderMusicCards()` / `buildMusicCardHtml()` 生成卡片 DOM，`playMusicOnline()` 创建固定底部播放器，`closeMusicPlayer()` 停止并移除

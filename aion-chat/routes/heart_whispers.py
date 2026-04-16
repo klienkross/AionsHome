@@ -26,6 +26,19 @@ async def list_heart_whispers(page: int = Query(1, ge=1), page_size: int = Query
     return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
+@router.get("/api/heart-whispers/by-conv/{conv_id}")
+async def list_heart_whispers_by_conv(conv_id: str):
+    """获取某对话的所有心语（用于在聊天界面恢复心语气泡）"""
+    async with get_db() as db:
+        db.row_factory = __import__('aiosqlite').Row
+        cur = await db.execute(
+            "SELECT id, conv_id, msg_id, content, created_at FROM heart_whispers WHERE conv_id=? ORDER BY created_at ASC",
+            (conv_id,)
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
 @router.delete("/api/heart-whispers/{hw_id}")
 async def delete_heart_whisper(hw_id: str):
     """删除单条心语"""

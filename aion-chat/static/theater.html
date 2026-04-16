@@ -1,0 +1,1210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>小剧场</title>
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/public/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2a221e">
+<style>
+:root {
+  --bg: #1e1a16;
+  --surface: #2a221e;
+  --surface2: #362e28;
+  --border: #4a3f37;
+  --text: #e8ddd4;
+  --text2: #a89888;
+  --text3: #7a6b5d;
+  --accent: #c8956c;
+  --accent2: #a87a55;
+  --user-bg: #3d2e24;
+  --ai-bg: #2a3328;
+  --danger: #cf5555;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; }
+body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background-color: rgba(255,255,255,0.1); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,0.2); }
+
+.app { display: flex; height: 100dvh; }
+
+/* ── 侧栏 ── */
+.sidebar { width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+.sidebar-header { padding: 10px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; }
+.sidebar-header button { flex:1; padding: 10px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; cursor: pointer; }
+.sidebar-header button:hover { background: var(--accent2); }
+.sidebar-header .home-btn { flex:none; width:40px; background:var(--surface2); color:var(--text); font-size:18px; }
+.sidebar-header .home-btn:hover { background:var(--border); }
+.conv-list { flex:1; overflow-y: auto; padding: 4px 6px; }
+.conv-item { padding: 11px 10px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; margin-bottom: 1px; }
+.conv-item:hover { background: var(--surface2); }
+.conv-item.active { background: var(--surface2); border-left: 3px solid var(--accent); }
+.conv-item .title { flex:1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: var(--text); }
+.conv-item .del-btn { display: none; background: none; border: none; color: var(--danger); font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+.conv-item:hover .del-btn { display: block; }
+.conv-item .rename-btn { display: none; background: none; border: none; color: var(--text2); font-size: 13px; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+.conv-item:hover .rename-btn { display: block; }
+.conv-count { font-size:11px; color:var(--text3); background:var(--surface2); border-radius:8px; padding:1px 6px; flex-shrink:0; white-space:nowrap; }
+
+/* ── 聊天区 ── */
+.chat-area { flex:1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+
+.chat-header { padding: 10px 16px; border-bottom: 1px solid rgba(74,63,55,0.6); background: rgba(42,34,30,0.85); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); display: flex; align-items: center; gap: 10px; min-height: 48px; position: absolute; top: 0; left: 0; right: 0; z-index: 8; box-shadow: 0 1px 8px rgba(0,0,0,0.2); }
+.chat-header .menu-btn { display: none; background: none; border: none; color: var(--text); font-size: 22px; cursor: pointer; padding: 4px; }
+.chat-header .title { flex:1; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; color: var(--text); }
+.chat-header select { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; outline: none; }
+.config-btn { background:var(--surface2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:6px 10px; font-size:14px; cursor:pointer; flex-shrink:0; }
+.config-btn:hover { border-color:var(--text2); }
+
+/* ── 配置弹窗 ── */
+.config-popup { display:none; position:absolute; right:16px; top:52px; background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px; z-index:15; min-width:260px; box-shadow:0 8px 24px rgba(0,0,0,0.4); max-height:calc(100dvh - 70px); overflow-y:auto; }
+.config-popup.show { display:block; }
+.config-popup label { display:block; font-size:12px; color:var(--text2); margin-bottom:4px; margin-top:10px; }
+.config-popup label:first-child { margin-top:0; }
+.config-popup select { width:100%; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:6px; padding:8px; font-size:13px; outline:none; }
+.config-popup .slider-row { display:flex; align-items:center; gap:8px; margin-top:4px; }
+.config-popup input[type="range"] { flex:1; accent-color:var(--accent); cursor:pointer; }
+.config-popup .slider-val { font-size:13px; color:var(--text); min-width:40px; text-align:right; }
+
+/* ── 角色选择区 ── */
+.persona-section { margin-top:10px; padding-top:10px; border-top:1px solid var(--border); }
+.persona-card { display:flex; align-items:center; gap:8px; padding:8px; background:var(--surface2); border:1px solid var(--border); border-radius:8px; margin-top:6px; cursor:pointer; }
+.persona-card:hover { border-color:var(--accent); }
+.persona-card.active { border-color:var(--accent); background:rgba(200,149,108,0.1); }
+.persona-card .p-name { flex:1; font-size:13px; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.persona-card .p-actions { display:flex; gap:4px; }
+.persona-card .p-actions button { background:none; border:none; color:var(--text3); font-size:13px; cursor:pointer; padding:2px 4px; }
+.persona-card .p-actions button:hover { color:var(--text); }
+.persona-add-btn { width:100%; margin-top:6px; padding:8px; background:none; border:1px dashed var(--border); border-radius:8px; color:var(--text3); font-size:13px; cursor:pointer; }
+.persona-add-btn:hover { border-color:var(--accent); color:var(--accent); }
+
+/* ── 角色编辑弹窗 ── */
+.persona-modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center; }
+.persona-modal-overlay.show { display:flex; }
+.persona-modal { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:24px; width:90vw; max-width:440px; max-height:80vh; overflow-y:auto; }
+.persona-modal h3 { font-size:16px; margin-bottom:16px; color:var(--text); }
+.persona-modal label { display:block; font-size:12px; color:var(--text2); margin-bottom:4px; margin-top:12px; }
+.persona-modal label:first-of-type { margin-top:0; }
+.persona-modal input, .persona-modal select { width:100%; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:14px; outline:none; }
+.persona-modal textarea { width:100%; background:var(--surface2); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:10px 12px; font-size:14px; outline:none; min-height:120px; resize:vertical; font-family:inherit; }
+.persona-modal .btn-row { display:flex; gap:8px; margin-top:16px; justify-content:flex-end; }
+.persona-modal .btn-row button { padding:8px 18px; border:none; border-radius:8px; font-size:14px; cursor:pointer; }
+.persona-modal .btn-save { background:var(--accent); color:#fff; }
+.persona-modal .btn-save:hover { opacity:0.85; }
+.persona-modal .btn-cancel { background:var(--surface2); color:var(--text); }
+
+/* ── TTS 开关 ── */
+.tts-section { margin-top:10px; padding-top:10px; border-top:1px solid var(--border); }
+.tts-toggle-row { display:flex; align-items:center; gap:8px; }
+.tts-toggle-row span { flex:1; font-size:13px; color:var(--text2); }
+.toggle-switch { position:relative; width:42px; height:24px; cursor:pointer; flex-shrink:0; }
+.toggle-switch input { opacity:0; width:0; height:0; }
+.toggle-slider { position:absolute; inset:0; background:var(--surface2); border:1px solid var(--border); border-radius:12px; transition:0.2s; }
+.toggle-slider:before { content:""; position:absolute; height:18px; width:18px; left:2px; top:2px; background:var(--text3); border-radius:50%; transition:0.2s; }
+.toggle-switch input:checked + .toggle-slider { background:var(--accent); border-color:var(--accent); }
+.toggle-switch input:checked + .toggle-slider:before { transform:translateX(18px); background:#fff; }
+
+/* ── 消息列表 ── */
+.messages { flex:1; overflow-y: auto; padding: 16px; padding-top: 60px; display: flex; flex-direction: column; gap: 2px; }
+
+.msg-row { display: flex; flex-direction: row; max-width: 82%; margin-bottom: 4px; gap: 8px; align-items: flex-start; }
+.msg-row.user { align-self: flex-end; flex-direction: row-reverse; }
+.msg-row.assistant { align-self: flex-start; }
+.msg-avatar { width:36px; height:36px; border-radius:50%; object-fit:cover; flex-shrink:0; margin-top:2px; }
+.msg-avatar-col { display:flex; flex-direction:column; align-items:center; gap:4px; flex-shrink:0; }
+.tts-replay-btn { background:none; border:none; cursor:pointer; font-size:14px; padding:2px; opacity:0.45; transition:opacity 0.2s; line-height:1; }
+.tts-replay-btn:hover { opacity:1; }
+.tts-replay-btn.playing { opacity:1; animation: ttsGlow 1s ease-in-out infinite alternate; }
+@keyframes ttsGlow { from { opacity:0.7; } to { opacity:1; } }
+.msg-body { display:flex; flex-direction:column; min-width:0; }
+.msg-row.user .msg-body { align-items:flex-end; }
+.msg-row.assistant .msg-body { align-items:flex-start; }
+.msg-role-row { display:flex; align-items:center; gap:4px; margin:0 4px 2px; position:relative; }
+.msg-role-name { font-size:11px; }
+.msg-row.user .msg-role-name { color:var(--accent); }
+.msg-row.assistant .msg-role-name { color:#8ab87a; }
+.msg-dots { background:none; border:none; color:var(--text3); font-size:14px; cursor:pointer; padding:0 4px; line-height:1; display:none; }
+.msg-dots:hover { color:var(--text); }
+.msg-row:hover .msg-dots { display:inline; }
+.msg-menu { display:none; position:absolute; top:18px; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:4px 0; z-index:16; box-shadow:0 4px 16px rgba(0,0,0,0.3); white-space:nowrap; }
+.msg-row.user .msg-menu { right:0; }
+.msg-row.assistant .msg-menu { left:0; }
+.msg-menu.show { display:block; }
+.msg-menu button { display:block; width:100%; text-align:left; background:none; border:none; color:var(--text); padding:7px 16px; font-size:13px; cursor:pointer; }
+.msg-menu button:hover { background:var(--surface2); }
+
+.msg-bubble { padding: 10px 14px; border-radius: 14px; font-size: 15px; line-height: 1.65; word-break: break-word; font-weight: 450; }
+.msg-row.user .msg-bubble { background: linear-gradient(145deg, #4a352a 0%, #3d2e24 100%); color: #e8ddd4; border-bottom-right-radius: 4px; border: 1px solid rgba(200,149,108,0.25); box-shadow: inset 0 2px 4px rgba(255,255,255,0.04), 0 1px 3px rgba(0,0,0,0.2); }
+.msg-row.assistant .msg-bubble { background: linear-gradient(145deg, #2e3a2a 0%, #2a3328 100%); color: #dde8d4; border-bottom-left-radius: 4px; border: 1px solid rgba(138,184,122,0.2); box-shadow: inset 0 2px 4px rgba(255,255,255,0.03), 0 1px 3px rgba(0,0,0,0.2); }
+.msg-bubbles { display:flex; flex-direction:column; gap:3px; }
+.msg-row.user .msg-bubbles { align-items:flex-end; }
+.msg-row.assistant .msg-bubbles { align-items:flex-start; }
+.msg-time { font-size: 10px; color: var(--text3); margin-left: 4px; }
+
+.msg-bubble.editing { background:var(--surface2) !important; }
+.msg-bubble textarea { width:100%; background:transparent; color:var(--text); border:none; outline:none; font-size:15px; line-height:1.65; resize:none; font-family:inherit; min-height:60px; }
+.edit-actions { display:flex; gap:6px; margin-top:6px; justify-content:flex-end; }
+.edit-actions button { padding:4px 12px; border:none; border-radius:6px; font-size:12px; cursor:pointer; }
+.edit-actions .save-btn { background:var(--accent); color:#fff; }
+.edit-actions .cancel-btn { background:var(--surface2); color:var(--text); }
+
+/* ── 系统消息 ── */
+.system-msg { text-align:center; font-size:12px; color:var(--text3); padding:4px 12px; }
+
+/* ── AI 输入等待 ── */
+.typing-bubble { display:inline-flex; align-items:center; gap:4px; }
+.typing-bubble .typing-text { color:var(--text3); font-size:13px; transition: opacity 0.3s; }
+.typing-bubble .typing-dots { display:inline-flex; gap:3px; margin-left:2px; vertical-align:middle; }
+.typing-bubble .typing-dots span { width:4px; height:4px; border-radius:50%; background:var(--text3); animation:dotBounce 1.4s infinite ease-in-out both; }
+.typing-bubble .typing-dots span:nth-child(1) { animation-delay:0s; }
+.typing-bubble .typing-dots span:nth-child(2) { animation-delay:0.16s; }
+.typing-bubble .typing-dots span:nth-child(3) { animation-delay:0.32s; }
+@keyframes dotBounce { 0%,80%,100% { transform: scale(0.4); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+
+/* ── 输入区 ── */
+.input-box { padding: 10px 16px 12px; border-top: 1px solid var(--border); background: var(--surface); }
+.preview-area { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; }
+.preview-area:empty { display:none; }
+.preview-item { position:relative; width:60px; height:60px; border-radius:8px; overflow:hidden; border:1px solid var(--border); }
+.preview-item img { width:100%; height:100%; object-fit:cover; }
+.preview-item .remove-btn { position:absolute; top:2px; right:2px; background:rgba(0,0,0,0.6); color:#fff; border:none; border-radius:50%; width:18px; height:18px; font-size:12px; cursor:pointer; line-height:1; }
+.input-row { display: flex; gap: 8px; align-items: flex-end; }
+.input-row textarea { flex:1; resize: none; border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; font-size: 15px; outline: none; max-height: 120px; line-height: 1.5; font-family: inherit; background: var(--surface2); color: var(--text); }
+.input-row textarea::placeholder { color: var(--text3); }
+.send-btn { width: 42px; height: 42px; border-radius: 50%; border: none; background: var(--accent); color: #fff; font-size: 18px; cursor: pointer; flex-shrink: 0; }
+.send-btn:hover { background: var(--accent2); }
+.send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.upload-btn { width:42px; height:42px; border-radius:50%; border:1px solid var(--border); background:var(--surface2); color:var(--text2); font-size:18px; cursor:pointer; flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+.upload-btn:hover { border-color:var(--accent); color:var(--accent); }
+
+/* ── 加载更多 ── */
+.load-more-btn { display:block; margin:8px auto; padding:6px 16px; background:var(--surface2); color:var(--text2); border:1px solid var(--border); border-radius:8px; font-size:12px; cursor:pointer; }
+.load-more-btn:hover { border-color:var(--accent); color:var(--accent); }
+
+/* ── 抽屉遮罩 ── */
+.sidebar-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:19; }
+.sidebar-overlay.show { display:block; }
+
+/* ── Toast ── */
+.toast-msg { position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.75); color:#fff; padding:8px 18px; border-radius:20px; font-size:13px; opacity:0; transition:opacity 0.3s; pointer-events:none; z-index:999; }
+.toast-msg.show { opacity:1; }
+
+/* ── 附件显示 ── */
+.msg-attachments { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+.msg-attachments img { max-width:200px; max-height:200px; border-radius:8px; cursor:pointer; object-fit:cover; border:1px solid var(--border); }
+.msg-attachments video { max-width:260px; border-radius:8px; border:1px solid var(--border); }
+
+/* ── 手机适配 ── */
+@media (max-width: 768px) {
+  .sidebar { position:fixed; left:-280px; top:0; bottom:0; z-index:20; transition:left 0.3s; }
+  .sidebar.open { left:0; }
+  .chat-header .menu-btn { display:block; }
+  .msg-row { max-width: 90%; }
+  .msg-bubble { font-size: 14px; padding: 9px 12px; }
+  .messages { padding: 12px; padding-top: 56px; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- 侧栏 -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <button class="home-btn" onclick="location.href='/'">🏠</button>
+      <button onclick="newConversation()">＋ 新剧场</button>
+    </div>
+    <div class="conv-list" id="convList"></div>
+  </div>
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+  <!-- 聊天区 -->
+  <div class="chat-area">
+    <div class="chat-header">
+      <button class="menu-btn" onclick="toggleSidebar()">☰</button>
+      <div class="title" id="chatTitle" onclick="renameCurrent()">小剧场</div>
+      <button class="config-btn" onclick="toggleConfig(event)">⚙</button>
+      <div class="config-popup" id="configPopup">
+        <label>模型</label>
+        <select id="modelSelect" onchange="changeModel()"></select>
+
+        <label>上下文条数</label>
+        <div class="slider-row">
+          <input type="range" id="contextSlider" min="1" max="100" value="20"
+            oninput="$('contextVal').textContent=this.value; localStorage.setItem('theater_context_limit',this.value)">
+          <span class="slider-val" id="contextVal">20</span>
+        </div>
+
+        <label>温度</label>
+        <div class="slider-row">
+          <input type="range" id="tempSlider" min="0" max="2" step="0.1" value="0.8"
+            oninput="$('tempVal').textContent=this.value; localStorage.setItem('theater_temperature',this.value)">
+          <span class="slider-val" id="tempVal">0.8</span>
+        </div>
+
+        <!-- TTS -->
+        <div class="tts-section">
+          <div class="tts-toggle-row">
+            <span>TTS 语音</span>
+            <label class="toggle-switch">
+              <input type="checkbox" id="ttsToggle" onchange="toggleTTS()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <label>音色</label>
+          <select id="ttsVoiceSelect" onchange="changeTTSVoice()"></select>
+        </div>
+
+        <!-- 角色管理 -->
+        <div class="persona-section">
+          <label style="margin-top:0">🎭 角色</label>
+          <div id="personaList"></div>
+          <button class="persona-add-btn" onclick="openPersonaModal()">＋ 新建角色</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="messages" id="messages"></div>
+
+    <div class="input-box">
+      <div class="preview-area" id="previewArea"></div>
+      <div class="input-row">
+        <button class="upload-btn" onclick="$('fileInput').click()">📎</button>
+        <input type="file" id="fileInput" accept="image/*,video/*" multiple style="display:none" onchange="handleFileSelect(this)">
+        <textarea id="input" rows="1" placeholder="输入消息…" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button class="send-btn" id="sendBtn" onclick="send()">➤</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 角色编辑弹窗 -->
+<div class="persona-modal-overlay" id="personaModalOverlay" onclick="if(event.target===this)closePersonaModal()">
+  <div class="persona-modal">
+    <h3 id="personaModalTitle">新建角色</h3>
+    <input type="hidden" id="personaEditId">
+    <label>角色名称</label>
+    <input type="text" id="personaName" placeholder="角色名">
+    <label>角色设定</label>
+    <textarea id="personaText" placeholder="角色的人设 / system prompt"></textarea>
+    <label>默认模型（留空跟随对话）</label>
+    <select id="personaModel"><option value="">跟随对话设置</option></select>
+    <label>默认温度</label>
+    <div class="slider-row">
+      <input type="range" id="personaTempSlider" min="0" max="2" step="0.1" value="0.8"
+        oninput="$('personaTempVal').textContent=this.value">
+      <span class="slider-val" id="personaTempVal">0.8</span>
+    </div>
+    <label>默认上下文条数</label>
+    <div class="slider-row">
+      <input type="range" id="personaContextSlider" min="1" max="100" value="20"
+        oninput="$('personaContextVal').textContent=this.value">
+      <span class="slider-val" id="personaContextVal">20</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn-cancel" onclick="closePersonaModal()">取消</button>
+      <button class="btn-save" onclick="savePersona()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast-msg" id="toast"></div>
+
+<script>
+/* ══════════════════════════════════════════════════
+   小剧场 — 独立聊天功能，不涉及记忆库
+   ══════════════════════════════════════════════════ */
+
+const $ = id => document.getElementById(id);
+
+/* ── 全局状态 ── */
+let conversations = [];
+let currentConvId = null;
+let currentMessages = [];
+let hasMoreMessages = false;
+let isStreaming = false;
+let pendingAttachments = [];
+let personas = [];
+let currentPersonaId = "";
+let models = [];
+
+/* ── TTS 状态 ── */
+let ttsEnabled = false;
+let ttsVoice = "";
+let ttsQueue = new Map();
+let ttsPlaying = false;
+let currentAudio = null;
+
+/* ── API 封装 ── */
+async function api(method, url, body) {
+  const opts = { method, headers: {"Content-Type": "application/json"} };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(url, opts);
+  return res.json();
+}
+
+/* ── Toast ── */
+let _toastTimer = null;
+function showToast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+/* ── HTML 转义 ── */
+function escHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+/* ── 初始化 ── */
+async function init() {
+  // 加载模型列表
+  try {
+    const m = await api('GET', '/api/models');
+    models = Array.isArray(m) ? m.map(x => x.key || x) : [];
+  } catch(e) { models = []; }
+  populateModelSelects();
+
+  // 加载 TTS 音色列表
+  loadTTSVoices();
+
+  // 加载角色
+  personas = await api('GET', '/api/theater/personas');
+  renderPersonaList();
+
+  // 加载对话列表
+  conversations = await api('GET', '/api/theater/conversations');
+  renderConvList();
+
+  // 恢复设置
+  const savedCtx = localStorage.getItem('theater_context_limit');
+  if (savedCtx) { $('contextSlider').value = savedCtx; $('contextVal').textContent = savedCtx; }
+  const savedTemp = localStorage.getItem('theater_temperature');
+  if (savedTemp) { $('tempSlider').value = savedTemp; $('tempVal').textContent = savedTemp; }
+  const savedTts = localStorage.getItem('theater_tts_enabled');
+  if (savedTts === 'true') { ttsEnabled = true; $('ttsToggle').checked = true; }
+  const savedVoice = localStorage.getItem('theater_tts_voice');
+  if (savedVoice) ttsVoice = savedVoice;
+
+  // 自动选择第一个对话
+  if (conversations.length) selectConv(conversations[0].id);
+
+  // WebSocket
+  connectWS();
+}
+
+/* ── 模型下拉 ── */
+function populateModelSelects() {
+  const opts = models.map(m => `<option value="${m}">${m}</option>`).join('');
+  $('modelSelect').innerHTML = opts;
+  $('personaModel').innerHTML = '<option value="">跟随对话设置</option>' + opts;
+}
+
+/* ── TTS 音色加载 ── */
+async function loadTTSVoices() {
+  try {
+    const res = await api('GET', '/api/tts/voices');
+    const sel = $('ttsVoiceSelect');
+    sel.innerHTML = '';
+    const voices = res.voices || (Array.isArray(res) ? res : []);
+    if (voices.length) {
+      voices.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.uri || v.customized_model_id || v.name || '';
+        opt.textContent = v.customName || v.uri || v.name || '未知';
+        sel.appendChild(opt);
+      });
+    } else {
+      sel.innerHTML = '<option value="">无可用音色</option>';
+    }
+    if (ttsVoice && [...sel.options].some(o => o.value === ttsVoice)) {
+      sel.value = ttsVoice;
+    } else if (sel.options.length && sel.options[0].value) {
+      ttsVoice = sel.options[0].value;
+    }
+    localStorage.setItem('theater_tts_voice', ttsVoice);
+  } catch(e) {}
+}
+
+function toggleTTS() {
+  ttsEnabled = $('ttsToggle').checked;
+  localStorage.setItem('theater_tts_enabled', ttsEnabled);
+  sendTTSState();
+}
+
+function changeTTSVoice() {
+  ttsVoice = $('ttsVoiceSelect').value;
+  localStorage.setItem('theater_tts_voice', ttsVoice);
+  sendTTSState();
+}
+
+function sendTTSState() {
+  if (_ws && _ws.readyState === WebSocket.OPEN) {
+    _ws.send(JSON.stringify({ type: 'tts_state', enabled: ttsEnabled, voice: ttsVoice }));
+  }
+}
+
+/* ── WebSocket ── */
+let _ws = null;
+let _wsReconnectTimer = null;
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  _ws = new WebSocket(`${proto}//${location.host}/ws`);
+  _ws.onopen = () => {
+    clearInterval(_wsReconnectTimer);
+    if (ttsEnabled) sendTTSState();
+  };
+  _ws.onmessage = e => {
+    try { handleSync(JSON.parse(e.data)); } catch(err) {}
+  };
+  _ws.onclose = () => {
+    _wsReconnectTimer = setInterval(() => {
+      if (!_ws || _ws.readyState > 1) connectWS();
+    }, 3000);
+  };
+  _ws.onerror = () => {};
+}
+
+function handleSync(msg) {
+  const d = msg.data;
+  switch (msg.type) {
+    case 'theater_conv_created':
+      if (!conversations.find(c => c.id === d.id)) {
+        conversations.unshift(d);
+        renderConvList();
+      }
+      break;
+    case 'theater_conv_updated':
+      for (const c of conversations) {
+        if (c.id === d.id) {
+          if (d.title) c.title = d.title;
+          if (d.model) c.model = d.model;
+          if (d.persona_id !== undefined) c.persona_id = d.persona_id;
+        }
+      }
+      renderConvList();
+      if (d.id === currentConvId && d.title) $('chatTitle').textContent = d.title;
+      break;
+    case 'theater_conv_deleted':
+      conversations = conversations.filter(c => c.id !== d.id);
+      renderConvList();
+      if (d.id === currentConvId) {
+        currentConvId = null;
+        currentMessages = [];
+        renderMessages();
+        $('chatTitle').textContent = '小剧场';
+      }
+      break;
+    case 'theater_msg_created':
+      if (d.conv_id === currentConvId && !currentMessages.find(m => m.id === d.id)) {
+        currentMessages.push(d);
+        renderMessages();
+        scrollBottom();
+      }
+      // 更新侧栏消息数
+      for (const c of conversations) {
+        if (c.id === d.conv_id) { c.message_count = (c.message_count || 0) + 1; renderConvList(); break; }
+      }
+      break;
+    case 'theater_msg_updated':
+      for (let i = 0; i < currentMessages.length; i++) {
+        if (currentMessages[i].id === d.id) { currentMessages[i] = d; renderMessages(); break; }
+      }
+      break;
+    case 'theater_msg_deleted':
+      currentMessages = currentMessages.filter(m => m.id !== d.id);
+      renderMessages();
+      for (const c of conversations) {
+        if (c.id === d.conv_id) { c.message_count = Math.max(0, (c.message_count || 0) - 1); renderConvList(); break; }
+      }
+      break;
+    case 'tts_chunk':
+      if (ttsEnabled) handleTTSChunk(d);
+      break;
+    case 'tts_done':
+      handleTTSDone(d);
+      break;
+  }
+}
+
+/* ── 对话列表 ── */
+function renderConvList() {
+  const el = $('convList');
+  el.innerHTML = conversations.map(c => `
+    <div class="conv-item ${c.id === currentConvId ? 'active' : ''}" onclick="selectConv('${c.id}')">
+      <span class="title">${escHtml(c.title)}</span>
+      <span class="conv-count">${c.message_count || 0}</span>
+      <button class="rename-btn" onclick="event.stopPropagation();renameConv('${c.id}')">✏</button>
+      <button class="del-btn" onclick="event.stopPropagation();delConv('${c.id}')">✕</button>
+    </div>
+  `).join('');
+}
+
+async function selectConv(id) {
+  currentConvId = id;
+  renderConvList();
+  closeSidebar();
+  const conv = conversations.find(c => c.id === id);
+  if (conv) {
+    $('chatTitle').textContent = conv.title;
+    if (conv.model) $('modelSelect').value = conv.model;
+    currentPersonaId = conv.persona_id || "";
+    renderPersonaList();
+  }
+  const msgs = await api('GET', `/api/theater/conversations/${id}/messages?limit=50`);
+  currentMessages = msgs;
+  hasMoreMessages = msgs.length >= 50;
+  renderMessages();
+  scrollBottom();
+}
+
+let _creating = false;
+async function newConversation() {
+  if (_creating) return;
+  _creating = true;
+  try {
+    const model = $('modelSelect').value;
+    const conv = await api('POST', '/api/theater/conversations', { title: '新剧场', persona_id: currentPersonaId, model });
+    if (!conversations.find(c => c.id === conv.id)) conversations.unshift(conv);
+    renderConvList();
+    await selectConv(conv.id);
+  } finally { _creating = false; }
+}
+
+async function delConv(id) {
+  if (!confirm('删除这个剧场对话？')) return;
+  await api('DELETE', `/api/theater/conversations/${id}`);
+  conversations = conversations.filter(c => c.id !== id);
+  renderConvList();
+  if (id === currentConvId) {
+    currentConvId = null;
+    currentMessages = [];
+    renderMessages();
+    $('chatTitle').textContent = '小剧场';
+  }
+}
+
+async function renameConv(id) {
+  const c = conversations.find(x => x.id === id);
+  const name = prompt('重命名', c ? c.title : '');
+  if (!name) return;
+  await api('PUT', `/api/theater/conversations/${id}`, { title: name });
+  if (c) c.title = name;
+  renderConvList();
+  if (id === currentConvId) $('chatTitle').textContent = name;
+}
+
+function renameCurrent() {
+  if (currentConvId) renameConv(currentConvId);
+}
+
+async function loadOlderMessages() {
+  if (!currentConvId || !currentMessages.length) return;
+  const oldest = currentMessages[0].created_at;
+  const older = await api('GET', `/api/theater/conversations/${currentConvId}/messages?limit=50&before=${oldest}`);
+  if (older.length) {
+    currentMessages = [...older, ...currentMessages];
+    hasMoreMessages = older.length >= 50;
+    const el = $('messages');
+    const prevH = el.scrollHeight;
+    renderMessages();
+    el.scrollTop = el.scrollHeight - prevH;
+  } else {
+    hasMoreMessages = false;
+    renderMessages();
+  }
+}
+
+/* ── 消息渲染 ── */
+function renderMessages() {
+  const el = $('messages');
+  let html = '';
+  if (hasMoreMessages) {
+    html += '<button class="load-more-btn" onclick="loadOlderMessages()">加载更早的消息</button>';
+  }
+  for (const m of currentMessages) {
+    if (m.role === 'system') {
+      html += `<div class="system-msg">${escHtml(m.content)}</div>`;
+      continue;
+    }
+    const isUser = m.role === 'user';
+    const cls = isUser ? 'user' : 'assistant';
+    const name = isUser ? '你' : '🎭';
+    const avatar = isUser ? '/public/UserIcon.png' : '/public/AIIcon.png';
+    const ts = m.created_at ? new Date(m.created_at * 1000) : null;
+    const timeStr = ts ? `${ts.getHours().toString().padStart(2,'0')}:${ts.getMinutes().toString().padStart(2,'0')}` : '';
+
+    // 多气泡拆分
+    const raw = (m.content || '').replace(/<meta>[\s\S]*?<\/meta>/g, '').trim();
+    const parts = raw.split(/\n\n+/).filter(Boolean);
+
+    let bubblesHtml = '';
+    for (const part of parts) {
+      bubblesHtml += `<div class="msg-bubble">${escHtml(part)}</div>`;
+    }
+
+    // 附件
+    let attHtml = '';
+    if (m.attachments && m.attachments.length) {
+      attHtml = '<div class="msg-attachments">';
+      for (const a of m.attachments) {
+        if (typeof a === 'string') {
+          if (a.match(/\.(mp4|webm|mov)$/i)) {
+            attHtml += `<video src="${a}" controls playsinline></video>`;
+          } else {
+            attHtml += `<img src="${a}" onclick="window.open('${a}')">`;
+          }
+        }
+      }
+      attHtml += '</div>';
+    }
+
+    html += `
+    <div class="msg-row ${cls}" data-id="${m.id}">
+      <div class="msg-avatar-col">
+        <img class="msg-avatar" src="${avatar}">
+        ${!isUser ? `<button class="tts-replay-btn" onclick="replayTTS('${m.id}')">🔊</button>` : ''}
+      </div>
+      <div class="msg-body">
+        <div class="msg-role-row">
+          <span class="msg-role-name">${name}</span>
+          <span class="msg-time">${timeStr}</span>
+          <button class="msg-dots" onclick="toggleMenu(event,'menu_${m.id}')">⋯</button>
+          <div class="msg-menu" id="menu_${m.id}">
+            ${isUser ? `<button onclick="editMsg('${m.id}')">编辑</button>` : `<button onclick="regenerateMsg()">重新生成</button>`}
+            <button onclick="copyMsg('${m.id}')">复制</button>
+            <button onclick="delMsg('${m.id}')">删除</button>
+          </div>
+        </div>
+        <div class="msg-bubbles">${bubblesHtml}</div>
+        ${attHtml}
+      </div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function scrollBottom() {
+  const el = $('messages');
+  requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+}
+
+/* ── 消息菜单 ── */
+function toggleMenu(e, id) {
+  e.stopPropagation();
+  document.querySelectorAll('.msg-menu.show').forEach(m => m.classList.remove('show'));
+  $(id).classList.toggle('show');
+}
+document.addEventListener('click', (e) => {
+  document.querySelectorAll('.msg-menu.show').forEach(m => m.classList.remove('show'));
+  const cp = $('configPopup');
+  if (cp.classList.contains('show') && !cp.contains(e.target) && e.target !== $('configPopup')) {
+    cp.classList.remove('show');
+  }
+});
+
+/* ── 编辑 ── */
+function editMsg(id) {
+  document.querySelectorAll('.msg-menu.show').forEach(m => m.classList.remove('show'));
+  const msg = currentMessages.find(m => m.id === id);
+  if (!msg) return;
+  const row = document.querySelector(`.msg-row[data-id="${id}"] .msg-bubbles`);
+  if (!row) return;
+  row.innerHTML = `<div class="msg-bubble editing">
+    <textarea id="editArea">${escHtml(msg.content)}</textarea>
+    <div class="edit-actions">
+      <button class="cancel-btn" onclick="renderMessages()">取消</button>
+      <button class="save-btn" onclick="saveEdit('${id}')">保存</button>
+    </div>
+  </div>`;
+  const ta = $('editArea');
+  ta.style.height = ta.scrollHeight + 'px';
+}
+
+async function saveEdit(id) {
+  const content = $('editArea').value.trim();
+  if (!content) return;
+  await api('PUT', `/api/theater/messages/${id}`, { content });
+  const msg = currentMessages.find(m => m.id === id);
+  if (msg) msg.content = content;
+  renderMessages();
+}
+
+async function delMsg(id) {
+  document.querySelectorAll('.msg-menu.show').forEach(m => m.classList.remove('show'));
+  await api('DELETE', `/api/theater/messages/${id}`);
+  currentMessages = currentMessages.filter(m => m.id !== id);
+  renderMessages();
+}
+
+function copyMsg(id) {
+  document.querySelectorAll('.msg-menu.show').forEach(m => m.classList.remove('show'));
+  const msg = currentMessages.find(m => m.id === id);
+  if (msg) navigator.clipboard.writeText(msg.content);
+  showToast('已复制');
+}
+
+/* ── 发送消息（SSE 流式） ── */
+async function send() {
+  const input = $('input');
+  const content = input.value.trim();
+  if (!content && !pendingAttachments.length) return;
+  if (!currentConvId) {
+    await newConversation();
+  }
+  if (isStreaming) return;
+  isStreaming = true;
+  $('sendBtn').disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
+
+  const ctx = parseInt($('contextSlider').value) || 20;
+  const temp = parseFloat($('tempSlider').value);
+
+  const body = {
+    content,
+    context_limit: ctx,
+    attachments: pendingAttachments.map(a => a.url),
+    temperature: temp,
+    tts_enabled: ttsEnabled,
+    tts_voice: ttsVoice,
+  };
+
+  pendingAttachments = [];
+  renderPreview();
+
+  try {
+    const res = await fetch(`/api/theater/conversations/${currentConvId}/send`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let aiMsgId = null;
+    let aiText = '';
+    let typingPhase = 0;
+    const typingTexts = ['思考中', '正在输入'];
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let data;
+        try { data = JSON.parse(line.slice(6)); } catch(e) { continue; }
+
+        if (data.type === 'start') {
+          aiMsgId = data.id;
+          // 添加占位 AI 消息 + 输入等待动画
+          currentMessages.push({
+            id: aiMsgId, conv_id: currentConvId, role: 'assistant',
+            content: '', created_at: Date.now()/1000, attachments: [], _streaming: true
+          });
+          renderMessages();
+          // 显示输入动画
+          const row = document.querySelector(`.msg-row[data-id="${aiMsgId}"] .msg-bubbles`);
+          if (row) {
+            row.innerHTML = `<div class="msg-bubble"><div class="typing-bubble">
+              <span class="typing-text">${typingTexts[0]}</span>
+              <span class="typing-dots"><span></span><span></span><span></span></span>
+            </div></div>`;
+          }
+          scrollBottom();
+          // 切换输入动画文字
+          const _typeInterval = setInterval(() => {
+            typingPhase = (typingPhase + 1) % typingTexts.length;
+            const tt = document.querySelector(`.msg-row[data-id="${aiMsgId}"] .typing-text`);
+            if (tt) tt.textContent = typingTexts[typingPhase];
+            else clearInterval(_typeInterval);
+          }, 3000);
+          // 存起来后面清除
+          window._typeInterval = _typeInterval;
+        }
+
+        if (data.type === 'chunk' && aiMsgId) {
+          if (window._typeInterval) { clearInterval(window._typeInterval); window._typeInterval = null; }
+          aiText += data.content;
+          // 更新占位消息
+          const msg = currentMessages.find(m => m.id === aiMsgId);
+          if (msg) msg.content = aiText;
+          // 实时更新 DOM
+          const row = document.querySelector(`.msg-row[data-id="${aiMsgId}"] .msg-bubbles`);
+          if (row) {
+            const display = aiText.replace(/<meta>[\s\S]*?<\/meta>/g, '').trim();
+            const parts = display.split(/\n\n+/).filter(Boolean);
+            row.innerHTML = parts.map(p => `<div class="msg-bubble">${escHtml(p)}</div>`).join('');
+          }
+          scrollBottom();
+        }
+
+        if (data.type === 'debug') {
+          // 静默处理
+        }
+      }
+    }
+  } catch(e) {
+    showToast('发送失败: ' + e.message);
+  } finally {
+    isStreaming = false;
+    $('sendBtn').disabled = false;
+    if (window._typeInterval) { clearInterval(window._typeInterval); window._typeInterval = null; }
+  }
+}
+
+/* ── 重新生成 ── */
+async function regenerateMsg() {
+  document.querySelectorAll('.msg-menu.show').forEach(m => m.classList.remove('show'));
+  if (!currentConvId || isStreaming) return;
+  isStreaming = true;
+  $('sendBtn').disabled = true;
+  const ctx = parseInt($('contextSlider').value) || 20;
+  const temp = parseFloat($('tempSlider').value);
+
+  try {
+    const res = await fetch(`/api/theater/conversations/${currentConvId}/regenerate?context_limit=${ctx}&temperature=${temp}&tts_enabled=${ttsEnabled}&tts_voice=${encodeURIComponent(ttsVoice)}`, {
+      method: 'POST',
+    });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let aiMsgId = null;
+    let aiText = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let data;
+        try { data = JSON.parse(line.slice(6)); } catch(e) { continue; }
+
+        if (data.type === 'start') {
+          aiMsgId = data.id;
+          currentMessages.push({
+            id: aiMsgId, conv_id: currentConvId, role: 'assistant',
+            content: '', created_at: Date.now()/1000, attachments: [], _streaming: true
+          });
+          renderMessages();
+          const row = document.querySelector(`.msg-row[data-id="${aiMsgId}"] .msg-bubbles`);
+          if (row) {
+            row.innerHTML = `<div class="msg-bubble"><div class="typing-bubble">
+              <span class="typing-text">正在重新生成</span>
+              <span class="typing-dots"><span></span><span></span><span></span></span>
+            </div></div>`;
+          }
+          scrollBottom();
+        }
+
+        if (data.type === 'chunk' && aiMsgId) {
+          aiText += data.content;
+          const msg = currentMessages.find(m => m.id === aiMsgId);
+          if (msg) msg.content = aiText;
+          const row = document.querySelector(`.msg-row[data-id="${aiMsgId}"] .msg-bubbles`);
+          if (row) {
+            const display = aiText.replace(/<meta>[\s\S]*?<\/meta>/g, '').trim();
+            const parts = display.split(/\n\n+/).filter(Boolean);
+            row.innerHTML = parts.map(p => `<div class="msg-bubble">${escHtml(p)}</div>`).join('');
+          }
+          scrollBottom();
+        }
+      }
+    }
+  } catch(e) {
+    showToast('重新生成失败');
+  } finally {
+    isStreaming = false;
+    $('sendBtn').disabled = false;
+  }
+}
+
+/* ── 文件上传 ── */
+async function handleFileSelect(input) {
+  const files = input.files;
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch('/api/upload', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.url) {
+        pendingAttachments.push({ url: data.url, name: file.name, type: file.type });
+        renderPreview();
+      }
+    } catch(e) {}
+  }
+  input.value = '';
+}
+
+function renderPreview() {
+  const el = $('previewArea');
+  el.innerHTML = pendingAttachments.map((a, i) => `
+    <div class="preview-item">
+      <img src="${a.url}">
+      <button class="remove-btn" onclick="pendingAttachments.splice(${i},1);renderPreview()">✕</button>
+    </div>
+  `).join('');
+}
+
+// 粘贴上传
+$('input').addEventListener('paste', async (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      const fd = new FormData();
+      fd.append('file', file);
+      try {
+        const res = await fetch('/api/upload', { method: 'POST', body: fd });
+        const data = await res.json();
+        if (data.url) { pendingAttachments.push({ url: data.url, name: 'paste.png', type: file.type }); renderPreview(); }
+      } catch(e2) {}
+    }
+  }
+});
+
+/* ── 输入框 ── */
+function handleKey(e) {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    send();
+  }
+}
+
+function autoResize(ta) {
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+}
+
+/* ── 模型切换 ── */
+async function changeModel() {
+  if (!currentConvId) return;
+  const model = $('modelSelect').value;
+  await api('PUT', `/api/theater/conversations/${currentConvId}`, { model });
+  const conv = conversations.find(c => c.id === currentConvId);
+  if (conv) conv.model = model;
+}
+
+/* ── 配置弹窗 ── */
+function toggleConfig(e) {
+  e.stopPropagation();
+  $('configPopup').classList.toggle('show');
+}
+// 阻止配置弹窗内部点击冒泡到 document（防止 select/slider 等操作时弹窗关闭）
+$('configPopup').addEventListener('click', e => e.stopPropagation());
+
+/* ── TTS 播放 ── */
+function handleTTSChunk(d) {
+  const msgId = d.msg_id;
+  // 只播放小剧场自己的消息（tm_ 前缀），忽略主聊天的 TTS
+  if (!msgId.startsWith('tm_')) return;
+  if (!ttsQueue.has(msgId)) ttsQueue.set(msgId, []);
+  ttsQueue.get(msgId).push({ seq: d.seq, url: d.url });
+  ttsQueue.get(msgId).sort((a, b) => a.seq - b.seq);
+  if (!ttsPlaying) playNextTTS();
+}
+
+function handleTTSDone(d) {
+  const msgId = d.msg_id;
+  if (!msgId.startsWith('tm_')) return;
+  if (ttsQueue.has(msgId)) {
+    const q = ttsQueue.get(msgId);
+    q._done = true;
+  }
+  if (!ttsPlaying) playNextTTS();
+}
+
+function playNextTTS() {
+  for (const [msgId, chunks] of ttsQueue) {
+    if (chunks._played === undefined) chunks._played = 0;
+    if (chunks._played < chunks.length) {
+      ttsPlaying = true;
+      const chunk = chunks[chunks._played];
+      chunks._played++;
+      const audio = new Audio(chunk.url);
+      currentAudio = audio;
+      // 高亮播放按钮
+      const btn = document.querySelector(`.msg-row[data-id="${msgId}"] .tts-replay-btn`);
+      if (btn) btn.classList.add('playing');
+      audio.onended = () => {
+        currentAudio = null;
+        if (btn) btn.classList.remove('playing');
+        playNextTTS();
+      };
+      audio.onerror = () => {
+        currentAudio = null;
+        if (btn) btn.classList.remove('playing');
+        playNextTTS();
+      };
+      audio.play().catch(() => { ttsPlaying = false; });
+      return;
+    }
+    if (chunks._done && chunks._played >= chunks.length) {
+      ttsQueue.delete(msgId);
+    }
+  }
+  ttsPlaying = false;
+}
+
+async function replayTTS(msgId) {
+  const safeId = msgId.replace(/[^a-zA-Z0-9_\-]/g, '');
+  const chunks = [];
+  for (let seq = 0; seq < 100; seq++) {
+    try {
+      const res = await fetch(`/api/tts/audio/${safeId}_s${seq}`, { method: 'HEAD' });
+      if (!res.ok) break;
+      chunks.push(`/api/tts/audio/${safeId}_s${seq}`);
+    } catch(e) { break; }
+  }
+  if (!chunks.length) { showToast('暂无音频缓存'); return; }
+  // 停止当前播放
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+  ttsPlaying = false;
+  ttsQueue.clear();
+  // 播放
+  let idx = 0;
+  const btn = document.querySelector(`.msg-row[data-id="${msgId}"] .tts-replay-btn`);
+  function playNext() {
+    if (idx >= chunks.length) { if (btn) btn.classList.remove('playing'); ttsPlaying = false; return; }
+    ttsPlaying = true;
+    if (btn) btn.classList.add('playing');
+    const audio = new Audio(chunks[idx++]);
+    currentAudio = audio;
+    audio.onended = playNext;
+    audio.onerror = playNext;
+    audio.play().catch(() => { ttsPlaying = false; });
+  }
+  playNext();
+}
+
+/* ── 角色管理 ── */
+function renderPersonaList() {
+  const el = $('personaList');
+  if (!el) return;
+  el.innerHTML = personas.map(p => `
+    <div class="persona-card ${p.id === currentPersonaId ? 'active' : ''}" onclick="selectPersona('${p.id}')">
+      <span class="p-name">🎭 ${escHtml(p.name)}</span>
+      <div class="p-actions">
+        <button onclick="event.stopPropagation();openPersonaModal('${p.id}')" title="编辑">✏</button>
+        <button onclick="event.stopPropagation();deletePersona('${p.id}')" title="删除">✕</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function selectPersona(pid) {
+  currentPersonaId = pid;
+  renderPersonaList();
+  if (currentConvId) {
+    await api('PUT', `/api/theater/conversations/${currentConvId}`, { persona_id: pid });
+    const conv = conversations.find(c => c.id === currentConvId);
+    if (conv) conv.persona_id = pid;
+  }
+  // 如果角色有默认温度/上下文，更新滑块
+  const p = personas.find(x => x.id === pid);
+  if (p) {
+    if (p.temperature !== undefined) { $('tempSlider').value = p.temperature; $('tempVal').textContent = p.temperature; }
+    if (p.context_limit !== undefined) { $('contextSlider').value = p.context_limit; $('contextVal').textContent = p.context_limit; }
+    if (p.model && models.includes(p.model)) { $('modelSelect').value = p.model; changeModel(); }
+  }
+}
+
+function openPersonaModal(editId) {
+  const overlay = $('personaModalOverlay');
+  if (editId) {
+    const p = personas.find(x => x.id === editId);
+    if (!p) return;
+    $('personaModalTitle').textContent = '编辑角色';
+    $('personaEditId').value = editId;
+    $('personaName').value = p.name;
+    $('personaText').value = p.persona;
+    $('personaModel').value = p.model || '';
+    $('personaTempSlider').value = p.temperature || 0.8;
+    $('personaTempVal').textContent = p.temperature || 0.8;
+    $('personaContextSlider').value = p.context_limit || 20;
+    $('personaContextVal').textContent = p.context_limit || 20;
+  } else {
+    $('personaModalTitle').textContent = '新建角色';
+    $('personaEditId').value = '';
+    $('personaName').value = '';
+    $('personaText').value = '';
+    $('personaModel').value = '';
+    $('personaTempSlider').value = 0.8;
+    $('personaTempVal').textContent = '0.8';
+    $('personaContextSlider').value = 20;
+    $('personaContextVal').textContent = '20';
+  }
+  overlay.classList.add('show');
+}
+
+function closePersonaModal() {
+  $('personaModalOverlay').classList.remove('show');
+}
+
+async function savePersona() {
+  const editId = $('personaEditId').value;
+  const data = {
+    name: $('personaName').value.trim() || '未命名角色',
+    persona: $('personaText').value,
+    model: $('personaModel').value,
+    temperature: parseFloat($('personaTempSlider').value),
+    context_limit: parseInt($('personaContextSlider').value),
+  };
+  if (editId) {
+    const updated = await api('PUT', `/api/theater/personas/${editId}`, data);
+    const idx = personas.findIndex(p => p.id === editId);
+    if (idx >= 0) personas[idx] = { ...personas[idx], ...updated };
+  } else {
+    const created = await api('POST', '/api/theater/personas', data);
+    personas.push(created);
+  }
+  renderPersonaList();
+  closePersonaModal();
+  showToast('已保存');
+}
+
+async function deletePersona(pid) {
+  if (!confirm('删除这个角色？')) return;
+  await api('DELETE', `/api/theater/personas/${pid}`);
+  personas = personas.filter(p => p.id !== pid);
+  if (currentPersonaId === pid) currentPersonaId = '';
+  renderPersonaList();
+}
+
+/* ── 侧栏 ── */
+function toggleSidebar() {
+  $('sidebar').classList.toggle('open');
+  $('sidebarOverlay').classList.toggle('show');
+}
+function closeSidebar() {
+  $('sidebar').classList.remove('open');
+  $('sidebarOverlay').classList.remove('show');
+}
+
+/* ── 启动 ── */
+init();
+</script>
+</body>
+</html>

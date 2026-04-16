@@ -733,6 +733,7 @@ async def _call_core_location(event_desc: str, status: dict, core_reason: str, c
     """唤醒 Core 通知位置变化"""
     from camera import read_logs_since, append_monitor_log, async_get_last_user_msg_time
     from ai_providers import stream_ai
+    from tts import TTSStreamer
     from memory import recall_memories
 
     wb = load_worldbook()
@@ -807,11 +808,21 @@ async def _call_core_location(event_desc: str, status: dict, core_reason: str, c
 
     messages = prefix + mem_inject + history + [{"role": "user", "content": core_prompt}]
 
+    # 预生成 msg_id + TTS
+    core_msg_id = f"msg_{int(time.time() * 1000)}_lr"
+    loc_tts = None
+    if manager.any_tts_enabled():
+        tts_voice = manager.get_tts_voice()
+        if tts_voice:
+            loc_tts = TTSStreamer(core_msg_id, tts_voice, manager)
+
     full_text = ""
     try:
         _temp = SETTINGS.get("temperature")
         async for chunk in stream_ai(messages, model_key, temperature=_temp):
             full_text += chunk
+            if loc_tts:
+                loc_tts.feed(chunk)
     except Exception as e:
         full_text = f"[Core 回复失败] {e}"
 
@@ -841,7 +852,6 @@ async def _call_core_location(event_desc: str, status: dict, core_reason: str, c
 
     async with get_db() as db:
         now2 = time.time()
-        core_msg_id = f"msg_{int(now2 * 1000)}_lr"
         await db.execute(
             "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
             (core_msg_id, conv_id, "assistant", full_text, now2, "[]"),
@@ -853,7 +863,13 @@ async def _call_core_location(event_desc: str, status: dict, core_reason: str, c
         "id": core_msg_id, "conv_id": conv_id, "role": "assistant",
         "content": full_text, "created_at": now2, "attachments": [],
     }
-    await manager.broadcast({"type": "msg_created", "data": core_msg, "tts": True})
+    await manager.broadcast({"type": "msg_created", "data": core_msg})
+
+    if loc_tts:
+        try:
+            await loc_tts.flush()
+        except Exception:
+            pass
 
     from routes.files import export_conversation
     await export_conversation(conv_id)

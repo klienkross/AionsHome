@@ -84,6 +84,7 @@ async def update_temperature(body: TempUpdate):
 class WorldBookUpdate(BaseModel):
     ai_persona: str = ""
     user_persona: str = ""
+    system_prompt: str = ""
     ai_name: str = "AI"
     user_name: str = "你"
 
@@ -94,7 +95,7 @@ async def get_worldbook():
 @router.put("/api/worldbook")
 async def update_worldbook(body: WorldBookUpdate):
     save_worldbook({"ai_persona": body.ai_persona, "user_persona": body.user_persona,
-                    "ai_name": body.ai_name, "user_name": body.user_name})
+                    "system_prompt": body.system_prompt, "ai_name": body.ai_name, "user_name": body.user_name})
     return {"ok": True}
 
 # ── 聊天状态 ──────────────────────────────────────
@@ -145,6 +146,7 @@ async def tts_synthesize(body: TTSRequest):
     except Exception as e:
         return Response(content=json.dumps({"error": str(e)}), status_code=500, media_type="application/json")
 
+@router.head("/api/tts/audio/{msg_id}")
 @router.get("/api/tts/audio/{msg_id}")
 async def tts_audio(msg_id: str):
     import re
