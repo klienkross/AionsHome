@@ -282,7 +282,10 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 .modal .btn-cancel { background:var(--surface2); color:var(--text); }
 
 /* ── 内联编辑 ── */
-.edit-textarea { width:100%; background:var(--surface); color:var(--text); border:1px solid var(--accent); border-radius:8px; padding:8px 10px; font-size:15px; line-height:1.65; resize:none; font-family:inherit; outline:none; min-height:48px; }
+.msg-row.editing { width:100%; max-width:100%; }
+.msg-row.editing .msg-body { flex:1; align-items:stretch; }
+.msg-bubble.editing { width:100%; box-sizing:border-box; }
+.edit-textarea { width:100%; box-sizing:border-box; background:var(--surface); color:var(--text); border:1px solid var(--accent); border-radius:8px; padding:10px 14px; font-size:15px; line-height:1.65; resize:vertical; font-family:inherit; outline:none; min-height:120px; }
 .edit-actions { display:flex; gap:8px; margin-top:6px; justify-content:flex-end; }
 .edit-actions button { padding:6px 16px; border-radius:6px; border:none; font-size:13px; cursor:pointer; min-height:36px; }
 .edit-save { background:var(--accent); color:#fff; }
@@ -2691,14 +2694,16 @@ function editMsg(id) {
   if (!msg) return;
   const row = document.getElementById(`m_${id}`);
   if (!row) return;
+  row.classList.add('editing');
   // 编辑时合并多气泡为单气泡
   const bubbles = row.querySelector('.msg-bubbles');
   if (bubbles) { const single = document.createElement('div'); single.className = 'msg-bubble'; bubbles.replaceWith(single); }
   const bubble = row.querySelector('.msg-bubble');
+  bubble.classList.add('editing');
   bubble.innerHTML = '<textarea class="edit-textarea" id="edit_' + id + '"></textarea>' +
     '<div class="edit-actions">' +
     '<button class="edit-cancel" onclick="cancelEdit(\'' + id + '\')">取消</button>' +
-    '<button class="edit-save" onclick="saveEdit(\'' + id + '\')">保存</button>' +
+    '<button class="edit-save" onclick="saveEdit(\'' + id + '\')">确认</button>' +
     '</div>';
   const ta = document.getElementById('edit_' + id);
   ta.value = msg.content;
@@ -2714,13 +2719,148 @@ async function saveEdit(id) {
   const ta = document.getElementById('edit_' + id);
   if (!ta) return;
   const newText = ta.value.trim();
+  if (!newText) return;
   const msg = currentMessages.find(m => m.id === id);
   if (!msg) return;
-  if (newText && newText !== msg.content) {
-    await api("PUT", `/api/messages/${id}`, { content: newText });
-    msg.content = newText;
-  }
+
+  // 编辑重新发送：更新消息内容 + 删除后续消息 + AI 重新回复
+  sending = true;
+  $('sendBtn').disabled = true;
+  msg.content = newText;
+
+  // 前端立即删除该消息之后的所有消息
+  const idx = currentMessages.indexOf(msg);
+  if (idx >= 0) currentMessages.splice(idx + 1);
+  // 添加临时的 AI 思考中占位
+  const tempAiId = 'temp_edit_thinking';
+  currentMessages.push({ id: tempAiId, conv_id: currentConvId, role: 'assistant', content: '...', created_at: Date.now()/1000 });
   renderMessages();
+  _startTypingAnim(tempAiId);
+
+  try {
+    const contextLimit = parseInt($('contextSlider').value) || 30;
+    const temperature = parseFloat($('tempSlider').value);
+    const res = await fetch(`/api/messages/${id}/edit-resend`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ content: newText, context_limit: contextLimit, whisper_mode: whisperMode, temperature, tts_enabled: ttsEnabled, tts_voice: ttsVoiceId, client_id: _clientId })
+    });
+
+    if (!res.ok) {
+      console.error('编辑重发接口错误:', res.status, res.statusText);
+      _stopTypingAnim();
+      // 回滚：从服务器重新加载消息
+      const msgs = await api('GET', `/api/conversations/${currentConvId}/messages?limit=${MSG_PAGE_SIZE}`);
+      currentMessages = msgs;
+      renderMessages();
+      sending = false;
+      $('sendBtn').disabled = false;
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let aiMsgId = null;
+    let aiContent = '';
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const data = JSON.parse(line.slice(6));
+          if (data.type === 'start') {
+            _stopTypingAnim();
+            // 替换临时思考占位为真正的 AI 消息
+            const tempIdx = currentMessages.findIndex(m => m.id === tempAiId);
+            if (tempIdx >= 0) currentMessages.splice(tempIdx, 1);
+            aiMsgId = data.id;
+            streamingAiId = aiMsgId;
+            currentMessages.push({ id: aiMsgId, conv_id: currentConvId, role: 'assistant', content: '...', created_at: Date.now()/1000 });
+            renderMessages();
+            _startTypingAnim(aiMsgId);
+          } else if (data.type === 'chunk') {
+            _stopTypingAnim();
+            aiContent += data.content;
+            const display = aiContent.replace(/\[CAM_CHECK\]/g, '').replace(/\[POI_SEARCH:[^\]]*\]/g, '').replace(/\[MUSIC:[^\]]*\]/g, '').replace(/\[ALARM:[^\]]*\]/g, '').replace(/\[REMINDER:[^\]]*\]/g, '').replace(/\[Monitor:[^\]]*\]/g, '').replace(/\[SCHEDULE_DEL:[^\]]*\]/g, '').replace(/\[SCHEDULE_LIST\]/g, '').replace(/\[TOY:[^\]]*\]/g, '').replace(/\[HEART:[^\]]*\]/g, '').replace(/\[MEMORY:[^\]]*\]/g, '').replace(/\[查看动态:\d+\]/g, '').replace(/\[视频电话\]/g, '').replace(/<meta>[\s\S]*?<\/meta>/g, '').trim();
+            const mi = currentMessages.findIndex(m => m.id === aiMsgId);
+            if (mi >= 0) currentMessages[mi].content = display;
+            const container = document.getElementById(`m_${aiMsgId}`);
+            if (container) {
+              const parts = display.split(/\n{2,}/).filter(p => p.trim());
+              const target = container.querySelector('.msg-bubbles') || container.querySelector('.msg-bubble');
+              if (parts.length > 1) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'msg-bubbles';
+                wrapper.innerHTML = parts.map(p => `<div class="msg-bubble">${formatMsg(p)}</div>`).join('');
+                target.replaceWith(wrapper);
+              } else if (target) {
+                if (target.classList.contains('msg-bubbles')) {
+                  const single = document.createElement('div');
+                  single.className = 'msg-bubble';
+                  single.innerHTML = formatMsg(display);
+                  target.replaceWith(single);
+                } else {
+                  target.innerHTML = formatMsg(display);
+                }
+              }
+            }
+            scrollBottom();
+          } else if (data.type === 'debug' && aiMsgId) {
+            msgDebugData[aiMsgId] = data;
+            renderDebugBar(aiMsgId);
+          } else if (data.type === 'cam_check') {
+            handleCamCheck(data.conv_id, data.model_key, aiMsgId);
+          } else if (data.type === 'cam_offline') {
+            showCamOfflineNotice();
+          } else if (data.type === 'activity_check') {
+            handleActivityCheck(data.conv_id, data.n, aiMsgId);
+          } else if (data.type === 'poi_search') {
+            handlePoiSearch(data.categories, aiMsgId);
+          } else if (data.type === 'music') {
+            msgMusicCards[data.msg_id] = data.cards;
+            renderMusicCards(data.msg_id);
+            scrollBottom();
+            if (data.cards && data.cards.length) playMusicOnline(data.cards[0].id);
+          } else if (data.type === 'toy_command') {
+            if (toyConnected) data.commands.forEach(c => toyExecCmd(c));
+          } else if (data.type === 'heart_whisper') {
+            showHeartWhisperHint(data.msg_id, data.content);
+          } else if (data.type === 'memory_record') {
+            showMemoryRecordHint(data.msg_id, data.content);
+          } else if (data.type === 'video_call_incoming') {
+            if (typeof videoCall !== 'undefined') videoCall.handleIncomingIndicator(data);
+          }
+        } catch {}
+      }
+    }
+    if (aiMsgId) finishTTSForMsg(aiMsgId);
+    if ((voiceInCall || (typeof videoCall !== 'undefined' && videoCall.active)) && !ttsEnabled) {
+      notifyVoiceAiSpeaking(false);
+    }
+  } catch (err) {
+    console.error('编辑重发失败:', err);
+    _stopTypingAnim();
+    addErrorToSystemLog(`编辑重发失败: ${err.message || err}`, $('modelSelect')?.value);
+    // 清理临时占位和未完成的 AI 消息
+    currentMessages = currentMessages.filter(m => m.id !== tempAiId);
+    if (streamingAiId) {
+      const mi = currentMessages.findIndex(m => m.id === streamingAiId);
+      if (mi >= 0 && currentMessages[mi].content === '...') {
+        currentMessages.splice(mi, 1);
+      }
+    }
+    renderMessages();
+  } finally {
+    sending = false;
+    streamingAiId = null;
+    $('sendBtn').disabled = false;
+  }
 }
 
 function copyMsg(id) {

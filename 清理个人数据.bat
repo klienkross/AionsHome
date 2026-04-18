@@ -14,9 +14,13 @@ echo     - 摄像头截图 (screenshots/)
 echo     - 上传的图片/视频 (uploads/)
 echo     - 活动日志 (activity_logs/)
 echo     - TTS 语音缓存 (tts_cache/)
+echo     - 临时文件 (tmp/)
 echo     - 聊天状态 + 记忆锚点
 echo     - 定位配置 + 定位状态（含家坐标/高德Key）
 echo     - 世界书人设 (重置为空白)
+echo     - 小剧场角色预设 (theater_personas.json)
+echo     - 奥罗斯幽林游戏数据 (ghost_forest/)
+echo     - 阅读书籍数据 (books/)
 echo     - API Key (需要朋友自己填)
 echo     - 虚拟环境 (朋友需重新安装)
 echo     - 源码中硬编码的 API Key (重置为空)
@@ -61,6 +65,20 @@ mkdir "aion-chat\data\activity_logs"
 
 if exist "aion-chat\data\tts_cache" rmdir /s /q "aion-chat\data\tts_cache"
 mkdir "aion-chat\data\tts_cache"
+
+if exist "aion-chat\data\tmp" rmdir /s /q "aion-chat\data\tmp"
+mkdir "aion-chat\data\tmp"
+
+:: ── 清理奥罗斯幽林游戏数据 ──
+if exist "aion-chat\data\ghost_forest" rmdir /s /q "aion-chat\data\ghost_forest"
+mkdir "aion-chat\data\ghost_forest"
+
+:: ── 清理阅读书籍数据 ──
+if exist "aion-chat\data\books" rmdir /s /q "aion-chat\data\books"
+mkdir "aion-chat\data\books"
+
+:: ── 清理小剧场角色预设 ──
+if exist "aion-chat\data\theater_personas.json" del /q "aion-chat\data\theater_personas.json"
 
 :: 重置 settings.json（清空所有 API Key）
 echo {} > "aion-chat\data\settings.json"

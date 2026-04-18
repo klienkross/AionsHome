@@ -25,6 +25,8 @@ HEART_CMD_PATTERN = re.compile(r'\[HEART:([^\]]+)\]')
 MEMORY_CMD_PATTERN = re.compile(r'\[MEMORY:([^\]]+)\]')
 ACTIVITY_CHECK_PATTERN = re.compile(r'\[查看动态:(\d+)\]')
 VIDEO_CALL_CMD = '[视频电话]'
+THEATER_STAT_PATTERN = re.compile(r'\[剧场属性[：:]([^\s]+)\s*([+\-＋－]\d+)\]')
+THEATER_ITEM_PATTERN = re.compile(r'\[剧场道具[：:]([^\]]+)\]')
 
 # 允许进入上下文的 system 消息关键词（点歌、查看监控、查看动态）
 _SYSTEM_MSG_CONTEXT_KEYWORDS = ('查看了监控', '搜索了', '点歌', '点了一首', '推荐了', '查看了动态')
@@ -81,9 +83,19 @@ class MsgCreate(BaseModel):
     tts_enabled: bool = False
     tts_voice: str = ""
     client_id: str = ""
+    theater_session_id: str = ""
 
 class MsgUpdate(BaseModel):
     content: str
+
+class MsgEditResend(BaseModel):
+    content: str
+    context_limit: int = 30
+    whisper_mode: bool = False
+    temperature: Optional[float] = None
+    tts_enabled: bool = False
+    tts_voice: str = ""
+    client_id: str = ""
 
 # ── 对话 CRUD ─────────────────────────────────────
 @router.get("/api/conversations")
@@ -196,6 +208,423 @@ async def update_message(msg_id: str, body: MsgUpdate):
     if conv_id:
         await export_conversation(conv_id)
     return {"ok": True}
+
+# ── 编辑重新发送（更新消息 + 删后续 + AI 重新回复） ──
+@router.post("/api/messages/{msg_id}/edit-resend")
+async def edit_resend_message(msg_id: str, body: MsgEditResend):
+    """编辑用户消息后重新发送：更新内容 → 删除后续消息 → AI 重新回复"""
+    if body.client_id:
+        manager.set_last_sender(body.client_id)
+
+    # 1. 查出原消息信息
+    async with get_db() as db:
+        db.row_factory = __import__('aiosqlite').Row
+        cur = await db.execute("SELECT * FROM messages WHERE id=?", (msg_id,))
+        orig = await cur.fetchone()
+        if not orig:
+            return {"error": "message not found"}
+        conv_id = orig["conv_id"]
+        msg_created_at = orig["created_at"]
+
+        # 2. 更新消息内容
+        await db.execute("UPDATE messages SET content=? WHERE id=?", (body.content, msg_id))
+
+        # 3. 删除该消息之后的所有消息
+        cur2 = await db.execute(
+            "SELECT id FROM messages WHERE conv_id=? AND created_at>?",
+            (conv_id, msg_created_at)
+        )
+        later_msgs = await cur2.fetchall()
+        if later_msgs:
+            await db.execute(
+                "DELETE FROM messages WHERE conv_id=? AND created_at>?",
+                (conv_id, msg_created_at)
+            )
+        await db.commit()
+
+    # 广播更新和删除事件
+    updated_d = dict(orig)
+    updated_d["content"] = body.content
+    try: updated_d["attachments"] = json.loads(updated_d.get("attachments") or "[]") if updated_d.get("attachments") else []
+    except: updated_d["attachments"] = []
+    await manager.broadcast({"type": "msg_updated", "data": updated_d})
+    for lm in later_msgs:
+        await manager.broadcast({"type": "msg_deleted", "data": {"id": lm["id"], "conv_id": conv_id}})
+
+    # 4. 重新构建上下文并调用 AI（复用 send_message 的逻辑）
+    async with get_db() as db:
+        db.row_factory = __import__('aiosqlite').Row
+        cur = await db.execute("SELECT model FROM conversations WHERE id=?", (conv_id,))
+        conv = await cur.fetchone()
+        model_key = conv["model"] if conv else DEFAULT_MODEL
+
+        cur = await db.execute(
+            "SELECT role, content, attachments, created_at FROM messages WHERE conv_id=? AND role IN ('user','assistant','system') ORDER BY created_at DESC LIMIT ?",
+            (conv_id, body.context_limit)
+        )
+        rows = await cur.fetchall()
+        history = []
+        for r in reversed(rows):
+            d = dict(r)
+            if d["role"] == "system":
+                if not any(kw in d["content"] for kw in _SYSTEM_MSG_CONTEXT_KEYWORDS):
+                    continue
+                d["role"] = "user"
+                d["content"] = f"[系统事件] {d['content']}"
+                d["attachments"] = []
+                history.append(d)
+                continue
+            try: d["attachments"] = json.loads(d.get("attachments") or "[]") if d.get("attachments") else []
+            except: d["attachments"] = []
+            d["content"] = META_TAG_PATTERN.sub("", d["content"]).strip()
+            if d.get("created_at"):
+                dt = datetime.fromtimestamp(d["created_at"])
+                d["content"] = f"{d['content']}\n<meta>发送时间：{dt.month}月{dt.day}日 {dt.strftime('%H:%M')}</meta>"
+            history.append(d)
+
+    # 只保留最后一条用户消息的图片附件
+    for msg in history[:-1]:
+        msg["attachments"] = []
+
+    actual_recent = [m for m in history if m["role"] in ("user", "assistant")][-3:]
+
+    wb = load_worldbook()
+    prefix = []
+    if wb.get("ai_persona"):
+        prefix.append({"role": "user", "content": f"[系统设定 - AI人设]\n{wb['ai_persona']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会按照设定扮演角色。"})
+    if wb.get("user_persona"):
+        prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
+    if wb.get("system_prompt"):
+        prefix.append({"role": "user", "content": f"[系统提示]\n{wb['system_prompt']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会遵循这些规则。"})
+    if prefix:
+        history = prefix + history
+
+    cap_idx = len(prefix) if prefix else 0
+    inject_offset = 0
+
+    # 注入系统能力提示
+    abilities = []
+    user_name = wb.get("user_name", "用户")
+    abilities.append(f"[MUSIC:歌曲名 歌手名] — 点歌/推荐音乐。系统自动展示播放卡片，不要在指令外重复歌曲信息。可同时用多个。")
+    if cam.running:
+        abilities.append(f"{CAM_CHECK_CMD} — 当你想查看{user_name}**此时此刻**的状态，不限于监督其是否去睡觉，在吃什么，在干什么时，可以主动调用指令。使用后下条消息会收到画面，查看前不要编造内容。")
+    abilities.append("[ALARM:YYYY-MM-DDTHH:MM|内容] — 设置闹铃，到时间系统会主动提醒用户。日期时间用ISO格式。")
+    abilities.append("[REMINDER:YYYY-MM-DD|内容] — 设置日程提醒（不闹铃），你在合适时机自然提起即可。")
+    abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了、是否在好好工作等。日期时间用ISO格式。")
+    abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
+    if is_activity_tracking_enabled():
+        abilities.append(f"[查看动态:n] — 查看{user_name}过去n×10分钟的设备使用动态（n为1~12的整数，例如[查看动态:2]查看过去20分钟，[查看动态:6]查看过去1小时）。当你好奇{user_name}最近在干什么、想了解{user_name}的设备使用情况时可以使用。使用后下条消息会收到动态摘要，查看前不要编造内容。")
+    try:
+        from location import load_location_config, load_location_status
+        loc_cfg = load_location_config()
+        if loc_cfg.get("enabled"):
+            loc_status = load_location_status()
+            if loc_status.get("state") == "outside":
+                abilities.append(f"[POI_SEARCH:类型名] — 搜索{user_name}当前位置周边的POI信息。可用类型：餐饮美食、风景名胜、休闲娱乐、购物。使用后系统会自动搜索并将结果发给你，你再根据结果回答{user_name}。一次只搜一个类型即可，搜索前不要编造内容。")
+    except Exception:
+        pass
+    if body.whisper_mode:
+        abilities.append(f"[TOY:1]~[TOY:9] — 控制{user_name}身上的情趣玩具切换到对应预设档位（1最温柔，9最强烈）。[TOY:STOP] — 停止玩具。你可以根据对话氛围自然地使用这些指令来挑逗和调教{user_name}，配合你的话语循序渐进，不要一上来就用高档位。")
+    if SETTINGS.get("video_call_enabled", True):
+        abilities.append(f"[视频电话] — 当你想和{user_name}进行视频聊天看看对方当前状态时可以用该指令发起视频通话。")
+    abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
+    abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。")
+    ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
+    ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
+    schedules = await get_active_schedules()
+    schedule_text = build_schedule_prompt(schedules)
+    ability_block += f"\n\n【当前日程列表】\n{schedule_text}"
+    try:
+        from location import format_location_for_prompt, load_location_config
+        loc_cfg = load_location_config()
+        if loc_cfg.get("enabled"):
+            loc_prompt = format_location_for_prompt()
+            if loc_prompt:
+                ability_block += f"\n\n【位置信息】\n{loc_prompt}"
+    except Exception:
+        pass
+    history.insert(cap_idx + inject_offset, {"role": "user", "content": ability_block})
+    history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "好的，需要时我会使用这些指令。"})
+    inject_offset += 2
+
+    # RAG 记忆召回
+    recall_keywords_str = ""
+    recalled = []
+    detail_text = ""
+    topic = ""
+    is_search_needed = False
+    recall_query = ""
+    debug_top6 = []
+    debug_top6_data = []
+    debug_recalled = []
+
+    digest_result = await instant_digest(actual_recent)
+    recall_keywords = digest_result.get("keywords", [])
+    recall_keywords_str = "、".join(recall_keywords) if recall_keywords else ""
+    topic = digest_result.get("topic", "")
+    is_search_needed = digest_result.get("is_search_needed", False)
+
+    recall_query = f"{topic} {' '.join(recall_keywords)}" if topic else f"{body.content[:200]} {' '.join(recall_keywords)}"
+    recall_query = recall_query.strip()
+
+    async def _do_surfacing():
+        return await build_surfacing_memories(topic, recall_keywords)
+    async def _do_recall():
+        if recall_query:
+            return await recall_memories(recall_query, query_keywords=recall_keywords)
+        return [], []
+
+    (surfaced, surfaced_ids), (_, debug_top6) = await asyncio.gather(
+        _do_surfacing(), _do_recall()
+    )
+
+    now_str = datetime.now().strftime("%Y年%m月%d日  %H:%M:%S")
+    bg_block = f"系统当前的准确时间是 {now_str}"
+    if surfaced:
+        unresolved_lines = [f"📌 {m['content']}（还没做/还没去）" for m in surfaced if m.get("unresolved")]
+        normal_lines = [f"- {m['content']}" for m in surfaced if not m.get("unresolved")]
+        mem_text = "\n".join(unresolved_lines + normal_lines)
+        bg_block += f"\n\n[背景记忆]\n以下是你记得的近期事件和需要关注的事项，在对话中如果有关联可以自然提起：\n{mem_text}"
+    history.insert(cap_idx + inject_offset, {"role": "user", "content": bg_block})
+    history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到，我会在合适的时候自然提及。"})
+    inject_offset += 2
+
+    if is_search_needed and recall_query:
+        recalled = [r for r in debug_top6 if r["score"] >= 0.45 and r["id"] not in surfaced_ids][:5]
+        if digest_result.get("require_detail") and recalled:
+            detail_text = await fetch_source_details(recalled, recall_keywords)
+
+    debug_recalled = [{"content": m["content"], "type": m["type"], "score": m["score"],
+                       "vec_sim": m.get("vec_sim"), "kw_score": m.get("kw_score"),
+                       "importance": m.get("importance")} for m in recalled] if recalled else []
+    debug_top6_data = [{"content": m["content"][:100], "score": m["score"],
+                        "vec_sim": m.get("vec_sim"), "kw_score": m.get("kw_score"),
+                        "importance": m.get("importance")} for m in debug_top6] if debug_top6 else []
+    if recalled:
+        mem_lines = "\n".join([f"- {m['content']}" for m in recalled])
+        mem_block = f"[相关记忆]\n你脑海中与当前话题相关的记忆：\n{mem_lines}"
+        if detail_text:
+            mem_block += f"\n\n[原文细节]\n以下是相关的具体对话记录：\n{detail_text}"
+        history.insert(cap_idx + inject_offset, {"role": "user", "content": mem_block})
+        history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到，我会自然地参考这些记忆。"})
+
+    debug_prompt = [{"role": m["role"], "content": m["content"][:500]} for m in history]
+
+    ai_msg_id = f"msg_{int(time.time()*1000)}"
+    usage_meta: dict = {}
+
+    _q: asyncio.Queue = asyncio.Queue()
+
+    tts_streamer = None
+    if body.tts_enabled and body.tts_voice:
+        tts_streamer = TTSStreamer(ai_msg_id, body.tts_voice, manager)
+    manager.set_tts_fallback(body.tts_enabled, body.tts_voice)
+
+    async def _bg_generate():
+        full_text = ""
+        has_error = False
+        try:
+            await _q.put({"id": ai_msg_id, "type": "start"})
+            try:
+                async for chunk in stream_ai(history, model_key, usage_meta):
+                    full_text += chunk
+                    await _q.put({"type": "chunk", "content": chunk})
+                    if tts_streamer:
+                        tts_streamer.feed(chunk)
+            except Exception as e:
+                has_error = True
+                error_text = f"\n[请求出错: {str(e)}]"
+                full_text += error_text
+                await _q.put({"type": "chunk", "content": error_text})
+
+            stripped = full_text.strip()
+            if not has_error and (stripped.startswith('[Gemini错误') or stripped.startswith('[硅基流动错误') or stripped.startswith('[中转站错误') or stripped.startswith('[错误]') or not stripped):
+                has_error = True
+
+            music_matches = MUSIC_CMD_PATTERN.findall(full_text)
+            music_cards = []
+            if music_matches:
+                for keyword in music_matches:
+                    keyword = keyword.strip()
+                    try:
+                        results = search_songs(keyword, limit=5)
+                        if results:
+                            song = results[0]
+                            song["audio_url"] = get_audio_url(song["id"])
+                            song["candidates"] = results[1:4]
+                            music_cards.append(song)
+                    except Exception:
+                        pass
+                full_text = MUSIC_CMD_PATTERN.sub("", full_text).strip()
+
+            toy_matches = TOY_CMD_PATTERN.findall(full_text)
+            if toy_matches:
+                full_text = TOY_CMD_PATTERN.sub("", full_text).strip()
+
+            cam_triggered = CAM_CHECK_CMD in full_text
+            if cam_triggered:
+                full_text = full_text.replace(CAM_CHECK_CMD, "").strip()
+
+            activity_match = ACTIVITY_CHECK_PATTERN.search(full_text)
+            activity_n = 0
+            if activity_match:
+                try:
+                    activity_n = int(activity_match.group(1))
+                except (ValueError, IndexError):
+                    activity_n = 6
+                activity_n = max(1, min(12, activity_n)) if activity_n > 0 else 6
+                full_text = ACTIVITY_CHECK_PATTERN.sub("", full_text).strip()
+
+            poi_matches = POI_SEARCH_PATTERN.findall(full_text)
+            if poi_matches:
+                full_text = POI_SEARCH_PATTERN.sub("", full_text).strip()
+
+            video_call_triggered = VIDEO_CALL_CMD in full_text
+            if video_call_triggered:
+                full_text = full_text.replace(VIDEO_CALL_CMD, "").strip()
+
+            full_text = await process_schedule_commands(full_text, conv_id)
+
+            heart_matches = HEART_CMD_PATTERN.findall(full_text)
+            if heart_matches:
+                full_text = HEART_CMD_PATTERN.sub("", full_text).strip()
+                for hw_content in heart_matches:
+                    hw_content = hw_content.strip()
+                    if hw_content:
+                        hw_now = time.time()
+                        hw_id = f"hw_{int(hw_now*1000)}"
+                        async with get_db() as hw_db:
+                            await hw_db.execute(
+                                "INSERT INTO heart_whispers (id, conv_id, msg_id, content, created_at) VALUES (?,?,?,?,?)",
+                                (hw_id, conv_id, ai_msg_id, hw_content, hw_now)
+                            )
+                            await hw_db.commit()
+                        hw_data = {'type': 'heart_whisper', 'id': hw_id, 'msg_id': ai_msg_id, 'content': hw_content, 'created_at': hw_now}
+                        await _q.put(hw_data)
+                        await manager.broadcast({"type": "heart_whisper", "data": hw_data})
+
+            memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
+            if memory_matches:
+                full_text = MEMORY_CMD_PATTERN.sub("", full_text).strip()
+                for mem_content in memory_matches:
+                    mem_content = mem_content.strip()
+                    if mem_content:
+                        mem_now = time.time()
+                        mem_id = f"mem_{int(mem_now*1000)}"
+                        vec = await get_embedding(mem_content)
+                        async with get_db() as mem_db:
+                            await mem_db.execute(
+                                "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts, unresolved) "
+                                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                (mem_id, mem_content, "重要事件", mem_now, conv_id,
+                                 _pack_embedding(vec) if vec else None, '', 0.5, None, None, 0)
+                            )
+                            await mem_db.commit()
+                        mem_data = {"id": mem_id, "content": mem_content, "type": "重要事件",
+                                    "created_at": mem_now, "keywords": "", "importance": 0.5,
+                                    "source_start_ts": None, "source_end_ts": None}
+                        await manager.broadcast({"type": "memory_added", "data": mem_data})
+                        mr_data = {'type': 'memory_record', 'msg_id': ai_msg_id, 'content': mem_content, 'mem_id': mem_id}
+                        await _q.put(mr_data)
+                        await manager.broadcast({"type": "memory_record", "data": mr_data})
+
+            full_text = META_TAG_PATTERN.sub("", full_text).strip()
+
+            music_atts = [{"type": "music", "name": s["name"], "artist": s["artist"], "id": s["id"]} for s in music_cards] if music_cards else []
+            att_json = json.dumps(music_atts, ensure_ascii=False) if music_atts else ""
+
+            now2 = time.time()
+            async with get_db() as db2:
+                await db2.execute(
+                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json)
+                )
+                await db2.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
+                await db2.commit()
+
+            ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant", "content": full_text, "created_at": now2, "attachments": music_atts}
+            await manager.broadcast({"type": "msg_created", "data": ai_msg})
+            await export_conversation(conv_id)
+
+            if toy_matches:
+                toy_data = {'type': 'toy_command', 'commands': toy_matches, 'msg_id': ai_msg_id}
+                await _q.put(toy_data)
+                await manager.broadcast({"type": "toy_command", "data": toy_data})
+                await _toy_sys_msg(conv_id, toy_matches)
+
+            if cam_triggered:
+                if cam.running:
+                    cam_data = {'type': 'cam_check', 'conv_id': conv_id, 'model_key': model_key, 'msg_id': ai_msg_id}
+                    await _q.put(cam_data)
+                    await manager.broadcast({"type": "cam_check", "data": cam_data})
+                    asyncio.create_task(_delayed_cam_check(conv_id, model_key))
+                else:
+                    await _q.put({'type': 'cam_offline'})
+
+            if poi_matches:
+                poi_data = {'type': 'poi_search', 'conv_id': conv_id, 'categories': poi_matches, 'msg_id': ai_msg_id}
+                await _q.put(poi_data)
+                await manager.broadcast({"type": "poi_search", "data": poi_data})
+                asyncio.create_task(perform_poi_check(conv_id, model_key, poi_matches))
+
+            if activity_n > 0:
+                activity_data = {'type': 'activity_check', 'conv_id': conv_id, 'n': activity_n, 'msg_id': ai_msg_id}
+                await _q.put(activity_data)
+                await manager.broadcast({"type": "activity_check", "data": activity_data})
+                asyncio.create_task(perform_activity_check(conv_id, model_key, activity_n))
+
+            if video_call_triggered:
+                vc_data = {'type': 'video_call_incoming', 'conv_id': conv_id, 'msg_id': ai_msg_id}
+                await _q.put(vc_data)
+                asyncio.create_task(_delayed_video_call(vc_data))
+
+            if music_cards:
+                music_data = {'type': 'music', 'msg_id': ai_msg_id, 'cards': music_cards}
+                await _q.put(music_data)
+                await manager.broadcast({"type": "music", "data": music_data})
+
+            debug_data = {
+                "type": "debug",
+                "model": model_key,
+                "msg_id": ai_msg_id,
+                "recall_keywords": recall_keywords_str,
+                "recall_query": recall_query,
+                "recall_topic": topic,
+                "is_search_needed": is_search_needed,
+                "recalled_memories": debug_recalled,
+                "debug_top6": debug_top6_data,
+                "prompt_messages": debug_prompt,
+                "prompt_count": len(history),
+                "usage": usage_meta if usage_meta else None,
+                "has_error": has_error,
+                "error_text": stripped if has_error else None,
+            }
+            await _q.put(debug_data)
+            await manager.broadcast({"type": "debug", "data": debug_data})
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        finally:
+            if tts_streamer:
+                try:
+                    await tts_streamer.flush()
+                except Exception:
+                    pass
+            await _q.put({"type": "done"})
+
+    asyncio.create_task(_bg_generate())
+
+    async def generate():
+        while True:
+            data = await _q.get()
+            if data.get("type") == "done":
+                break
+            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 # ── 发送消息 + AI 回复（SSE 流式） ────────────────
 @router.post("/api/conversations/{conv_id}/send")
@@ -327,6 +756,47 @@ async def send_message(conv_id: str, body: MsgCreate):
     history.insert(cap_idx + inject_offset, {"role": "user", "content": ability_block})
     history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "好的，需要时我会使用这些指令。"})
     inject_offset += 2
+
+    # 1.5 注入剧场·场外求助上下文（如果有）
+    theater_session = None
+    if body.theater_session_id:
+        from ghost_forest import load_session as gf_load_session, build_game_state_summary, save_session as gf_save_session, STAT_LABELS
+        theater_session = gf_load_session(body.theater_session_id)
+        if theater_session:
+            state_summary = build_game_state_summary(theater_session)
+            # 最近 1-2 轮剧情
+            story = theater_session.get("story", [])
+            recent_narration = ""
+            for entry in story[-2:]:
+                recent_narration += f"【第{entry['round']}轮】\n{entry.get('narration', '')}\n\n"
+            # 当前选项
+            last_story = story[-1] if story else None
+            options_text = ""
+            if last_story and last_story.get("options") and not last_story.get("chosen"):
+                opts = []
+                for opt in last_story["options"]:
+                    stat_name = STAT_LABELS.get(opt.get("stat", ""), opt.get("stat", ""))
+                    dc = opt.get("dc", 0)
+                    opts.append(f"{opt['key']}. {opt['text']}（{stat_name} DC{dc}）" if dc > 0 else f"{opt['key']}. {opt['text']}（幸运裸骰）")
+                options_text = "\n".join(opts)
+
+            theater_block = f"""[剧场·场外求助]
+你的伴侣正在玩「奥罗斯幽林」TRPG游戏，以下是当前状态：
+{state_summary}
+
+【当前剧情】
+{recent_narration.strip()}"""
+            if options_text:
+                theater_block += f"\n\n【当前面临的选项】\n{options_text}"
+            theater_block += """
+
+如果你愿意帮助，可以在回复中使用以下指令（可多个）：
+- [剧场属性：属性名 +N] 或 [剧场属性：属性名 -N]  修改属性（属性名可以是：hp、力量、敏捷、智力、魅力、幸运）
+- [剧场道具：道具名]  赠送道具"""
+
+            history.insert(cap_idx + inject_offset, {"role": "user", "content": theater_block})
+            history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到，我了解当前的游戏状况了。"})
+            inject_offset += 2
 
     # 2. 即时哨兵 + 记忆召回（fast_mode 时跳过以加快语音聊天响应）
     recall_keywords_str = ""
@@ -539,6 +1009,46 @@ async def send_message(conv_id: str, body: MsgCreate):
                         await manager.broadcast({"type": "memory_record", "data": mr_data})
                         print(f"[MEMORY] AI 主动录入记忆: {mem_content[:50]}")
 
+
+            # 检测剧场指令 [剧场属性：xxx ±N] / [剧场道具：xxx]
+            theater_updates = []
+            if theater_session:
+                stat_name_map = {"hp": "hp", "HP": "hp", "力量": "str", "敏捷": "dex", "智力": "int", "魅力": "cha", "幸运": "lck"}
+                theater_stat_matches = THEATER_STAT_PATTERN.findall(full_text)
+                for stat_name, val_str in theater_stat_matches:
+                    stat_name = stat_name.strip()
+                    val = int(val_str.replace('＋', '+').replace('－', '-'))
+                    stat_key = stat_name_map.get(stat_name)
+                    if stat_key and val != 0:
+                        ts = gf_load_session(body.theater_session_id)
+                        if ts:
+                            if stat_key == "hp":
+                                ts["player"]["hp"] = max(0, min(ts["player"]["max_hp"], ts["player"]["hp"] + val))
+                            else:
+                                ts["player"]["stats"][stat_key] = max(1, ts["player"]["stats"].get(stat_key, 0) + val)
+                            gf_save_session(ts)
+                            label = stat_name if stat_name != "hp" else "HP"
+                            theater_updates.append({"type": "stat", "name": label, "value": val})
+                            print(f"[剧场] 属性变更: {label} {'+' if val > 0 else ''}{val}")
+
+                theater_item_matches = THEATER_ITEM_PATTERN.findall(full_text)
+                for item_name in theater_item_matches:
+                    item_name = item_name.strip()
+                    if item_name:
+                        ts = gf_load_session(body.theater_session_id)
+                        if ts:
+                            found = False
+                            for inv_item in ts.get("inventory", []):
+                                if inv_item["name"] == item_name:
+                                    inv_item["count"] += 1
+                                    found = True
+                                    break
+                            if not found:
+                                ts.setdefault("inventory", []).append({"name": item_name, "count": 1, "description": "场外援助获得"})
+                            gf_save_session(ts)
+                            theater_updates.append({"type": "item", "name": item_name})
+                            print(f"[剧场] 道具赠送: {item_name}")
+
             # 清洗 AI 回复中模仿产生的 <meta> 标签
             full_text = META_TAG_PATTERN.sub("", full_text).strip()
 
@@ -618,6 +1128,12 @@ async def send_message(conv_id: str, body: MsgCreate):
                 "has_error": has_error,
                 "error_text": stripped if has_error else None,
             }
+
+            # 推送剧场指令结果到前端
+            if theater_updates:
+                tu_data = {'type': 'theater_update', 'updates': theater_updates, 'session_id': body.theater_session_id, 'msg_id': ai_msg_id}
+                await _q.put(tu_data)
+
             await _q.put(debug_data)
             await manager.broadcast({"type": "debug", "data": debug_data})
         except Exception:

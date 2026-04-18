@@ -1,0 +1,2535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>奥罗斯幽林</title>
+<link rel="stylesheet" href="/static/common.css">
+<script src="/static/three.min.js"></script>
+<style>
+/* ── 覆盖主题为暗黑奇幻 ── */
+:root {
+  --bg: #0a0a12;
+  --surface: #12121e;
+  --surface2: #1a1a2e;
+  --border: #2a2a3e;
+  --text: #d4cfc8;
+  --text2: #8a8690;
+  --text3: #555060;
+  --accent: #c9a227;
+  --accent-glow: rgba(201,162,39,0.3);
+  --danger: #cc3300;
+  --hp-bar: #44cc55;
+  --hp-bar-low: #cc3300;
+}
+body { background: var(--bg); }
+
+.top-bar {
+  background: rgba(10,10,18,0.9);
+  border-bottom: 1px solid var(--border);
+}
+.top-bar .back-btn { color: var(--accent); }
+.top-bar h2 { color: var(--accent); font-family: serif; letter-spacing: 2px; }
+
+/* ── 主内容区 ── */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* ── 存档列表视图 ── */
+.view { display: none; }
+.view.active { display: block; }
+
+/* ── 空状态 ── */
+.empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text3);
+}
+.empty-state .icon { font-size: 64px; margin-bottom: 16px; opacity: 0.5; }
+.empty-state p { font-size: 14px; margin-top: 8px; }
+
+/* ── 新建按钮 ── */
+.fab {
+  position: fixed;
+  bottom: 28px;
+  right: 24px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #c9a227, #a07818);
+  color: #0a0a12;
+  font-size: 28px;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(201,162,39,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  transition: transform 0.2s;
+}
+.fab:active { transform: scale(0.9); }
+
+/* ── 存档卡片 ── */
+.session-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  position: relative;
+}
+.session-card:active { border-color: var(--accent); }
+.session-card .title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+  font-family: serif;
+}
+.session-card .meta {
+  font-size: 12px;
+  color: var(--text2);
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.session-card .status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.status-draft { background: #2a2a3e; color: #8a8690; }
+.status-outlined { background: #1a2a1a; color: #66cc66; }
+.status-playing { background: #2a2a0a; color: #c9a227; }
+.status-paused { background: #2a1a1a; color: #cc8844; }
+.status-finished { background: #1a1a2e; color: #6688cc; }
+
+.session-card .delete-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.session-card .delete-btn:hover { color: var(--danger); background: rgba(204,51,0,0.1); }
+
+/* ── 创建/大纲视图 ── */
+.form-group {
+  margin-bottom: 20px;
+}
+.form-group label {
+  display: block;
+  font-size: 13px;
+  color: var(--text2);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.form-group textarea,
+.form-group input,
+.form-group select {
+  width: 100%;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+}
+.form-group textarea:focus,
+.form-group input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.form-group textarea { min-height: 120px; }
+
+.btn {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-primary {
+  background: linear-gradient(135deg, #c9a227, #a07818);
+  color: #0a0a12;
+}
+.btn-primary:disabled { opacity: 0.5; cursor: default; }
+.btn-secondary {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-danger {
+  background: rgba(204,51,0,0.15);
+  color: #cc5544;
+  border: 1px solid rgba(204,51,0,0.3);
+}
+.btn-block { width: 100%; justify-content: center; }
+
+/* ── 大纲展示 ── */
+.outline-display {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin: 16px 0;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text);
+  white-space: pre-wrap;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.outline-display h1, .outline-display h2, .outline-display h3 {
+  color: var(--accent);
+  margin: 12px 0 6px;
+}
+
+/* ── 属性分配 ── */
+.stats-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+.stats-panel .remaining {
+  text-align: center;
+  font-size: 16px;
+  color: var(--accent);
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+.stat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.stat-row:last-child { border-bottom: none; }
+.stat-row .stat-name {
+  font-size: 15px;
+  color: var(--text);
+  min-width: 60px;
+  font-weight: 600;
+}
+.stat-row .stat-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.stat-row .stat-controls button {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--accent);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.stat-row .stat-controls button:disabled { opacity: 0.3; cursor: default; }
+.stat-row .stat-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 28px;
+  text-align: center;
+}
+
+/* ── 游戏面板 ── */
+.game-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.hp-bar-wrap {
+  width: 100%;
+  height: 5px;
+  background: var(--surface2);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+.hp-bar {
+  height: 100%;
+  background: var(--hp-bar);
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+.hp-bar.low { background: var(--hp-bar-low); }
+
+.player-stats {
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+  margin-bottom: 4px;
+  overflow-x: auto;
+}
+.stat-chip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 5px;
+  font-size: 10px;
+  color: var(--text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.stat-chip .label { color: var(--text2); margin-right: 2px; }
+.stat-chip .val { color: var(--accent); font-weight: 700; }
+
+.inventory-bar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 0 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.inv-chip {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--text);
+}
+.inv-chip .count { color: var(--accent); font-weight: 700; margin-left: 2px; }
+
+/* ── 剧情文本（滚动容器） ── */
+.game-scroll-area {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  -webkit-overflow-scrolling: touch;
+}
+.narration-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text);
+  white-space: pre-wrap;
+  min-height: 60px;
+}
+.narration-box.streaming {
+  border-color: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+/* ── 选项按钮 ── */
+.options-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.option-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  position: relative;
+}
+.option-btn:hover { border-color: var(--accent); background: var(--surface2); }
+.option-btn.selected {
+  border-color: var(--accent);
+  background: rgba(201,162,39,0.1);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+.option-btn .option-key {
+  color: var(--accent);
+  font-weight: 700;
+  margin-right: 6px;
+  font-size: 14px;
+}
+.option-btn .option-stat {
+  float: right;
+  font-size: 10px;
+  color: var(--text3);
+  background: var(--surface2);
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.option-btn .confirm-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 4px;
+  text-align: center;
+}
+
+/* ── D20 骰子全屏遮罩 ── */
+.dice-overlay {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 40%, rgba(11,21,32,0.95), rgba(4,4,13,0.98));
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s;
+}
+.dice-overlay.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+.dice-overlay .dice-label {
+  font-size: 12px;
+  color: var(--text3);
+  letter-spacing: 5px;
+  margin-bottom: 8px;
+}
+.dice-overlay .dice-3d-wrap {
+  position: relative;
+  width: 220px;
+  height: 220px;
+}
+.dice-overlay .dice-number-overlay {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  z-index: 5;
+}
+.dice-overlay .dice-number-overlay.show {
+  display: flex;
+}
+.dice-overlay .dice-number-backdrop {
+  position: absolute;
+  width: 100px; height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0,0,0,0.75) 40%, transparent 80%);
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+}
+.dice-overlay .dice-number {
+  font-family: 'Georgia', serif;
+  font-size: 68px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+  text-shadow: 0 0 20px var(--accent-glow), 0 0 55px rgba(201,162,39,0.5), 0 2px 4px rgba(0,0,0,0.9);
+  animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  position: relative;
+  z-index: 2;
+}
+.dice-overlay .dice-number.crit {
+  color: #ffd700;
+  text-shadow: 0 0 20px #ffd700, 0 0 55px rgba(255,215,0,0.5), 0 2px 4px rgba(0,0,0,0.9);
+}
+.dice-overlay .dice-number.fumble {
+  color: #cc3300;
+  text-shadow: 0 0 20px #cc3300, 0 0 55px rgba(204,51,0,0.5), 0 2px 4px rgba(0,0,0,0.9);
+}
+.dice-overlay .dice-crit-label {
+  display: none;
+  font-size: 13px;
+  letter-spacing: 7px;
+  height: 28px;
+  margin-top: 4px;
+  animation: fadeUp 0.4s 0.1s ease-out both;
+}
+.dice-overlay .dice-rolling-hint {
+  color: #5a5a7a;
+  letter-spacing: 5px;
+  font-size: 11px;
+  animation: pulse 0.6s ease-in-out infinite alternate;
+  height: 28px;
+  margin-top: 4px;
+}
+.dice-overlay .dice-result-text {
+  font-size: 16px;
+  font-weight: 700;
+  margin-top: 8px;
+  min-height: 24px;
+  text-align: center;
+  line-height: 1.6;
+}
+.dice-overlay .dice-calc {
+  font-size: 13px;
+  color: var(--text2);
+  margin-top: 4px;
+}
+
+/* ── Corner runes ── */
+.dice-overlay .corner-rune {
+  position: absolute;
+  color: rgba(201,162,39,0.12);
+  font-size: 36px;
+  font-family: serif;
+}
+
+/* ── 前情回顾遮罩 ── */
+.recap-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: var(--bg);
+  display: none;
+  flex-direction: column;
+}
+.recap-overlay.show { display: flex; }
+.recap-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.recap-header h3 {
+  margin: 0;
+  font-family: serif;
+  color: var(--accent);
+  font-size: 16px;
+  letter-spacing: 2px;
+}
+.recap-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  -webkit-overflow-scrolling: touch;
+}
+.recap-round {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.recap-round:last-child { border-bottom: none; }
+.recap-round-title {
+  font-size: 13px;
+  color: var(--accent);
+  font-family: serif;
+  margin-bottom: 8px;
+  letter-spacing: 1px;
+}
+.recap-round-body {
+  font-size: 14px;
+  color: var(--text);
+  line-height: 1.7;
+}
+.recap-choice-tag {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--text2);
+  background: var(--surface2);
+  border-radius: 6px;
+}
+
+/* ── 场外求助聊天面板 ── */
+.theater-chat-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: flex-end;
+}
+.theater-chat-overlay.show { display: flex; }
+.theater-chat-panel {
+  width: 100%;
+  max-height: 65vh;
+  background: var(--bg);
+  border-top: 1px solid var(--accent);
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.25s ease-out;
+}
+@keyframes slideUp {
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0); }
+}
+.theater-chat-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.theater-chat-header h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--accent);
+  font-family: serif;
+}
+.theater-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  min-height: 120px;
+  -webkit-overflow-scrolling: touch;
+}
+.tc-msg {
+  margin-bottom: 10px;
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.tc-msg.user {
+  margin-left: auto;
+  background: rgba(201,162,39,0.15);
+  color: var(--text);
+  border-bottom-right-radius: 4px;
+}
+.tc-msg.assistant {
+  margin-right: auto;
+  background: var(--surface2);
+  color: var(--text);
+  border-bottom-left-radius: 4px;
+}
+.tc-msg .tc-effect {
+  display: block;
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(68,204,85,0.15);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #44cc55;
+}
+.theater-chat-input {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.theater-chat-input input {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 8px 14px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+}
+.theater-chat-input input:focus { border-color: var(--accent); }
+.theater-chat-input button {
+  padding: 8px 16px;
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 20px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+@keyframes popIn {
+  0%   { opacity: 0; transform: scale(0.4) translateY(15px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes fadeUp {
+  0%   { opacity: 0; transform: translateY(8px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+/* ── 火花粒子 ── */
+@keyframes sparkFly {
+  0%   { opacity: 1; transform: translate(0, 0) scale(1); }
+  100% { opacity: 0; transform: translate(var(--tx), var(--ty)) scale(0.2); }
+}
+@keyframes diceRollCSS {
+  0% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(12deg) scale(1.08); }
+  50% { transform: rotate(-8deg) scale(0.92); }
+  75% { transform: rotate(5deg) scale(1.04); }
+  100% { transform: rotate(0deg) scale(1); }
+}
+
+/* ── 游戏中模型选择 ── */
+.game-model-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  margin-bottom: 2px;
+  padding: 0 4px;
+}
+.game-model-wrap label {
+  font-size: 10px;
+  color: var(--text3);
+  white-space: nowrap;
+}
+.game-model-wrap select {
+  flex: 1;
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--surface);
+  color: var(--text2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  max-width: 200px;
+}
+
+/* ── 自定义输入(D选项) ── */
+.custom-input-wrap {
+  margin-top: 8px;
+  display: none;
+}
+.custom-input-wrap.show { display: block; }
+.custom-input-wrap textarea {
+  width: 100%;
+  padding: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  resize: none;
+  min-height: 50px;
+}
+.custom-input-wrap textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.custom-input-btns {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.custom-input-btns .btn { flex: 1; padding: 10px; font-size: 13px; }
+
+/* ── 回合信息 ── */
+.round-info {
+  text-align: center;
+  font-size: 12px;
+  color: var(--text3);
+  margin-bottom: 12px;
+  letter-spacing: 2px;
+}
+
+/* ── 加载动画 ── */
+.loading-dots::after {
+  content: '';
+  animation: dots 1.2s infinite;
+}
+@keyframes dots {
+  0%, 20% { content: '.'; }
+  40% { content: '..'; }
+  60%, 100% { content: '...'; }
+}
+@keyframes pulse {
+  0% { opacity: 0.5; transform: scale(0.95); }
+  100% { opacity: 1; transform: scale(1.05); }
+}
+
+/* ── 按钮组 ── */
+.btn-group {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.btn-group .btn { flex: 1; }
+
+/* ── Markdown 简易渲染 ── */
+.md-content h1 { font-size: 20px; color: var(--accent); margin: 16px 0 8px; }
+.md-content h2 { font-size: 17px; color: var(--accent); margin: 14px 0 6px; }
+.md-content h3 { font-size: 15px; color: var(--accent); margin: 12px 0 4px; }
+.md-content p { margin: 6px 0; }
+.md-content ul, .md-content ol { padding-left: 20px; margin: 6px 0; }
+.md-content li { margin: 3px 0; }
+.md-content strong { color: var(--accent); }
+
+/* ── 模型选择 ── */
+.model-select {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+}
+.model-select:focus { outline: none; border-color: var(--accent); }
+
+/* ── 人设管理 ── */
+.persona-section { margin-bottom: 20px; }
+.persona-section-title {
+  font-size: 14px;
+  color: var(--accent);
+  font-weight: 700;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.persona-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.persona-card:hover { border-color: var(--accent); }
+.persona-card .p-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.persona-card .p-preview {
+  font-size: 12px;
+  color: var(--text2);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+.persona-card .p-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.persona-card .p-actions button {
+  background: none;
+  border: none;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--text3);
+}
+.persona-card .p-actions button:hover { color: var(--accent); background: var(--surface2); }
+.persona-card .p-actions .del-btn:hover { color: var(--danger); }
+
+.persona-form {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-top: 12px;
+}
+.persona-form input,
+.persona-form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+}
+.persona-form input:focus,
+.persona-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.persona-form textarea { min-height: 100px; resize: vertical; margin-top: 8px; }
+.persona-form .form-btns { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
+
+.persona-select-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.persona-select-row select { flex: 1; }
+.persona-select-row .manage-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text2);
+  font-size: 12px;
+  padding: 8px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.persona-select-row .manage-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ── 大纲结构化展示 ── */
+.outline-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+.outline-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.outline-section-body {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text);
+}
+.outline-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.outline-chip {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+</style>
+</head>
+<body>
+
+<div class="sub-page">
+  <!-- 顶部栏 -->
+  <div class="top-bar">
+    <button class="back-btn" onclick="goBack()">‹</button>
+    <h2 id="pageTitle">⚔ 奥罗斯幽林</h2>
+    <div style="width:30px"></div>
+  </div>
+
+  <div class="content" id="content">
+
+    <!-- ═══ 视图1: 存档列表 ═══ -->
+    <div class="view active" id="viewList">
+      <div id="sessionList"></div>
+      <div class="empty-state" id="emptyState">
+        <div class="icon">🌲</div>
+        <p>幽林深处，冒险尚未开始</p>
+        <p style="margin-top: 12px; font-size: 12px;">点击右下角开启新的旅程</p>
+      </div>
+    </div>
+
+    <!-- ═══ 视图2: 创建新剧本 ═══ -->
+    <div class="view" id="viewCreate">
+      <div class="form-group">
+        <label>✨ 你的剧情脑洞</label>
+        <textarea id="ideaInput" placeholder="随意描述你想要的冒险故事... 比如：一座被诅咒的古堡，里面住着一只会说话的猫，只有集齐三颗星星才能打破封印。"></textarea>
+      </div>
+      <div class="form-group">
+        <label>🎭 DM 人设</label>
+        <div class="persona-select-row">
+          <select id="dmPersonaSelect" class="model-select"><option value="">默认 DM</option></select>
+          <button class="manage-btn" onclick="showPersonas('dm')">管理</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>🧑‍⚔️ 玩家人设</label>
+        <div class="persona-select-row">
+          <select id="playerPersonaSelect" class="model-select"><option value="">无特定人设</option></select>
+          <button class="manage-btn" onclick="showPersonas('player')">管理</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>🤖 AI 模型</label>
+        <select id="modelSelect" class="model-select" onchange="localStorage.setItem('gf_model',this.value);_fillModelSelect('gameModelSelect',this.value)">
+        </select>
+      </div>
+      <button class="btn btn-primary btn-block" id="btnGenOutline" onclick="generateOutline()">
+        ✦ 让 AI 编写剧本大纲
+      </button>
+    </div>
+
+    <!-- ═══ 视图: 人设管理 ═══ -->
+    <div class="view" id="viewPersonas">
+      <div class="persona-section">
+        <div class="persona-section-title">
+          <span id="personaViewTitle"></span>
+        </div>
+        <div id="personaList"></div>
+        <button class="btn btn-secondary btn-block" style="margin-top:12px;" onclick="showPersonaForm()">
+          + 新建人设
+        </button>
+      </div>
+      <div class="persona-form" id="personaForm" style="display:none;">
+        <input type="hidden" id="personaEditId" value="">
+        <input type="text" id="personaNameInput" placeholder="人设名称">
+        <textarea id="personaContentInput" placeholder="详细描述人设内容... 比如DM人设：“你是一个暗黑诡谲风格的叙述者，喜欢在剧情中埋下细微的伏笔，语言风格古典而神秘” 比如玩家人设：“我是一个失忦的精灵法师，擅长元素魔法，性格谨慎但充满好奇心”"></textarea>
+        <div class="form-btns">
+          <button class="btn btn-secondary" onclick="hidePersonaForm()">取消</button>
+          <button class="btn btn-primary" onclick="savePersonaForm()">保存</button>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-block" style="margin-top:20px;" onclick="backFromPersonas()">← 返回</button>
+    </div>
+
+    <!-- ═══ 视图3: 大纲预览 ═══ -->
+    <div class="view" id="viewOutline">
+      <div class="round-info">— 剧情大纲 —</div>
+      <div id="outlineStructured" style="display:none;"></div>
+      <div class="outline-display md-content" id="outlineContent"></div>
+      <div class="btn-group">
+        <button class="btn btn-secondary" onclick="regenerateOutline()">🔄 不满意，重新生成</button>
+        <button class="btn btn-primary" onclick="showStatsAlloc()">✓ 满意，准备出发</button>
+      </div>
+    </div>
+
+    <!-- ═══ 视图4: 属性分配 ═══ -->
+    <div class="view" id="viewStats">
+      <div class="round-info">— 分配你的冒险者属性 —</div>
+      <div class="stats-panel">
+        <div class="remaining">命运赐予的基础属性已随机生成，你还有 <strong><span id="remainingPts">7</span></strong> 点自由分配</div>
+        <div id="statsRows"></div>
+      </div>
+      <button class="btn btn-primary btn-block" id="btnStartGame" onclick="startGame()" style="margin-top: 20px;" disabled>
+        ⚔ 踏入幽林
+      </button>
+    </div>
+
+    <!-- ═══ 视图5: 游戏进行 ═══ -->
+    <div class="view" id="viewGame" style="display:none;flex-direction:column;height:calc(100vh - 50px);padding:0 10px 8px;">
+      <!-- 顶部状态区 -->
+      <div style="flex-shrink:0;">
+        <div class="game-header">
+          <span class="round-info" id="roundInfo"></span>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 11px;" onclick="openRecap()">📜 前情</button>
+            <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 11px;" onclick="openTheaterChat()">📞 求助</button>
+            <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 11px;" onclick="pauseGame()">⏸ 暂停</button>
+          </div>
+        </div>
+        <div class="game-model-wrap">
+          <label>🤖</label>
+          <select id="gameModelSelect" onchange="onGameModelChange(this.value)"></select>
+        </div>
+        <div class="hp-bar-wrap">
+          <div class="hp-bar" id="hpBar"></div>
+        </div>
+        <div class="player-stats" id="playerStats"></div>
+      </div>
+
+      <!-- 剧情+选项（统一滚动区域） -->
+      <div class="game-scroll-area" id="gameScrollArea">
+        <div class="narration-box" id="narrationBox"></div>
+
+        <!-- 选项区 -->
+        <div class="options-grid" id="optionsGrid"></div>
+        <!-- D选项自定义输入 -->
+        <div class="custom-input-wrap" id="customInputWrap">
+          <textarea id="customInput" placeholder="描述你想要采取的行动..."></textarea>
+          <div class="custom-input-btns">
+            <button class="btn btn-secondary" onclick="cancelCustomAction()">取消</button>
+            <button class="btn btn-primary" onclick="confirmCustomAction()">确认行动</button>
+          </div>
+        </div>
+        <!-- 持有物品 -->
+        <div class="inventory-bar" id="inventoryBar"></div>
+      </div>
+    </div>
+
+    <!-- D20 骰子遮罩（全屏覆盖 + Three.js 3D骰子） -->
+    <div class="dice-overlay" id="diceOverlay">
+      <div class="corner-rune" style="top:16px;left:20px;">◈</div>
+      <div class="corner-rune" style="top:16px;right:20px;">◈</div>
+      <div class="corner-rune" style="bottom:16px;left:20px;">◈</div>
+      <div class="corner-rune" style="bottom:16px;right:20px;">◈</div>
+      <div class="dice-label">── 命运鉴定 ──</div>
+      <div class="dice-3d-wrap">
+        <div id="diceMount" style="width:220px;height:220px;"></div>
+        <div class="dice-number-overlay" id="diceNumberOverlay">
+          <div class="dice-number-backdrop"></div>
+          <div class="dice-number" id="diceNumber"></div>
+        </div>
+        <div id="sparkContainer" style="position:absolute;inset:0;pointer-events:none;"></div>
+      </div>
+      <div class="dice-rolling-hint" id="diceRollingHint">命运轮转中…</div>
+      <div class="dice-crit-label" id="diceCritLabel"></div>
+      <div class="dice-result-text" id="diceResultText"></div>
+      <div class="dice-calc" id="diceCalcText"></div>
+      <button id="diceContinueBtn" style="display:none;margin-top:20px;padding:10px 40px;background:linear-gradient(160deg,#1a1505,#0e0e05);border:1px solid var(--accent);color:var(--accent);font-family:'Georgia',serif;font-size:14px;letter-spacing:5px;cursor:pointer;border-radius:2px;box-shadow:0 0 20px rgba(201,162,39,0.15);transition:all 0.25s;" onclick="closeDiceOverlay()">▶ 继续冒险</button>
+    </div>
+
+    <!-- ═══ 场外求助聊天面板 ═══ -->
+    <div class="theater-chat-overlay" id="theaterChatOverlay" onclick="if(event.target===this)closeTheaterChat()">
+      <div class="theater-chat-panel">
+        <div class="theater-chat-header">
+          <h3>📞 场外求助</h3>
+          <button class="btn btn-secondary" style="padding:4px 14px;font-size:12px;" onclick="closeTheaterChat()">✕ 关闭</button>
+        </div>
+        <div class="theater-chat-messages" id="theaterChatMessages"></div>
+        <div class="theater-chat-input">
+          <input id="theaterChatInput" type="text" placeholder="向伴侣求助..." onkeydown="if(event.key==='Enter'&&!event.shiftKey)sendTheaterChat()">
+          <button onclick="sendTheaterChat()">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ 前情回顾遮罩 ═══ -->
+    <div class="recap-overlay" id="recapOverlay">
+      <div class="recap-header">
+        <h3>📜 前情回顾</h3>
+        <button class="btn btn-secondary" style="padding:4px 14px;font-size:12px;" onclick="closeRecap()">✕ 关闭</button>
+      </div>
+      <div class="recap-body" id="recapBody"></div>
+    </div>
+
+    <!-- ═══ 视图6: 游戏暂停 ═══ -->
+    <div class="view" id="viewPaused">
+      <div class="empty-state">
+        <div class="icon">⏸</div>
+        <p style="color: var(--accent); font-size: 18px; font-family: serif;">冒险暂停中</p>
+        <p>你的旅程已安全记录在幽林之中</p>
+      </div>
+      <div class="btn-group" style="margin-top: 20px;">
+        <button class="btn btn-primary" onclick="resumeGame()">▶ 继续冒险</button>
+        <button class="btn btn-danger" onclick="endAndSummarize()">🏁 结束并总结</button>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+
+  <!-- FAB 新建按钮 -->
+  <button class="fab" id="fab" onclick="showCreate()">+</button>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+/* ═══════════════════════════════════════════════════
+   奥罗斯幽林 — 前端逻辑
+   ═══════════════════════════════════════════════════ */
+
+const API = '/api/ghost-forest';
+let currentSession = null;
+let selectedOption = null;
+let diceResult = null;
+let isRolling = false;
+
+// ── 视图切换 ────────────────────────────
+function showView(id) {
+  document.querySelectorAll('.view').forEach(v => {
+    v.classList.remove('active');
+    v.style.display = 'none';
+  });
+  const target = document.getElementById(id);
+  if (id === 'viewGame') {
+    target.style.display = 'flex';
+  } else {
+    target.style.display = 'block';
+  }
+  target.classList.add('active');
+  const fab = document.getElementById('fab');
+  fab.style.display = id === 'viewList' ? 'flex' : 'none';
+}
+
+function goBack() {
+  if (currentSession && ['viewGame', 'viewPaused'].includes(getActiveView())) {
+    showView('viewList');
+    currentSession = null;
+    loadSessions();
+    return;
+  }
+  if (getActiveView() !== 'viewList') {
+    showView('viewList');
+    currentSession = null;
+    loadSessions();
+    return;
+  }
+  if (window.parent !== window) {
+    window.parent.closeSubPage();
+  } else {
+    location.href = '/';
+  }
+}
+
+function getActiveView() {
+  const v = document.querySelector('.view.active');
+  return v ? v.id : '';
+}
+
+// ── 模型列表加载 ─────────────────────────
+let _modelList = [];
+async function loadModels() {
+  try {
+    const list = await api('GET', '/api/models');
+    _modelList = Array.isArray(list) ? list : [];
+    const saved = localStorage.getItem('gf_model');
+
+    // 填充创建页选择器
+    _fillModelSelect('modelSelect', saved);
+    // 填充游戏页选择器
+    _fillModelSelect('gameModelSelect', saved);
+  } catch (e) {
+    console.error('load models failed', e);
+  }
+}
+
+function _fillModelSelect(selectId, savedKey) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  select.innerHTML = '';
+  _modelList.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m.key;
+    opt.textContent = m.key;
+    select.appendChild(opt);
+  });
+  // 优先用 localStorage 保存的，否则用默认
+  if (savedKey && _modelList.some(m => m.key === savedKey)) {
+    select.value = savedKey;
+  } else {
+    const def = _modelList.find(m => m.key === 'gemini-2.5-flash')
+            || _modelList.find(m => m.key.includes('flash'))
+            || _modelList[0];
+    if (def) select.value = def.key;
+  }
+}
+
+// 游戏中切换模型
+async function onGameModelChange(modelKey) {
+  localStorage.setItem('gf_model', modelKey);
+  // 同步到创建页选择器
+  const createSel = document.getElementById('modelSelect');
+  if (createSel) createSel.value = modelKey;
+  // 更新当前会话
+  if (currentSession) {
+    try {
+      await api('PATCH', `${API}/sessions/${currentSession.id}`, { model: modelKey });
+      currentSession.model = modelKey;
+    } catch (e) {
+      showToast('模型切换失败');
+    }
+  }
+}
+
+// ── 存档列表 ─────────────────────────────
+async function loadSessions() {
+  const container = document.getElementById('sessionList');
+  const empty = document.getElementById('emptyState');
+  let list;
+  try {
+    list = await api('GET', `${API}/sessions`);
+  } catch (e) {
+    container.innerHTML = `<div style="text-align:center;color:#cc6666;padding:20px;">⚠ 无法连接服务器，请确认后端已启动<br><button class="btn btn-secondary" style="margin-top:10px;" onclick="loadSessions()">重试</button></div>`;
+    empty.style.display = 'none';
+    return;
+  }
+
+  if (!list || list.length === 0) {
+    container.innerHTML = '';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  container.innerHTML = list.map(s => {
+    const statusMap = {
+      draft: ['草稿', 'status-draft'],
+      outlined: ['已编纲', 'status-outlined'],
+      playing: ['进行中', 'status-playing'],
+      paused: ['已暂停', 'status-paused'],
+      finished: ['已完结', 'status-finished'],
+    };
+    const [statusText, statusClass] = statusMap[s.status] || ['未知', 'status-draft'];
+    const date = new Date(s.updated_at * 1000).toLocaleDateString('zh-CN');
+    const hp = s.player ? `HP:${s.player.hp}/${s.player.max_hp}` : '';
+
+    return `<div class="session-card" onclick="openSession('${s.id}')">
+      <div class="title">${escHtml(s.title)}</div>
+      <div class="meta">
+        <span class="status-badge ${statusClass}">${statusText}</span>
+        <span>第${s.current_round}/${s.max_rounds}轮</span>
+        ${hp ? `<span>${hp}</span>` : ''}
+        <span>${date}</span>
+      </div>
+      <button class="delete-btn" onclick="event.stopPropagation();deleteSession('${s.id}','${escHtml(s.title)}')">✕</button>
+    </div>`;
+  }).join('');
+}
+
+async function deleteSession(id, title) {
+  if (!confirm(`确定删除「${title}」？此操作不可恢复。`)) return;
+  await api('DELETE', `${API}/sessions/${id}`);
+  loadSessions();
+}
+
+async function openSession(id) {
+  const s = await api('GET', `${API}/sessions/${id}`);
+  if (!s) return;
+  currentSession = s;
+
+  if (s.status === 'draft') {
+    showView('viewCreate');
+  } else if (s.status === 'outlined') {
+    renderOutline(s.plot_outline);
+    showView('viewOutline');
+  } else if (s.status === 'playing') {
+    enterGame(s);
+  } else if (s.status === 'paused') {
+    showView('viewPaused');
+  } else if (s.status === 'finished') {
+    enterGame(s);
+  }
+}
+
+// ── 新建剧本 ─────────────────────────────
+async function showCreate() {
+  currentSession = null;
+  document.getElementById('ideaInput').value = '';
+  await loadPersonaSelects();
+  showView('viewCreate');
+}
+
+// ── 生成大纲 (SSE) ───────────────────────
+async function generateOutline() {
+  const idea = document.getElementById('ideaInput').value.trim();
+  if (!idea) { showToast('请先输入你的剧情脑洞'); return; }
+
+  const btn = document.getElementById('btnGenOutline');
+  btn.disabled = true;
+  btn.innerHTML = '✦ AI 正在编写<span class="loading-dots"></span>';
+
+  // 如果还没创建 session，先创建
+  if (!currentSession) {
+    const model = document.getElementById('modelSelect').value;
+    localStorage.setItem('gf_model', model);
+    const dmPid = document.getElementById('dmPersonaSelect').value;
+    const playerPid = document.getElementById('playerPersonaSelect').value;
+    const res = await api('POST', `${API}/sessions`, {
+      title: '', model,
+      dm_persona_id: dmPid,
+      player_persona_id: playerPid,
+    });
+    currentSession = { id: res.id };
+  }
+
+  // 获取 DM 名字
+  const dmName = _getDmName();
+
+  const outlineEl = document.getElementById('outlineContent');
+  const structuredEl = document.getElementById('outlineStructured');
+  outlineEl.innerHTML = '';
+  outlineEl.style.display = '';
+  structuredEl.style.display = 'none';
+  outlineEl.innerHTML = `<div style="text-align:center;padding:40px 20px;"><div style="font-size:48px;margin-bottom:16px;animation:pulse 1.5s ease-in-out infinite alternate;">🪶</div><div style="color:var(--accent);font-size:16px;font-family:serif;">${escHtml(dmName)} 正在编写剧本中</div><div class="loading-dots" style="color:var(--text3);margin-top:8px;font-size:13px;">请耐心等待</div></div>`;
+  showView('viewOutline');
+
+  try {
+    const resp = await fetch(`${API}/sessions/${currentSession.id}/generate-outline`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idea }),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      for (const line of text.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const msg = JSON.parse(line.slice(6));
+          if (msg.type === 'chunk') {
+            fullText += msg.content;
+            renderOutline(fullText);
+          } else if (msg.type === 'error') {
+            showToast('生成失败: ' + msg.content);
+          }
+        } catch (e) {}
+      }
+    }
+
+    // 重新加载 session
+    currentSession = await api('GET', `${API}/sessions/${currentSession.id}`);
+  } catch (e) {
+    showToast('网络错误');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '✦ 让 AI 编写剧本大纲';
+}
+
+function renderOutline(text) {
+  const el = document.getElementById('outlineContent');
+  const structured = document.getElementById('outlineStructured');
+
+  // 尝试解析 JSON
+  let data = null;
+  try {
+    const m = text.match(/```json\s*([\s\S]*?)\s*```/);
+    if (m) data = JSON.parse(m[1]);
+  } catch (e) {}
+  if (!data) {
+    try {
+      const stripped = text.trim();
+      if (stripped.startsWith('{')) data = JSON.parse(stripped);
+    } catch (e) {}
+  }
+
+  if (data && data.title) {
+    // 结构化展示
+    el.style.display = 'none';
+    structured.style.display = '';
+    let html = `<h1 style="color:var(--accent);font-family:serif;text-align:center;margin-bottom:20px;font-size:22px;">${escHtml(data.title)}</h1>`;
+
+    if (data.background) {
+      html += `<div class="outline-section">
+        <div class="outline-section-title">🌍 背景设定</div>
+        <div class="outline-section-body">${simpleMd(data.background)}</div>
+      </div>`;
+    }
+    if (data.main_plot) {
+      html += `<div class="outline-section">
+        <div class="outline-section-title">📜 主线剧情</div>
+        <div class="outline-section-body">${simpleMd(data.main_plot)}</div>
+      </div>`;
+    }
+    if (data.npcs && data.npcs.length) {
+      html += `<div class="outline-section">
+        <div class="outline-section-title">👤 关键NPC</div>
+        <div class="outline-chips">${data.npcs.map(n =>
+          `<div class="outline-chip"><strong>${escHtml(n.name)}</strong><br><span style="color:var(--text2);font-size:12px;">${escHtml(n.description)}</span></div>`
+        ).join('')}</div>
+      </div>`;
+    }
+    if (data.key_items && data.key_items.length) {
+      html += `<div class="outline-section">
+        <div class="outline-section-title">✨ 核心道具</div>
+        <div class="outline-chips">${data.key_items.map(i =>
+          `<div class="outline-chip"><strong>${escHtml(i.name)}</strong><br><span style="color:var(--text2);font-size:12px;">${escHtml(i.description)}</span></div>`
+        ).join('')}</div>
+      </div>`;
+    }
+    if (data.branches && data.branches.length) {
+      html += `<div class="outline-section">
+        <div class="outline-section-title">🔀 剧情分支</div>
+        <ul style="padding-left:20px;color:var(--text);font-size:14px;line-height:1.8;">${data.branches.map(b =>
+          `<li>${escHtml(b)}</li>`
+        ).join('')}</ul>
+      </div>`;
+    }
+    if (data.atmosphere) {
+      html += `<div class="outline-section">
+        <div class="outline-section-title">🌙 氛围基调</div>
+        <div class="outline-section-body" style="font-style:italic;">${simpleMd(data.atmosphere)}</div>
+      </div>`;
+    }
+    structured.innerHTML = html;
+  } else {
+    // fallback
+    structured.style.display = 'none';
+    el.style.display = '';
+    el.innerHTML = simpleMd(text);
+  }
+}
+
+function regenerateOutline() {
+  showView('viewCreate');
+  // idea 保留，让用户可以修改后重新生成
+}
+
+// ── 属性分配 ─────────────────────────────
+const STAT_KEYS = ['str', 'dex', 'int', 'cha', 'lck'];
+const STAT_NAMES = { str: '💪 力量', dex: '🏃 敏捷', int: '🧠 智力', cha: '💎 魅力', lck: '🍀 幸运' };
+let allocStats = {};
+let baseStats = {};
+let bonusPoints = 7;
+
+function showStatsAlloc() {
+  // 从 session 读取随机初始属性（需要先刷新）
+  if (currentSession && currentSession.id) {
+    api('GET', `${API}/sessions/${currentSession.id}`).then(s => {
+      currentSession = s;
+      baseStats = { ...s.player.stats };
+      bonusPoints = s.player.bonus_points || 7;
+      allocStats = { ...baseStats };
+      renderStats();
+    });
+  } else {
+    baseStats = { str: 3, dex: 3, int: 3, cha: 3, lck: 3 };
+    bonusPoints = 7;
+    allocStats = { ...baseStats };
+    renderStats();
+  }
+  showView('viewStats');
+}
+
+function renderStats() {
+  const baseTotal = Object.values(baseStats).reduce((a, b) => a + b, 0);
+  const currentTotal = Object.values(allocStats).reduce((a, b) => a + b, 0);
+  const remaining = (baseTotal + bonusPoints) - currentTotal;
+  document.getElementById('remainingPts').textContent = remaining;
+  document.getElementById('btnStartGame').disabled = remaining !== 0;
+
+  const rows = STAT_KEYS.map(k => {
+    const base = baseStats[k];
+    const current = allocStats[k];
+    const added = current - base;
+    return `
+    <div class="stat-row">
+      <span class="stat-name">${STAT_NAMES[k]}</span>
+      <div class="stat-controls">
+        <button onclick="adjustStat('${k}',-1)" ${current <= 1 ? 'disabled' : ''}>−</button>
+        <span class="stat-value">${current}${added > 0 ? '<span style="color:#44cc55;font-size:12px;"> +' + added + '</span>' : ''}</span>
+        <button onclick="adjustStat('${k}',1)" ${remaining <= 0 ? 'disabled' : ''}>+</button>
+      </div>
+    </div>
+  `;
+  }).join('');
+  document.getElementById('statsRows').innerHTML = rows;
+}
+
+function adjustStat(key, delta) {
+  const newVal = allocStats[key] + delta;
+  if (newVal < 1) return;
+  const used = Object.values(allocStats).reduce((a, b) => a + b, 0) + delta;
+  const maxTotal = Object.values(baseStats).reduce((a, b) => a + b, 0) + bonusPoints;
+  if (used > maxTotal) return;
+  allocStats[key] = newVal;
+  renderStats();
+}
+
+// ── 开始游戏 ─────────────────────────────
+async function startGame() {
+  const btn = document.getElementById('btnStartGame');
+  btn.disabled = true;
+  btn.innerHTML = '⚔ 进入幽林<span class="loading-dots"></span>';
+
+  try {
+    await api('POST', `${API}/sessions/${currentSession.id}/start`, { stats: allocStats });
+    currentSession = await api('GET', `${API}/sessions/${currentSession.id}`);
+    enterGame(currentSession);
+    // 自动生成第一轮
+    narrateRound();
+  } catch (e) {
+    showToast('启动失败');
+    btn.disabled = false;
+    btn.innerHTML = '⚔ 踏入幽林';
+  }
+}
+
+// ── 进入游戏视图 ─────────────────────────
+function enterGame(session) {
+  currentSession = session;
+  selectedOption = null;
+  diceResult = null;
+  showView('viewGame');
+  updateGameUI();
+
+  // 同步模型选择器到当前会话的模型
+  const gameSel = document.getElementById('gameModelSelect');
+  if (gameSel && session.model) {
+    gameSel.value = session.model;
+    localStorage.setItem('gf_model', session.model);
+  }
+
+  // 恢复最后一轮的剧情和选项
+  const lastStory = session.story?.[session.story.length - 1];
+  if (lastStory) {
+    if (lastStory.narration) {
+      let html = '';
+      // 恢复上一轮选择的结果剧情
+      if (lastStory.result_narration) {
+        html += `<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border);">${simpleMd(lastStory.result_narration)}</div>`;
+      }
+      html += simpleMd(lastStory.narration);
+      document.getElementById('narrationBox').innerHTML = html;
+    }
+    // 如果还没选择，恢复选项按钮
+    if (!lastStory.chosen && lastStory.options && lastStory.options.length > 0) {
+      renderOptions(lastStory.options);
+    } else if (!lastStory.chosen && session.status === 'playing') {
+      renderOptions(null);
+    } else if (lastStory.chosen && session.status === 'playing') {
+      // 已选择但游戏还在进行，显示继续按钮
+      document.getElementById('optionsGrid').innerHTML =
+        `<button class="btn btn-primary btn-block" onclick="narrateRound()">▶ 继续下一轮冒险</button>`;
+    }
+  }
+
+  // 已有大结局，直接显示
+  if (session.finale) {
+    const box = document.getElementById('narrationBox');
+    box.innerHTML = `<div style="text-align:center;margin-bottom:16px;"><div style="font-size:14px;color:var(--accent);font-family:serif;letter-spacing:4px;">——— 大 结 局 ———</div></div>` + simpleMd(session.finale);
+    box.innerHTML += `<div style="margin-top:24px;text-align:center;"><div style="font-size:11px;color:var(--text3);letter-spacing:2px;">—— FIN ——</div></div>`;
+    document.getElementById('optionsGrid').innerHTML =
+      `<button class="btn btn-primary btn-block" onclick="endAndSummarize()">📜 结束冒险</button>`;
+  } else if (session.status === 'finished' || (session.player && session.player.hp <= 0)) {
+    // 已结束但没有大结局，显示大结局按钮
+    document.getElementById('optionsGrid').innerHTML =
+      `<button class="btn btn-primary btn-block" style="font-size:16px;padding:14px;letter-spacing:3px;" onclick="generateFinale()">🏰 大结局</button>`;
+  }
+}
+
+function updateGameUI() {
+  const s = currentSession;
+  const p = s.player;
+
+  document.getElementById('roundInfo').textContent = `— 第 ${s.current_round} / ${s.max_rounds} 轮 —`;
+
+  // HP bar
+  const pct = Math.max(0, (p.hp / p.max_hp) * 100);
+  const bar = document.getElementById('hpBar');
+  bar.style.width = pct + '%';
+  bar.className = 'hp-bar' + (pct <= 30 ? ' low' : '');
+
+  // Stats
+  const statLabels = { str: '力量', dex: '敏捷', int: '智力', cha: '魅力', lck: '幸运' };
+  document.getElementById('playerStats').innerHTML =
+    `<span class="stat-chip"><span class="label">HP</span><span class="val">${p.hp}/${p.max_hp}</span></span>` +
+    STAT_KEYS.map(k => `<span class="stat-chip"><span class="label">${statLabels[k]}</span><span class="val">${p.stats[k]}</span></span>`).join('');
+
+  // Inventory
+  const inv = s.inventory || [];
+  document.getElementById('inventoryBar').innerHTML = inv.length ?
+    inv.map(i => `<span class="inv-chip">${escHtml(i.name)}<span class="count">×${i.count}</span></span>`).join('') :
+    '<span class="inv-chip" style="opacity:0.4">背包空空</span>';
+}
+
+// ── 处理 SSE 流 ─────────────────────────
+async function readSSE(resp, onChunk, onParsed) {
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let parsedData = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const text = decoder.decode(value, { stream: true });
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const msg = JSON.parse(line.slice(6));
+        if (msg.type === 'chunk') {
+          fullText += msg.content;
+          if (onChunk) onChunk(fullText);
+        } else if (msg.type === 'parsed' && msg.data) {
+          parsedData = msg.data;
+          if (onParsed) onParsed(parsedData);
+        } else if (msg.type === 'error') {
+          showToast('生成失败: ' + msg.content);
+        }
+      } catch (e) {}
+    }
+  }
+  return { fullText, parsedData };
+}
+
+// ── 生成当轮剧情 (SSE) ───────────────────
+async function narrateRound() {
+  const box = document.getElementById('narrationBox');
+  const dmName = _getDmName();
+  box.innerHTML = `<div style="text-align:center;padding:20px;"><div style="font-size:32px;margin-bottom:8px;animation:pulse 1.5s ease-in-out infinite alternate;">🪶</div><div style="color:var(--accent);font-size:14px;">${escHtml(dmName)} 正在编写</div><div class="loading-dots" style="color:var(--text3);margin-top:4px;font-size:12px;">请稍后</div></div>`;
+  box.classList.add('streaming');
+  document.getElementById('optionsGrid').innerHTML = '';
+  document.getElementById('customInputWrap').classList.remove('show');
+
+  try {
+    const resp = await fetch(`${API}/sessions/${currentSession.id}/narrate`, { method: 'POST' });
+    const { parsedData } = await readSSE(resp,
+      // 流式显示（显示原始文本供阅读）
+      (text) => {
+        box.innerHTML = simpleMd(extractNarration(text));
+        document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
+      }
+    );
+
+    box.classList.remove('streaming');
+
+    // 重新加载状态
+    currentSession = await api('GET', `${API}/sessions/${currentSession.id}`);
+    updateGameUI();
+
+    // 用解析后的结构化数据渲染
+    if (parsedData) {
+      box.innerHTML = simpleMd(parsedData.narration || '');
+      if (parsedData.items_gained && parsedData.items_gained.length > 0) {
+        const itemsHtml = parsedData.items_gained.map(i =>
+          `<span class="inv-chip" style="border-color:var(--accent);">✦ 获得 ${escHtml(i.name)}${i.count > 1 ? '×' + i.count : ''}</span>`
+        ).join(' ');
+        box.innerHTML += `<div style="margin-top:12px;">${itemsHtml}</div>`;
+      }
+      if (parsedData.options && parsedData.options.length > 0) {
+        renderOptions(parsedData.options);
+      }
+    } else if (currentSession.status === 'playing') {
+      // fallback: 没解析到JSON时显示通用选项
+      renderOptions(null);
+    }
+  } catch (e) {
+    box.innerHTML = '网络错误，请重试';
+    box.classList.remove('streaming');
+  }
+}
+
+// ── 从 AI 原始输出提取叙述文本（流式显示用） ──
+function extractNarration(raw) {
+  // 尝试提取 JSON 中的 narration 字段用于实时显示
+  try {
+    const m = raw.match(/"narration"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (m) return m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"');
+  } catch (e) {}
+  // fallback：去掉 JSON 语法噪声
+  return raw.replace(/```json/g, '').replace(/```/g, '').replace(/^\s*\{[\s\S]*?"narration"\s*:\s*"/m, '').replace(/",\s*"options"[\s\S]*$/m, '');
+}
+
+// ── 渲染选项按钮 ────────────────────────
+const STAT_DISPLAY = { str: '💪力量', dex: '🏃敏捷', int: '🧠智力', cha: '💎魅力', lck: '🍀幸运' };
+
+function renderOptions(options) {
+  selectedOption = null;
+  diceResult = null;
+
+  const grid = document.getElementById('optionsGrid');
+  document.getElementById('customInputWrap').classList.remove('show');
+
+  if (options && options.length > 0) {
+    grid.innerHTML = options.map(opt => {
+      const statLabel = STAT_DISPLAY[opt.stat] || opt.stat;
+      const dcLabel = opt.dc ? ` DC${opt.dc}` : '';
+      const costLabel = opt.item_cost ?
+        `<span style="color:var(--danger);margin-left:6px;">消耗: ${escHtml(opt.item_cost.name)}${opt.item_cost.count > 1 ? '×' + opt.item_cost.count : ''}</span>` : '';
+      return `<button class="option-btn" data-key="${opt.key}" onclick="selectOption('${opt.key}')">
+        <span class="option-key">${opt.key}.</span>
+        ${escHtml(opt.text)}
+        <span class="option-stat">${statLabel}${dcLabel}${costLabel}</span>
+      </button>`;
+    }).join('');
+  } else {
+    // fallback
+    grid.innerHTML = ['A', 'B', 'C', 'D'].map(k =>
+      `<button class="option-btn" data-key="${k}" onclick="selectOption('${k}')">
+        <span class="option-key">${k}.</span>
+        ${k === 'D' ? '自由行动（幸运鉴定）' : '选择此项'}
+      </button>`
+    ).join('');
+  }
+}
+
+function selectOption(key) {
+  if (isRolling) return;
+
+  // D选项特殊处理：显示输入框+确认/取消
+  if (key === 'D') {
+    selectedOption = 'D';
+    document.querySelectorAll('.option-btn').forEach(b => {
+      b.classList.toggle('selected', b.dataset.key === 'D');
+    });
+    document.getElementById('customInputWrap').classList.add('show');
+    document.getElementById('customInput').focus();
+    return;
+  }
+
+  // 非D选项：双击确认
+  if (selectedOption === key) {
+    // 第二次点击 = 确认，触发骰子动画
+    triggerDiceRoll(key);
+  } else {
+    // 第一次点击 = 选中，显示确认提示
+    selectedOption = key;
+    document.getElementById('customInputWrap').classList.remove('show');
+    document.querySelectorAll('.option-btn').forEach(b => {
+      b.classList.toggle('selected', b.dataset.key === key);
+      const hint = b.querySelector('.confirm-hint');
+      if (hint) hint.remove();
+    });
+    const btn = document.querySelector(`.option-btn[data-key="${key}"]`);
+    if (btn) {
+      btn.insertAdjacentHTML('beforeend', '<span class="confirm-hint">再次点击确认选择</span>');
+    }
+  }
+}
+
+// D选项确认/取消
+function cancelCustomAction() {
+  selectedOption = null;
+  document.getElementById('customInputWrap').classList.remove('show');
+  document.querySelectorAll('.option-btn').forEach(b => b.classList.remove('selected'));
+}
+
+function confirmCustomAction() {
+  const input = document.getElementById('customInput').value.trim();
+  if (!input) { showToast('请描述你想要采取的行动'); return; }
+  triggerDiceRoll('D');
+}
+
+// ── 骰子动画（Three.js 3D D20） ─────────────
+let _diceScene = null; // 缓存 Three.js 场景
+
+function _initDiceScene() {
+  if (_diceScene) return _diceScene;
+  if (typeof THREE === 'undefined') { console.error('Three.js not loaded'); return null; }
+  try {
+  const mount = document.getElementById('diceMount');
+  const W = 220, H = 220;
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setSize(W, H);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x000000, 0);
+  mount.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+  camera.position.z = 5.5;
+
+  // D20 = Icosahedron
+  const geo = new THREE.IcosahedronGeometry(1.8, 0);
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: 0x08080f, metalness: 0.5, roughness: 0.5, emissive: 0x05051a,
+  });
+  const die = new THREE.Mesh(geo, bodyMat);
+  scene.add(die);
+
+  // Gold edges
+  const edgeGeo = new THREE.EdgesGeometry(geo);
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0xc9a227 });
+  const edges = new THREE.LineSegments(edgeGeo, edgeMat);
+  die.add(edges);
+
+  // Outer glow shell
+  const glowGeo = new THREE.IcosahedronGeometry(1.9, 0);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0x1a2a6a, transparent: true, opacity: 0.08, side: THREE.BackSide,
+  });
+  const glow = new THREE.Mesh(glowGeo, glowMat);
+  scene.add(glow);
+
+  // Lighting
+  scene.add(new THREE.AmbientLight(0x303050, 0.6));
+  const goldLight = new THREE.PointLight(0xc9a227, 3, 15);
+  goldLight.position.set(5, 4, 5);
+  scene.add(goldLight);
+  const blueLight = new THREE.PointLight(0x2244ff, 1.2, 12);
+  blueLight.position.set(-5, -2, 3);
+  scene.add(blueLight);
+  const redLight = new THREE.PointLight(0x880000, 0.8, 10);
+  redLight.position.set(0, -5, -3);
+  scene.add(redLight);
+
+  let _ctx = { animId: null, rolling: false };
+
+  const tick = () => {
+    _ctx.animId = requestAnimationFrame(tick);
+    if (!_ctx.rolling) {
+      die.rotation.x += 0.004;
+      die.rotation.y += 0.006;
+      glow.rotation.copy(die.rotation);
+    }
+    renderer.render(scene, camera);
+  };
+
+  _diceScene = { renderer, scene, camera, die, glow, edgeMat,
+    startLoop() { if (!_ctx.animId) tick(); },
+    stopLoop() { if (_ctx.animId) { cancelAnimationFrame(_ctx.animId); _ctx.animId = null; } },
+    setRolling(v) { _ctx.rolling = v; },
+    setEdgeColor(hex) { edgeMat.color.setHex(hex); },
+  };
+  return _diceScene;
+  } catch (e) { console.error('Three.js init failed:', e); return null; }
+}
+
+// CSS 回退骰子动画（Three.js 不可用时）
+function _fallbackDiceRoll(chosenKey, rawStat, halfStat, statKey, statNames, optionDC) {
+  const overlay = document.getElementById('diceOverlay');
+  const numberOverlay = document.getElementById('diceNumberOverlay');
+  const numberEl = document.getElementById('diceNumber');
+  const resultText = document.getElementById('diceResultText');
+  const calcText = document.getElementById('diceCalcText');
+  const sparkContainer = document.getElementById('sparkContainer');
+  const rollingHint = document.getElementById('diceRollingHint');
+  const critLabel = document.getElementById('diceCritLabel');
+
+  // 在 mount 区域显示 CSS 动画骰子
+  const mount = document.getElementById('diceMount');
+  mount.innerHTML = `<div style="width:140px;height:140px;margin:40px auto;border-radius:50%;background:radial-gradient(circle at 35% 35%,#1a1a2e,#08080f);border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-size:52px;font-weight:700;color:#fff;font-family:Georgia,serif;box-shadow:0 0 30px var(--accent-glow);animation:diceRollCSS 0.12s infinite;" id="_cssDie">D20</div>`;
+
+  diceResult = Math.floor(Math.random() * 20) + 1;
+  document.getElementById('diceContinueBtn').style.display = 'none';
+  executeChoice(chosenKey);
+  let count = 0;
+  const cssDie = document.getElementById('_cssDie');
+  const interval = setInterval(() => {
+    cssDie.textContent = Math.floor(Math.random() * 20) + 1;
+    count++;
+    if (count > 30) {
+      clearInterval(interval);
+      cssDie.style.animation = 'none';
+      cssDie.textContent = diceResult;
+      const total = diceResult + halfStat;
+      const isCrit = diceResult === 20, isFumble = diceResult === 1;
+      cssDie.style.borderColor = isCrit ? '#ffd700' : isFumble ? '#cc3300' : 'var(--accent)';
+      cssDie.style.color = isCrit ? '#ffd700' : isFumble ? '#cc3300' : 'var(--accent)';
+      cssDie.style.boxShadow = isCrit ? '0 0 50px rgba(255,215,0,0.6)' : isFumble ? '0 0 50px rgba(204,51,0,0.6)' : '0 0 30px var(--accent-glow)';
+      rollingHint.style.display = 'none';
+      if (isCrit) { critLabel.textContent = '✦ 大 成 功 ✦'; critLabel.style.color = '#ffd700'; critLabel.style.textShadow = '0 0 12px #ffd700'; critLabel.style.display = 'block'; }
+      else if (isFumble) { critLabel.textContent = '✦ 大 失 败 ✦'; critLabel.style.color = '#cc3300'; critLabel.style.textShadow = '0 0 12px #cc3300'; critLabel.style.display = 'block'; }
+      let desc, resultColor;
+      if (isFumble) { desc = '💀 大失败！'; resultColor = '#cc3300'; }
+      else if (isCrit) { desc = '✨ 完美！'; resultColor = '#ffd700'; }
+      else if (optionDC > 0) {
+        if (total >= optionDC) { desc = total >= optionDC + 5 ? '🎯 大成功！' : '😊 通过'; resultColor = total >= optionDC + 5 ? '#ffd700' : '#44cc55'; }
+        else { desc = total >= optionDC - 3 ? '😐 勉强失败' : '😰 失败'; resultColor = '#cc6644'; }
+      } else {
+        desc = total <= 7 ? '😰 失败' : total <= 13 ? '😐 勉强' : total <= 19 ? '😊 成功' : '🎯 大成功！';
+        resultColor = total <= 7 ? '#cc6644' : total <= 13 ? 'var(--text)' : '#44cc55';
+      }
+      let calcStr = `D20(${diceResult}) + ${statNames[statKey]}(${rawStat})÷2 = ${total}`;
+      if (optionDC > 0) calcStr += ` / DC${optionDC}`;
+      calcText.textContent = calcStr;
+      resultText.innerHTML = desc;
+      resultText.style.color = resultColor;
+      setTimeout(() => { document.getElementById('diceContinueBtn').style.display = 'block'; }, 800);
+    }
+  }, 70);
+}
+
+function triggerDiceRoll(chosenKey) {
+  if (isRolling) return;
+  isRolling = true;
+
+  const overlay = document.getElementById('diceOverlay');
+  const numberOverlay = document.getElementById('diceNumberOverlay');
+  const numberEl = document.getElementById('diceNumber');
+  const resultText = document.getElementById('diceResultText');
+  const calcText = document.getElementById('diceCalcText');
+  const sparkContainer = document.getElementById('sparkContainer');
+  const rollingHint = document.getElementById('diceRollingHint');
+  const critLabel = document.getElementById('diceCritLabel');
+
+  // 找出属性和DC
+  let statKey = 'lck';
+  let optionDC = 0;
+  if (currentSession) {
+    const lastStory = currentSession.story?.[currentSession.story.length - 1];
+    if (lastStory && lastStory.options) {
+      const opt = lastStory.options.find(o => o.key === chosenKey);
+      if (opt) {
+        if (opt.stat) statKey = opt.stat;
+        if (opt.dc) optionDC = opt.dc;
+      }
+    }
+  }
+  const rawStat = currentSession?.player?.stats?.[statKey] || 0;
+  const halfStat = Math.floor(rawStat / 2);
+  const statNames = { str: '力量', dex: '敏捷', int: '智力', cha: '魅力', lck: '幸运' };
+
+  // 初始化并显示
+  overlay.classList.add('show');
+  numberOverlay.classList.remove('show');
+  numberEl.className = 'dice-number';
+  resultText.textContent = '';
+  resultText.style.color = 'var(--text)';
+  calcText.textContent = '';
+  sparkContainer.innerHTML = '';
+  rollingHint.style.display = 'block';
+  critLabel.style.display = 'none';
+
+  const ds = _initDiceScene();
+  if (!ds) {
+    // Three.js 不可用时的回退方案
+    _fallbackDiceRoll(chosenKey, rawStat, halfStat, statKey, statNames, optionDC);
+    return;
+  }
+  ds.setEdgeColor(0xffffff); // 投掷中闪白
+  ds.setRolling(true);
+  ds.startLoop();
+
+  // 3D 旋转动画（ease-out quartic, 2400ms）
+  const die = ds.die;
+  const glow = ds.glow;
+  const sx = die.rotation.x, sy = die.rotation.y, sz = die.rotation.z;
+  const sign = () => Math.random() > 0.5 ? 1 : -1;
+  const ex = sx + sign() * (6 + Math.random() * 5) * Math.PI * 2;
+  const ey = sy + sign() * (8 + Math.random() * 5) * Math.PI * 2;
+  const ez = sz + sign() * (3 + Math.random() * 3) * Math.PI * 2;
+  const duration = 2400;
+  const t0 = performance.now();
+
+  // 预先决定结果
+  diceResult = Math.floor(Math.random() * 20) + 1;
+
+  // ★ 立即在后台开始AI生成（骰子动画期间并行）
+  document.getElementById('diceContinueBtn').style.display = 'none';
+  executeChoice(chosenKey);
+
+  const animateRoll = (now) => {
+    const elapsed = now - t0;
+    const p = Math.min(elapsed / duration, 1);
+    const e = 1 - Math.pow(1 - p, 4); // ease-out quartic
+
+    die.rotation.x = sx + (ex - sx) * e;
+    die.rotation.y = sy + (ey - sy) * e;
+    die.rotation.z = sz + (ez - sz) * e;
+    glow.rotation.copy(die.rotation);
+
+    if (p < 1) {
+      requestAnimationFrame(animateRoll);
+    } else {
+      // 动画结束 → 显示结果
+      ds.setRolling(false);
+      rollingHint.style.display = 'none';
+
+      const total = diceResult + halfStat;
+      const isCrit = diceResult === 20;
+      const isFumble = diceResult === 1;
+
+      // 设置边框颜色
+      ds.setEdgeColor(isCrit ? 0xffd700 : isFumble ? 0xcc2200 : 0xc9a227);
+
+      // 显示数字
+      numberEl.textContent = diceResult;
+      numberEl.className = 'dice-number' + (isCrit ? ' crit' : isFumble ? ' fumble' : '');
+      numberOverlay.classList.add('show');
+
+      // 大成功/大失败标签
+      if (isCrit) {
+        critLabel.textContent = '✦ 大 成 功 ✦';
+        critLabel.style.color = '#ffd700';
+        critLabel.style.textShadow = '0 0 12px #ffd700';
+        critLabel.style.display = 'block';
+      } else if (isFumble) {
+        critLabel.textContent = '✦ 大 失 败 ✦';
+        critLabel.style.color = '#cc3300';
+        critLabel.style.textShadow = '0 0 12px #cc3300';
+        critLabel.style.display = 'block';
+      }
+
+      // 判定结果文本
+      let desc, resultColor;
+      if (isFumble) {
+        desc = '💀 大失败！'; resultColor = '#cc3300';
+      } else if (isCrit) {
+        desc = '✨ 完美！'; resultColor = '#ffd700';
+      } else if (optionDC > 0) {
+        if (total >= optionDC) {
+          desc = total >= optionDC + 5 ? '🎯 大成功！' : '😊 通过';
+          resultColor = total >= optionDC + 5 ? '#ffd700' : '#44cc55';
+        } else {
+          desc = total >= optionDC - 3 ? '😐 勉强失败' : '😰 失败';
+          resultColor = '#cc6644';
+        }
+      } else {
+        desc = total <= 7 ? '😰 失败' : total <= 13 ? '😐 勉强' : total <= 19 ? '😊 成功' : '🎯 大成功！';
+        resultColor = total <= 7 ? '#cc6644' : total <= 13 ? 'var(--text)' : '#44cc55';
+      }
+
+      let calcStr = `D20(${diceResult}) + ${statNames[statKey]}(${rawStat})÷2 = ${total}`;
+      if (optionDC > 0) calcStr += ` / DC${optionDC}`;
+      calcText.textContent = calcStr;
+      resultText.innerHTML = desc;
+      resultText.style.color = resultColor;
+
+      // 火花粒子（更多粒子，参考 d20-roller.jsx）
+      const sparkCount = isCrit || isFumble ? 32 : 24;
+      const sparks = [];
+      for (let i = 0; i < sparkCount; i++) {
+        const angle = (i / sparkCount) * 360;
+        const rad = (angle * Math.PI) / 180;
+        const dist = 50 + Math.random() * 60;
+        const tx = Math.cos(rad) * dist;
+        const ty = Math.sin(rad) * dist;
+        const size = 3 + Math.random() * 4;
+        const sparkColor = isCrit ? '#ffd700' : isFumble ? '#ff4400' : '#c9a227';
+        sparks.push(`<div style="position:absolute;top:50%;left:50%;width:${size}px;height:${size}px;margin:-${size/2}px;border-radius:50%;background:${sparkColor};box-shadow:0 0 6px ${sparkColor};animation:sparkFly 0.8s ease-out forwards;--tx:${tx}px;--ty:${ty}px;"></div>`);
+      }
+      sparkContainer.innerHTML = sparks.join('');
+      setTimeout(() => sparkContainer.innerHTML = '', 900);
+
+      // 显示“继续冒险”按钮（不再自动关闭，AI已在后台生成）
+      setTimeout(() => {
+        document.getElementById('diceContinueBtn').style.display = 'block';
+      }, 800);
+    }
+  };
+  requestAnimationFrame(animateRoll);
+}
+
+function closeDiceOverlay() {
+  const overlay = document.getElementById('diceOverlay');
+  overlay.classList.remove('show');
+  document.getElementById('diceNumberOverlay').classList.remove('show');
+  document.getElementById('diceContinueBtn').style.display = 'none';
+  isRolling = false;
+  if (_diceScene) _diceScene.stopLoop();
+
+  // 立即切换到"下一轮"界面，显示 DM 编写中的占位提示
+  const box = document.getElementById('narrationBox');
+  const dmName = _getDmName();
+  box.innerHTML = `<div style="text-align:center;padding:20px;"><div style="font-size:32px;margin-bottom:8px;animation:pulse 1.5s ease-in-out infinite alternate;">🪶</div><div style="color:var(--accent);font-size:14px;">【${escHtml(dmName)}】正在编写剧情</div><div class="loading-dots" style="color:var(--text3);margin-top:4px;font-size:12px;">请稍后</div></div>`;
+  document.getElementById('optionsGrid').innerHTML = '';
+  document.getElementById('customInputWrap').classList.remove('show');
+}
+
+// ── 执行选择（骰子动画开始时立即调用，后台并行生成） ───
+async function executeChoice(chosenKey) {
+  const customInput = chosenKey === 'D' ? document.getElementById('customInput').value.trim() : '';
+
+  // 清理选项区域（遗罩下面）
+  document.getElementById('optionsGrid').innerHTML = '';
+  document.getElementById('customInputWrap').classList.remove('show');
+  const box = document.getElementById('narrationBox');
+  box.classList.add('streaming');
+
+  try {
+    const resp = await fetch(`${API}/sessions/${currentSession.id}/choose`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chosen: chosenKey, custom_input: customInput, dice_roll: diceResult }),
+    });
+
+    const { parsedData } = await readSSE(resp,
+      (text) => {
+        box.innerHTML = simpleMd(extractNarration(text));
+        document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
+      }
+    );
+
+    box.classList.remove('streaming');
+
+    // 刷新状态
+    currentSession = await api('GET', `${API}/sessions/${currentSession.id}`);
+    updateGameUI();
+
+    if (parsedData) {
+      // 显示结果剧情 + 下一轮剧情
+      let html = '';
+      if (parsedData.result_narration) {
+        html += `<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border);">${simpleMd(parsedData.result_narration)}</div>`;
+      }
+      if (parsedData.narration) {
+        html += simpleMd(parsedData.narration);
+      }
+      // 显示属性变化提示
+      if (parsedData.stat_changes && Object.keys(parsedData.stat_changes).length > 0) {
+        const changes = Object.entries(parsedData.stat_changes).map(([k, v]) => {
+          const name = {hp:'HP', str:'力量', dex:'敏捷', int:'智力', cha:'魅力', lck:'幸运'}[k] || k;
+          const color = v > 0 ? '#44cc55' : '#cc3300';
+          return `<span style="color:${color};font-weight:700;">${name} ${v > 0 ? '+' : ''}${v}</span>`;
+        }).join('  ');
+        html += `<div style="margin-top:12px;padding:8px 12px;background:var(--surface2);border-radius:8px;font-size:13px;">⚡ ${changes}</div>`;
+      }
+      // 显示获得的道具
+      if (parsedData.items_gained && parsedData.items_gained.length > 0) {
+        const items = parsedData.items_gained.map(i =>
+          `<span class="inv-chip" style="border-color:var(--accent);">✦ 获得 ${escHtml(i.name)}${i.count > 1 ? '×' + i.count : ''}</span>`
+        ).join(' ');
+        html += `<div style="margin-top:8px;">${items}</div>`;
+      }
+      // 显示消耗的道具
+      if (parsedData.items_consumed && parsedData.items_consumed.length > 0) {
+        const items = parsedData.items_consumed.map(i =>
+          `<span class="inv-chip" style="border-color:var(--danger);color:var(--danger);">✗ 消耗 ${escHtml(i.name)}${i.count > 1 ? '×' + i.count : ''}</span>`
+        ).join(' ');
+        html += `<div style="margin-top:4px;">${items}</div>`;
+      }
+      box.innerHTML = html;
+      document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
+
+      // 游戏结束 or 继续
+      if (parsedData.game_over || currentSession.status === 'finished' || currentSession.player.hp <= 0) {
+        if (parsedData.game_over_reason) {
+          box.innerHTML += `<div style="margin-top:16px;padding:12px;background:rgba(201,162,39,0.1);border:1px solid var(--accent);border-radius:10px;text-align:center;font-size:15px;color:var(--accent);">🏁 ${escHtml(parsedData.game_over_reason)}</div>`;
+        }
+        document.getElementById('optionsGrid').innerHTML =
+          `<button class="btn btn-primary btn-block" style="font-size:16px;padding:14px;letter-spacing:3px;" onclick="generateFinale()">🏰 大结局</button>`;
+        showToast('冒险即将迎来结局！');
+      } else if (parsedData.options && parsedData.options.length > 0) {
+        renderOptions(parsedData.options);
+      }
+    } else {
+      // fallback: 无解析数据
+      if (currentSession.status === 'finished' || currentSession.player.hp <= 0) {
+        showToast('冒险即将迎来结局！');
+        document.getElementById('optionsGrid').innerHTML =
+          `<button class="btn btn-primary btn-block" style="font-size:16px;padding:14px;letter-spacing:3px;" onclick="generateFinale()">🏰 大结局</button>`;
+      } else if (currentSession.status === 'playing') {
+        document.getElementById('optionsGrid').innerHTML =
+          `<button class="btn btn-primary btn-block" onclick="narrateRound()">▶ 继续下一轮冒险</button>`;
+      }
+    }
+  } catch (e) {
+    box.innerHTML = '网络错误';
+    box.classList.remove('streaming');
+  }
+
+  selectedOption = null;
+  diceResult = null;
+}
+
+// ── 前情回顾 ─────────────────────────────
+function openRecap() {
+  const body = document.getElementById('recapBody');
+  const story = currentSession?.story || [];
+  if (story.length === 0) {
+    body.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text3);">暂无剧情记录</div>';
+  } else {
+    let html = '';
+    for (const entry of story) {
+      html += '<div class="recap-round">';
+      html += `<div class="recap-round-title">─── 第 ${entry.round} 轮 ───</div>`;
+      if (entry.result_narration) {
+        html += `<div class="recap-round-body" style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed var(--border);opacity:0.85;">${simpleMd(entry.result_narration)}</div>`;
+      }
+      html += `<div class="recap-round-body">${simpleMd(entry.narration || '')}</div>`;
+      if (entry.chosen) {
+        const optText = entry.options?.find(o => o.key === entry.chosen)?.text || entry.chosen;
+        const diceStr = entry.dice_roll ? ` 🎲 D20=${entry.dice_roll}` : '';
+        html += `<div class="recap-choice-tag">⚔ 选择: ${escHtml(entry.chosen)}. ${escHtml(optText)}${diceStr}</div>`;
+      }
+      html += '</div>';
+    }
+    body.innerHTML = html;
+  }
+  document.getElementById('recapOverlay').classList.add('show');
+  // 滚到最底部（最新章节）
+  requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+}
+
+function closeRecap() {
+  document.getElementById('recapOverlay').classList.remove('show');
+}
+
+// ── 获取 DM 名字 ────────────────────────
+function _getDmName() {
+  if (currentSession && currentSession.dm_persona_id && allPersonas.dm) {
+    const dm = allPersonas.dm.find(p => p.id === currentSession.dm_persona_id);
+    if (dm) return dm.name;
+  }
+  return '地下城主';
+}
+
+// ── 暂停 ─────────────────────────────────
+async function pauseGame() {
+  await api('POST', `${API}/sessions/${currentSession.id}/pause`);
+  showView('viewPaused');
+}
+
+async function resumeGame() {
+  const s = await api('POST', `${API}/sessions/${currentSession.id}/resume`);
+  currentSession = s;
+  enterGame(s);
+}
+
+// ── 结束并总结 ───────────────────────────
+async function endAndSummarize() {
+  showView('viewList');
+  loadSessions();
+  showToast('冒险已结束，感谢你的旅程！');
+}
+
+// ── 大结局生成 ───────────────────────────
+async function generateFinale() {
+  const box = document.getElementById('narrationBox');
+  const dmName = _getDmName();
+  box.innerHTML = `<div style="text-align:center;padding:30px;"><div style="font-size:40px;margin-bottom:12px;animation:pulse 1.5s ease-in-out infinite alternate;">🏰</div><div style="color:var(--accent);font-size:16px;font-family:serif;letter-spacing:2px;">【${escHtml(dmName)}】正在编写大结局</div><div class="loading-dots" style="color:var(--text3);margin-top:6px;font-size:13px;">请稍后</div></div>`;
+  box.classList.add('streaming');
+  document.getElementById('optionsGrid').innerHTML = '';
+  document.getElementById('customInputWrap').classList.remove('show');
+
+  try {
+    const resp = await fetch(`${API}/sessions/${currentSession.id}/finale`, { method: 'POST' });
+    const { fullText } = await readSSE(resp,
+      (text) => {
+        box.innerHTML = simpleMd(text);
+        document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
+      }
+    );
+
+    box.classList.remove('streaming');
+
+    // 最终渲染
+    box.innerHTML = `<div style="text-align:center;margin-bottom:16px;"><div style="font-size:14px;color:var(--accent);font-family:serif;letter-spacing:4px;">─── 大 结 局 ───</div></div>` + simpleMd(fullText);
+    box.innerHTML += `<div style="margin-top:24px;text-align:center;"><div style="font-size:11px;color:var(--text3);letter-spacing:2px;">── FIN ──</div></div>`;
+    document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
+
+    // 刷新状态
+    currentSession = await api('GET', `${API}/sessions/${currentSession.id}`);
+    updateGameUI();
+
+    // 显示结束按钮
+    document.getElementById('optionsGrid').innerHTML =
+      `<button class="btn btn-primary btn-block" onclick="endAndSummarize()">📜 结束冒险</button>`;
+
+  } catch (e) {
+    box.innerHTML = '生成大结局失败，请重试';
+    box.classList.remove('streaming');
+    document.getElementById('optionsGrid').innerHTML =
+      `<button class="btn btn-primary btn-block" onclick="generateFinale()">🔄 重试</button>`;
+  }
+}
+
+// ── 简易 Markdown ────────────────────────
+function simpleMd(text) {
+  if (!text) return '';
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/\n/g, '<br>');
+}
+
+// ── 人设管理 ─────────────────────────────
+let personaCategory = 'dm'; // 当前编辑的人设类别
+let allPersonas = { dm: [], player: [] };
+
+async function loadPersonaSelects() {
+  allPersonas = await api('GET', `${API}/personas`) || { dm: [], player: [] };
+  _fillPersonaSelect('dmPersonaSelect', allPersonas.dm, '默认 DM');
+  _fillPersonaSelect('playerPersonaSelect', allPersonas.player, '无特定人设');
+}
+
+function _fillPersonaSelect(selectId, list, defaultLabel) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = `<option value="">${defaultLabel}</option>` +
+    list.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('');
+  if (prev && list.some(p => p.id === prev)) sel.value = prev;
+}
+
+function showPersonas(category) {
+  personaCategory = category;
+  const title = category === 'dm' ? '🎭 DM 人设管理' : '🧑‍⚔️ 玩家人设管理';
+  document.getElementById('personaViewTitle').textContent = title;
+  renderPersonaList();
+  hidePersonaForm();
+  showView('viewPersonas');
+}
+
+function renderPersonaList() {
+  const list = allPersonas[personaCategory] || [];
+  const container = document.getElementById('personaList');
+  if (list.length === 0) {
+    container.innerHTML = '<div style="text-align:center;color:var(--text3);padding:24px;font-size:13px;">还没有人设，点击下方新建一个</div>';
+    return;
+  }
+  container.innerHTML = list.map(p => `
+    <div class="persona-card">
+      <div style="flex:1;min-width:0;">
+        <div class="p-name">${escHtml(p.name)}</div>
+        <div class="p-preview">${escHtml((p.content || '').slice(0, 60))}</div>
+      </div>
+      <div class="p-actions">
+        <button onclick="event.stopPropagation();editPersona('${p.id}')" title="编辑">✏️</button>
+        <button class="del-btn" onclick="event.stopPropagation();removePersona('${p.id}','${escHtml(p.name)}')" title="删除">🗑</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function showPersonaForm(id, name, content) {
+  document.getElementById('personaEditId').value = id || '';
+  document.getElementById('personaNameInput').value = name || '';
+  document.getElementById('personaContentInput').value = content || '';
+  document.getElementById('personaForm').style.display = '';
+}
+
+function hidePersonaForm() {
+  document.getElementById('personaForm').style.display = 'none';
+}
+
+function editPersona(pid) {
+  const p = (allPersonas[personaCategory] || []).find(x => x.id === pid);
+  if (p) showPersonaForm(p.id, p.name, p.content);
+}
+
+async function savePersonaForm() {
+  const name = document.getElementById('personaNameInput').value.trim();
+  const content = document.getElementById('personaContentInput').value.trim();
+  if (!name) { showToast('请输入人设名称'); return; }
+  if (!content) { showToast('请输入人设内容'); return; }
+  const id = document.getElementById('personaEditId').value;
+  await api('POST', `${API}/personas`, { id, name, content, category: personaCategory });
+  hidePersonaForm();
+  allPersonas = await api('GET', `${API}/personas`) || { dm: [], player: [] };
+  renderPersonaList();
+  showToast('已保存');
+}
+
+async function removePersona(pid, name) {
+  if (!confirm(`确定删除「${name}」？`)) return;
+  await api('DELETE', `${API}/personas/${pid}`);
+  allPersonas = await api('GET', `${API}/personas`) || { dm: [], player: [] };
+  renderPersonaList();
+  showToast('已删除');
+}
+
+function backFromPersonas() {
+  // 刷新下拉框
+  _fillPersonaSelect('dmPersonaSelect', allPersonas.dm, '默认 DM');
+  _fillPersonaSelect('playerPersonaSelect', allPersonas.player, '无特定人设');
+  showView('viewCreate');
+}
+
+// ── 场外求助聊天 ────────────────────────────
+let theaterConvId = null;
+let theaterChatMessages = [];
+let theaterSending = false;
+
+async function openTheaterChat() {
+  // 获取或创建对话
+  if (!theaterConvId) {
+    try {
+      const convs = await api('GET', '/api/conversations');
+      if (convs && convs.length > 0) {
+        theaterConvId = convs[0].id;
+      } else {
+        const newConv = await api('POST', '/api/conversations', { title: '新对话' });
+        theaterConvId = newConv.id;
+      }
+    } catch (e) {
+      showToast('无法加载对话');
+      return;
+    }
+  }
+  document.getElementById('theaterChatOverlay').classList.add('show');
+  document.getElementById('theaterChatInput').focus();
+}
+
+function closeTheaterChat() {
+  document.getElementById('theaterChatOverlay').classList.remove('show');
+  // 刷新游戏状态（可能有属性/道具变更）
+  if (currentSession) {
+    api('GET', `${API}/sessions/${currentSession.id}`).then(s => {
+      if (s) { currentSession = s; updateGameUI(); }
+    });
+  }
+}
+
+async function sendTheaterChat() {
+  if (theaterSending) return;
+  const input = document.getElementById('theaterChatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  theaterSending = true;
+
+  const msgBox = document.getElementById('theaterChatMessages');
+
+  // 显示用户消息
+  const userDiv = document.createElement('div');
+  userDiv.className = 'tc-msg user';
+  userDiv.textContent = text;
+  msgBox.appendChild(userDiv);
+  msgBox.scrollTop = msgBox.scrollHeight;
+
+  // AI 占位
+  const aiDiv = document.createElement('div');
+  aiDiv.className = 'tc-msg assistant';
+  aiDiv.innerHTML = '<span class="loading-dots" style="color:var(--text3);">...</span>';
+  msgBox.appendChild(aiDiv);
+  msgBox.scrollTop = msgBox.scrollHeight;
+
+  try {
+    const resp = await fetch(`/api/conversations/${theaterConvId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: text,
+        theater_session_id: currentSession?.id || '',
+        context_limit: 20,
+      }),
+    });
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let aiText = '';
+    let effectsHtml = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      for (const line of chunk.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const msg = JSON.parse(line.slice(6));
+          if (msg.type === 'chunk') {
+            aiText += msg.content;
+            aiDiv.innerHTML = simpleMd(aiText) + effectsHtml;
+            msgBox.scrollTop = msgBox.scrollHeight;
+          } else if (msg.type === 'theater_update') {
+            for (const u of msg.updates) {
+              if (u.type === 'stat') {
+                effectsHtml += `<span class="tc-effect">✨ ${escHtml(u.name)} ${u.value > 0 ? '+' : ''}${u.value} 已生效</span>`;
+              } else if (u.type === 'item') {
+                effectsHtml += `<span class="tc-effect">✨ 获得道具「${escHtml(u.name)}」</span>`;
+              }
+            }
+            aiDiv.innerHTML = simpleMd(aiText) + effectsHtml;
+            // 刷新游戏状态
+            const s = await api('GET', `${API}/sessions/${currentSession.id}`);
+            if (s) { currentSession = s; updateGameUI(); }
+          } else if (msg.type === 'music') {
+            effectsHtml += `<span class="tc-effect">🎵 已点歌</span>`;
+            aiDiv.innerHTML = simpleMd(aiText) + effectsHtml;
+          }
+        } catch (e) {}
+      }
+    }
+
+    // 清理剧场指令标签（显示时去掉）
+    aiText = aiText.replace(/\[剧场属性[：:][^\]]+\]/g, '').replace(/\[剧场道具[：:][^\]]+\]/g, '').trim();
+    aiDiv.innerHTML = simpleMd(aiText) + effectsHtml;
+    msgBox.scrollTop = msgBox.scrollHeight;
+  } catch (e) {
+    aiDiv.innerHTML = '网络错误';
+  }
+  theaterSending = false;
+}
+
+// ── 初始化 ───────────────────────────────
+loadModels();
+loadPersonaSelects();
+loadSessions();
+</script>
+</body>
+</html>

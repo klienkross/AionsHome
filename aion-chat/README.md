@@ -53,6 +53,7 @@
     ├── voice.py                  # 语音唤醒 + 半双工通话（WebRTC VAD + 硬基流动 ASR），通话中自动携带 TTS 参数
     ├── tts.py                    # 服务端流式 TTS：按句切分（100-200字）+ 异步并行合成 + WebSocket 推送音频分片
     ├── schedule.py               # 日程/闹铃/定时监控管理器：ScheduleManager、文本指令解析、闹铃触发Core唤醒、定时监控截图+Core分析（注入设备活动摘要）
+    ├── ghost_forest.py            # 奥罗斯幽林 TRPG 引擎：会话管理、AI 对话历史压缩、D20 骰子判定、角色属性/道具系统
     ├── book.py                    # EPUB 解析模块：书籍导入、章节拆分、段落标注、图片提取
     ├── routes/
     │   ├── __init__.py
@@ -68,7 +69,8 @@
     │   ├── memories.py           # 记忆库 CRUD + 手动总结触发 + 原文查看 + 锚点管理 API
     │   ├── heart_whispers.py     # 心语 API（列表查询 + 删除）
     │   ├── activity.py           # 活动日志 API（上报/查询/清理/状态诊断/10分钟摘要/AI联动开关配置）
-    │   └── voice.py              # 语音唤醒/通话控制 API
+    │   ├── voice.py              # 语音唤醒/通话控制 API
+    │   └── ghost_forest.py       # 奥罗斯幽林 TRPG API（16 个端点：人设/会话/剧情生成/选择/骰子/大结局）
     ├── activity.py               # 设备活动日志：JSONL 存储、自动清理（保留最近 3 小时）、PC 前台窗口采集（win32gui+psutil）、App 包名→中文名映射、10分钟窗口摘要（时长权重+carry-forward状态追溯）、AI联动开关+Prompt摘要生成
     ├── music.py                  # pyncm 封装层（搜索/歌曲详情/音频URL/MUSIC_U Cookie 登录/匿名登录）
     ├── README.md                 # 本文件
@@ -89,6 +91,7 @@
     │   ├── activity-logs.html    # 活动日志页 → /activity-logs（双设备活动查看/筛选/清理/10分钟摘要弹窗/AI联动开关）
     │   ├── reading.html          # 阅读页 → /reading（书架+阅读器+AI批注+选文聊天+音乐播放）
     │   ├── theater.html          # 小剧场页 → /theater（独立聊天+多角色管理+TTS，茶色暗色主题）
+    │   ├── ghost-forest.html     # 奥罗斯幽林页 → /ghost-forest（TRPG 游戏：D20 骰子+角色扮演+AI DM）
     │   ├── video-call.js         # 视频通话模块：摄像头预览 + 截图 + 语音复用 + 来电/去电 UI
     │   ├── manifest.json         # PWA Web App Manifest（从 /manifest.json 提供）
     │   └── sw.js                 # PWA Service Worker（从 /sw.js 提供）
@@ -107,7 +110,10 @@
         ├── monitor_logs/         # Sentinel 监控日志（JSONL，按日期，3天自动清理）
         ├── activity_logs/        # 设备活动日志（JSONL，按日期，保留最近 3 小时）
         ├── books/                # EPUB 书籍数据（解析后的章节+图片+批注数据库）
-        └── theater_personas.json # 小剧场角色预设（多套人设，JSON数组）
+        ├── theater_personas.json # 小剧场角色预设（多套人设，JSON数组）
+        └── ghost_forest/          # 奥罗斯幽林 TRPG 数据
+            ├── _personas.json     # DM/玩家人设预设
+            └── {uuid}.json        # 游戏会话存档（每局一个文件）
 ```
 
 ## 路由
@@ -126,6 +132,7 @@
 | `/activity-logs` | activity-logs.html 活动日志页（双设备活动查看） |
 | `/reading` | reading.html 阅读页（书架+阅读器+AI批注+选文聊天） |
 | `/theater` | theater.html 小剧场页（独立聊天+多角色+TTS） |
+| `/ghost-forest` | ghost-forest.html 奥罗斯幽林页（TRPG 冒险游戏） |
 | `/manifest.json` | PWA Web App Manifest |
 | `/sw.js` | PWA Service Worker（根路径提供，作用域覆盖全站） |
 | `/public/*` | 公共资源 |
@@ -660,6 +667,58 @@
 202. **图片上传** — 支持多模态，可上传图片/视频作为附件发送
 203. **重新生成** — AI 消息支持一键重新生成
 
+### 奥罗斯幽林（Ghost Forest TRPG）
+300. **独立 TRPG 模块** — 完整的桌游风角色扮演冒险游戏，AI 担任 DM（地下城主持人），玩家通过选项和 D20 骰子推进剧情。数据存储为纯 JSON 文件（`data/ghost_forest/`），不使用数据库，与主聊天系统完全隔离
+301. **DM/玩家人设管理** — 支持创建/编辑/删除多套 DM 和玩家人设预设，存储在 `data/ghost_forest/_personas.json`，开始新冒险时选择人设组合
+302. **AI 生成剧情大纲** — 玩家提供冒险点子，AI（SSE 流式）生成完整剧情大纲：标题、世界观、主线情节、NPC 列表、关键道具、剧情分支、氛围描写
+303. **角色属性系统** — 五维属性（力量/敏捷/智力/魅力/运气），初始各 3 点 + 7 点自由分配。HP 100，最大回合 20（±5 弹性）。属性影响选项的 DC（难度等级）判定
+304. **D20 骰子判定** — Three.js 3D 实时渲染 D20 骰子动画，物理模拟旋转和弹跳。投骰结果 + 属性修正 ≥ DC 即成功，影响后续剧情走向
+305. **AI 叙事回合** — 每回合 AI 生成剧情叙述 + 3-4 个选项（含属性关联和 DC），支持 D 选项自定义行动。AI 回复以 SSE 流式输出，实时渲染 Markdown
+306. **道具系统** — AI 可通过 `[ITEM:道具名:数量:描述]` 指令给予玩家道具，选项可设置 `item_cost` 消耗道具。道具栏实时显示在游戏界面底部
+307. **AI 对话历史压缩** — 当 AI 历史超过 16 条消息时，使用 `gemini-3.1-flash-lite` 自动压缩旧对话为摘要，保留最近 6 条原文，减少 token 消耗。压缩前备份完整历史到 `ai_history_full`
+308. **前情回顾** — 📜 按钮打开全屏回顾面板，显示所有已完成回合的剧情和结果叙述，方便回顾冒险历程
+309. **大结局生成** — 冒险结束时，AI 生成 400-800 字的完整大结局叙事（纯文学风格，不含选项），以 SSE 流式呈现。结局存储在 `session.finale`，重新进入时直接展示
+310. **场外求助（剧场联动）** — 📞 按钮打开半屏聊天面板，连接到主聊天系统。聊天 AI 通过 `theater_session_id` 参数自动获取当前游戏状态（属性/HP/道具/最近剧情/当前选项），以 `[剧场属性：xxx ±n]` 和 `[剧场道具：xxx]` 指令直接修改游戏数据，实现跨系统联动
+311. **移动端适配** — 游戏界面采用两段布局（固定状态区 + 统一滚动区），正文和选项合并滚动，手机上正文显示面积最大化。属性芯片紧凑排列（nowrap），触屏友好
+312. **会话管理** — 支持多局游戏并行，列表显示标题/状态/创建时间，支持暂停/恢复/删除。状态机：draft → outlined → playing → paused/finished
+313. **模型切换** — 游戏中可实时切换 AI 模型（下拉框），支持所有已配置的模型（Gemini/硅基流动/中转站）
+
+### 奥罗斯幽林工作流程
+```
+【创建冒险】
+  选择 DM 人设 + 玩家人设 → 输入冒险点子 → POST /api/ghost-forest/sessions
+  → AI 生成剧情大纲（SSE）→ POST .../generate-outline
+  → 解析 JSON 大纲（标题/背景/NPC/道具/分支）
+  → 分配属性点（5 维各 3 + 7 自由分配）→ POST .../start → 状态 playing
+
+【游戏回合（循环）】
+  POST .../narrate → AI 生成当前回合叙述 + 选项（SSE 流式）
+  → 前端解析 JSON：narration + options[{key, text, stat, dc}]
+  → 玩家选择选项 → 需要骰子？→ Three.js D20 骰子动画
+  → POST .../choose {chosen, dice_roll, custom_input}
+  → AI 根据判定结果生成后续叙述（SSE 流式）
+  → 更新 HP/属性/道具/回合数 → 下一回合
+
+【AI 历史压缩（自动触发）】
+  narrate/choose 完成后 → 检查 ai_history 长度 > 16
+  → gemini-3.1-flash-lite 压缩旧消息为摘要
+  → 备份 ai_history → ai_history_full
+  → ai_history = [压缩摘要] + [最近 6 条原文]
+
+【场外求助（剧场联动）】
+  点击 📞 → 打开聊天面板 → 发送消息到主聊天（携带 theater_session_id）
+  → 后端注入游戏状态到聊天 AI prompt
+  → AI 回复中含 [剧场属性：力量 +2] / [剧场道具：神秘钥匙]
+  → 后端解析指令 → 修改游戏会话数据 → SSE theater_update 事件
+  → 前端接收 → 刷新游戏 UI
+
+【大结局】
+  回合数到达上限 / HP 归零 / AI 判断冒险结束
+  → 点击 🏰 大结局 → POST .../finale（SSE 流式）
+  → AI 生成 400-800 字结局叙事 → 存储 session.finale
+  → 状态 → finished
+```
+
 ### 设备活动日志系统（PC + 手机）
 170. **双设备活动采集** — 自动记录 PC 前台窗口和手机前台 App 的使用情况，存储为 JSONL 日志，按日期分文件，保留最近 3 小时
 171. **PC 前台窗口采集** — 后台守护线程每 60 秒通过 `win32gui.GetForegroundWindow()` 获取当前窗口标题 + `psutil.Process.name()` 获取进程名，**每分钟无条件记录**（窗口没变也写入，确保摘要时长计算准确），自动过滤 Program Manager（桌面）
@@ -994,6 +1053,26 @@
 | `/api/schedules` | GET | 日程列表（可选 `?status=active`） |
 | `/api/schedules` | POST | 手动添加日程（`{type, trigger_at, content}`） |
 | `/api/schedules/{id}` | DELETE | 删除日程 |
+
+### 奥罗斯幽林 TRPG
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/ghost-forest/personas` | GET | 列出所有 DM/玩家人设 |
+| `/api/ghost-forest/personas` | POST | 创建/更新人设 |
+| `/api/ghost-forest/personas/{pid}` | DELETE | 删除人设 |
+| `/api/ghost-forest/sessions` | GET | 列出所有游戏会话（摘要） |
+| `/api/ghost-forest/sessions` | POST | 创建新游戏会话 |
+| `/api/ghost-forest/sessions/{sid}` | GET | 获取完整会话数据 |
+| `/api/ghost-forest/sessions/{sid}` | PATCH | 更新会话模型 |
+| `/api/ghost-forest/sessions/{sid}` | DELETE | 删除会话 |
+| `/api/ghost-forest/sessions/{sid}/generate-outline` | POST | AI 生成剧情大纲（SSE） |
+| `/api/ghost-forest/sessions/{sid}/start` | POST | 提交属性分配，开始游戏 |
+| `/api/ghost-forest/sessions/{sid}/narrate` | POST | AI 生成当前回合叙述（SSE） |
+| `/api/ghost-forest/sessions/{sid}/choose` | POST | 提交选择 + 骰子结果（SSE） |
+| `/api/ghost-forest/sessions/{sid}/pause` | POST | 暂停游戏 |
+| `/api/ghost-forest/sessions/{sid}/resume` | POST | 恢复游戏 |
+| `/api/ghost-forest/sessions/{sid}/finale` | POST | 生成大结局（SSE） |
+| `/api/ghost-forest/sessions/{sid}/summary` | POST | 生成冒险总结 |
 
 ### 定位/高德地图
 | 端点 | 方法 | 说明 |

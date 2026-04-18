@@ -35,6 +35,7 @@ from routes import heart_whispers as heart_whispers_routes
 from routes import activity as activity_routes
 from routes import book as book_routes
 from routes import theater as theater_routes
+from routes import ghost_forest as ghost_forest_routes
 from activity import pc_tracker
 
 
@@ -68,6 +69,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# 全局禁用静态文件缓存
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
+class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
+
+app.add_middleware(NoCacheStaticMiddleware)
+
 # 静态文件
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
@@ -88,6 +102,7 @@ app.include_router(heart_whispers_routes.router)
 app.include_router(activity_routes.router)
 app.include_router(book_routes.router)
 app.include_router(theater_routes.router)
+app.include_router(ghost_forest_routes.router)
 
 
 # 页面
@@ -142,6 +157,10 @@ async def reading_page():
 @app.get("/theater")
 async def theater_page():
     return FileResponse(BASE_DIR / "static" / "theater.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+@app.get("/ghost-forest")
+async def ghost_forest_page():
+    return FileResponse(BASE_DIR / "static" / "ghost-forest.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 # PWA：Service Worker 必须从根路径提供，作用域才能覆盖所有页面
 @app.get("/sw.js")
