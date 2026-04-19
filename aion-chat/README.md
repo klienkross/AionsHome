@@ -51,7 +51,7 @@
     ├── camera.py                 # 摄像头：CameraMonitor 类、Sentinel 分析（注入设备活动摘要）、Core 唤醒、[CAM_CHECK]
     ├── location.py               # 高德地图定位：GPS心跳处理、三级研判、状态机(at_home/outside)、哨兵通知、POI搜索
     ├── voice.py                  # 语音唤醒 + 半双工通话（WebRTC VAD + 硬基流动 ASR），通话中自动携带 TTS 参数
-    ├── tts.py                    # 服务端流式 TTS：按句切分（100-200字）+ 异步并行合成 + WebSocket 推送音频分片
+    ├── tts.py                    # 服务端流式 TTS：按句切分（100-200字）+ 异步并行合成 + WebSocket/SSE 推送音频分片
     ├── schedule.py               # 日程/闹铃/定时监控管理器：ScheduleManager、文本指令解析、闹铃触发Core唤醒、定时监控截图+Core分析（注入设备活动摘要）
     ├── ghost_forest.py            # 奥罗斯幽林 TRPG 引擎：会话管理、AI 对话历史压缩、D20 骰子判定、角色属性/道具系统
     ├── book.py                    # EPUB 解析模块：书籍导入、章节拆分、段落标注、图片提取
@@ -70,7 +70,7 @@
     │   ├── heart_whispers.py     # 心语 API（列表查询 + 删除）
     │   ├── activity.py           # 活动日志 API（上报/查询/清理/状态诊断/10分钟摘要/AI联动开关配置）
     │   ├── voice.py              # 语音唤醒/通话控制 API
-    │   └── ghost_forest.py       # 奥罗斯幽林 TRPG API（16 个端点：人设/会话/剧情生成/选择/骰子/大结局）
+    │   └── ghost_forest.py       # 奥罗斯幽林 TRPG API（16 个端点：人设/会话/剧情生成/选择/骰子/大结局）+ SSE 流式 TTS
     ├── activity.py               # 设备活动日志：JSONL 存储、自动清理（保留最近 3 小时）、PC 前台窗口采集（win32gui+psutil）、App 包名→中文名映射、10分钟窗口摘要（时长权重+carry-forward状态追溯）、AI联动开关+Prompt摘要生成
     ├── music.py                  # pyncm 封装层（搜索/歌曲详情/音频URL/MUSIC_U Cookie 登录/匿名登录）
     ├── README.md                 # 本文件
@@ -199,7 +199,7 @@
 23. **可视化管理** — 侧边栏「🧠 记忆库」按钮，支持搜索/添加/编辑/删除，编辑后自动重新向量化。每条记忆显示关键词标签 + 重要度分数，编辑时可修改关键词和重要度。有 source 时间范围的记忆可点击 📜 查看原文。📌 按钮可切换记忆的“待办/未完成”状态，unresolved 的记忆以橙色高亮显示
 
 ### 语音合成 (TTS) — 服务端流式推送架构
-24. **服务端流式 TTS** — AI 流式输出过程中，后端 `tts.py` 的 `TTSStreamer` 实时按句切分文本（100-200 字，按句号/问号/感叹号/换行等断句），每句异步调用硅基流动 CosyVoice2-0.5B 合成 mp3，合成完成后立即通过 WebSocket 推送 `tts_chunk` 事件给前端，前端收到即可开始播放，无需等待全文生成完毕
+24. **服务端流式 TTS** — AI 流式输出过程中，后端 `tts.py` 的 `TTSStreamer` 实时按句切分文本（100-200 字，按句号/问号/感叹号/换行等断句），每句异步调用硅基流动 CosyVoice2-0.5B 合成 mp3，合成完成后立即通过 WebSocket 或 SSE 推送 `tts_chunk` 事件给前端，前端收到即可开始播放，无需等待全文生成完毕。SSE 模式通过 `sse_queue` 参数支持，用于小剧场和奥罗斯幽林等独立 SSE 流场景
 25. **多场景触发** — 用户发消息后的 AI 流式回复、重新生成、Core 主动发言（哨兵唤醒/闹铃/定时监控/[CAM_CHECK] 跟进）均自动创建 TTSStreamer 进行流式合成
 26. **音色选择** — 齿轮配置面板内选择硅基流动账号下的自定义音色，通过 WebSocket `tts_state` 消息同步到服务端
 27. **前端队列播放** — 前端维护 `ttsQueue`（Map 结构，key 为 msg_id），每条消息的分片按 seq 顺序播放，多条消息按到达顺序排队；播放完最后一片后服务端广播 `tts_done` 事件，前端清理队列并继续下一条
@@ -676,8 +676,11 @@
 305. **AI 叙事回合** — 每回合 AI 生成剧情叙述 + 3-4 个选项（含属性关联和 DC），支持 D 选项自定义行动。AI 回复以 SSE 流式输出，实时渲染 Markdown
 306. **道具系统** — AI 可通过 `[ITEM:道具名:数量:描述]` 指令给予玩家道具，选项可设置 `item_cost` 消耗道具。道具栏实时显示在游戏界面底部
 307. **AI 对话历史压缩** — 当 AI 历史超过 16 条消息时，使用 `gemini-3.1-flash-lite` 自动压缩旧对话为摘要，保留最近 6 条原文，减少 token 消耗。压缩前备份完整历史到 `ai_history_full`
-308. **前情回顾** — 📜 按钮打开全屏回顾面板，显示所有已完成回合的剧情和结果叙述，方便回顾冒险历程
+308. **前情回顾** — 📜 按钮打开全屏回顾面板，显示所有已完成回合的剧情和结果叙述，方便回顾冒险历程。支持 🔊 按钮回放每回合的 TTS 音频（通过 HEAD 探测已缓存分片）
 309. **大结局生成** — 冒险结束时，AI 生成 400-800 字的完整大结局叙事（纯文学风格，不含选项），以 SSE 流式呈现。结局存储在 `session.finale`，重新进入时直接展示
+314. **TTS 语音合成** — 复用 `tts.py` 的 `TTSStreamer`，通过 SSE 流式推送 `tts_chunk`/`tts_done` 事件。叙述/选择结果/大结局三个 SSE 端点均支持 `tts_enabled`/`tts_voice` 查询参数，AI 生成叙述后自动按句切分合成语音，前端按序播放。TTS 音频缓存以 `gf_{sid}_r{round}_s{seq}.mp3` 命名，支持回放
+315. **动态回合数** — 支持游戏中修改最大回合数（±5 弹性范围），AI 根据剩余回合数自动调整叙事节奏
+316. **D 选项自定义行动** — 选项列表末尾固定显示「D. 你想做别的...」输入框，玩家可自由输入创意行动
 310. **场外求助（剧场联动）** — 📞 按钮打开半屏聊天面板，连接到主聊天系统。聊天 AI 通过 `theater_session_id` 参数自动获取当前游戏状态（属性/HP/道具/最近剧情/当前选项），以 `[剧场属性：xxx ±n]` 和 `[剧场道具：xxx]` 指令直接修改游戏数据，实现跨系统联动
 311. **移动端适配** — 游戏界面采用两段布局（固定状态区 + 统一滚动区），正文和选项合并滚动，手机上正文显示面积最大化。属性芯片紧凑排列（nowrap），触屏友好
 312. **会话管理** — 支持多局游戏并行，列表显示标题/状态/创建时间，支持暂停/恢复/删除。状态机：draft → outlined → playing → paused/finished
@@ -714,9 +717,18 @@
 
 【大结局】
   回合数到达上限 / HP 归零 / AI 判断冒险结束
-  → 点击 🏰 大结局 → POST .../finale（SSE 流式）
+  → 点击 🏰 大结局 → POST .../finale（SSE 流式 + TTS）
   → AI 生成 400-800 字结局叙事 → 存储 session.finale
   → 状态 → finished
+
+【TTS 语音合成（复用 TTSStreamer）】
+  narrate/choose/finale 端点接收 tts_enabled=true&tts_voice=xxx 查询参数
+  → AI 生成叙述文本 → 创建 TTSStreamer(msg_id, voice, sse_queue=queue)
+  → TTSStreamer.feed(narration) → 按 100-200 字切分 → 异步合成 mp3
+  → 合成完成 → SSE 推送 tts_chunk {msg_id, seq, url} → 前端 enqueueTTSChunk() 按序播放
+  → 全部合成完 → SSE 推送 tts_done → 前端 finishTTSForMsg() 标记完成
+  → 音频缓存：data/tts_cache/gf_{sid}_r{round}_s{seq}.mp3
+  → 前情回顾可通过 🔊 按钮回放已缓存的音频（HEAD 探测分片存在性后依次播放）
 ```
 
 ### 设备活动日志系统（PC + 手机）

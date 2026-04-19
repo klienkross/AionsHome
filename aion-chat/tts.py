@@ -55,15 +55,23 @@ def _has_unclosed_tag(text: str) -> bool:
 
 
 class TTSStreamer:
-    """服务端流式 TTS：积累文本 → 按句子切分 → 异步合成 → WS 推送"""
+    """服务端流式 TTS：积累文本 → 按句子切分 → 异步合成 → WS/Queue 推送"""
 
-    def __init__(self, msg_id: str, voice: str, ws_manager):
+    def __init__(self, msg_id: str, voice: str, ws_manager=None, *, sse_queue: asyncio.Queue | None = None):
         self.msg_id = msg_id
         self.voice = voice
         self._ws = ws_manager
+        self._sse_queue = sse_queue
         self._buffer = ""       # 原始文本缓冲
         self._seq = 0           # 分段序号
         self._tasks: list[asyncio.Task] = []
+
+    async def _notify(self, payload: dict):
+        """通过 WebSocket 或 SSE Queue 推送事件"""
+        if self._ws:
+            await self._ws.broadcast(payload)
+        if self._sse_queue:
+            await self._sse_queue.put(payload)
 
     def feed(self, chunk: str):
         """喂入 AI 流式 chunk，检测到可切分的句子就异步发起合成"""
@@ -172,7 +180,7 @@ class TTSStreamer:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
         # 通知前端该消息的 TTS 分段已全部推送完毕
-        await self._ws.broadcast({
+        await self._notify({
             "type": "tts_done",
             "data": {"msg_id": self.msg_id}
         })
@@ -206,7 +214,7 @@ class TTSStreamer:
             cache_path = TTS_CACHE_DIR / f"{chunk_name}.mp3"
             cache_path.write_bytes(resp.content)
 
-            await self._ws.broadcast({
+            await self._notify({
                 "type": "tts_chunk",
                 "data": {
                     "msg_id": self.msg_id,

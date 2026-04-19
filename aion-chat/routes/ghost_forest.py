@@ -3,10 +3,12 @@
 """
 
 import asyncio, json
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
+
+from tts import TTSStreamer
 
 from ghost_forest import (
     create_session, load_session, save_session, list_sessions,
@@ -90,6 +92,7 @@ async def api_get_session(sid: str):
 
 class PatchSessionReq(BaseModel):
     model: str | None = None
+    max_rounds: int | None = None
 
 @router.patch("/sessions/{sid}")
 async def api_patch_session(sid: str, req: PatchSessionReq):
@@ -98,6 +101,12 @@ async def api_patch_session(sid: str, req: PatchSessionReq):
         raise HTTPException(404, "session not found")
     if req.model is not None:
         s["model"] = req.model
+    if req.max_rounds is not None:
+        if req.max_rounds < s.get("current_round", 0):
+            raise HTTPException(400, "不能低于当前轮次")
+        if req.max_rounds < 5 or req.max_rounds > 100:
+            raise HTTPException(400, "轮次范围 5-100")
+        s["max_rounds"] = req.max_rounds
         save_session(s)
     return {"ok": True}
 
@@ -234,7 +243,9 @@ async def api_start_game(sid: str, req: StatsReq):
 
 # ── 生成当轮剧情 (SSE) ────────────────────────────
 @router.post("/sessions/{sid}/narrate")
-async def api_narrate(sid: str):
+async def api_narrate(sid: str,
+                      tts_enabled: bool = Query(False),
+                      tts_voice: str = Query("")):
     session = load_session(sid)
     if not session:
         raise HTTPException(404)
@@ -348,6 +359,14 @@ async def api_narrate(sid: str):
                 # 发送解析后的结构化数据
                 if parsed:
                     await queue.put({"type": "parsed", "data": parsed})
+
+                    # TTS：将纯叙述文本送去流式合成
+                    if tts_enabled and tts_voice and parsed.get("narration"):
+                        tts_id = f"gf_{sid[:8]}_r{s['current_round']}"
+                        tts = TTSStreamer(tts_id, tts_voice, sse_queue=queue)
+                        tts.feed(parsed["narration"])
+                        await tts.flush()
+
         await queue.put({"type": "done"})
         # 趁玩家阅读剧情时，后台压缩历史
         asyncio.create_task(maybe_compress_history(sid))
@@ -366,7 +385,9 @@ async def api_narrate(sid: str):
 
 # ── 提交选择 (SSE，AI 根据选择+骰子生成结果) ─────
 @router.post("/sessions/{sid}/choose")
-async def api_choose(sid: str, req: ChoiceReq):
+async def api_choose(sid: str, req: ChoiceReq,
+                     tts_enabled: bool = Query(False),
+                     tts_voice: str = Query("")):
     session = load_session(sid)
     if not session:
         raise HTTPException(404)
@@ -504,6 +525,8 @@ async def api_choose(sid: str, req: ChoiceReq):
                 if s["story"]:
                     s["story"][-1]["chosen"] = req.chosen
                     s["story"][-1]["dice_roll"] = req.dice_roll
+                    if req.chosen == "D" and req.custom_input:
+                        s["story"][-1]["custom_input"] = req.custom_input
 
                 # 解析 JSON
                 parsed = _parse_narrate_json(full)
@@ -533,6 +556,20 @@ async def api_choose(sid: str, req: ChoiceReq):
                 save_session(s)
                 if parsed:
                     await queue.put({"type": "parsed", "data": parsed})
+
+                    # TTS：将 result_narration + narration 送去流式合成
+                    if tts_enabled and tts_voice:
+                        tts_text = ""
+                        if parsed.get("result_narration"):
+                            tts_text += parsed["result_narration"] + "\n"
+                        if parsed.get("narration"):
+                            tts_text += parsed["narration"]
+                        if tts_text.strip():
+                            tts_id = f"gf_{sid[:8]}_r{s['current_round']}"
+                            tts = TTSStreamer(tts_id, tts_voice, sse_queue=queue)
+                            tts.feed(tts_text)
+                            await tts.flush()
+
         await queue.put({"type": "done"})
         # 趁玩家阅读剧情时，后台压缩历史
         asyncio.create_task(maybe_compress_history(sid))
@@ -574,7 +611,9 @@ async def api_resume(sid: str):
 
 # ── 大结局 (SSE) ─────────────────────────────────
 @router.post("/sessions/{sid}/finale")
-async def api_finale(sid: str):
+async def api_finale(sid: str,
+                     tts_enabled: bool = Query(False),
+                     tts_voice: str = Query("")):
     session = load_session(sid)
     if not session:
         raise HTTPException(404)
@@ -629,12 +668,20 @@ async def api_finale(sid: str):
 
     queue = asyncio.Queue()
 
+    # TTS 流式合成（大结局是纯文本，可以边生成边送TTS）
+    tts_streamer = None
+    if tts_enabled and tts_voice:
+        tts_id = f"gf_{sid[:8]}_finale"
+        tts_streamer = TTSStreamer(tts_id, tts_voice, sse_queue=queue)
+
     async def _bg():
         full = ""
         try:
             async for chunk in stream_ai(messages, session["model"]):
                 full += chunk
                 await queue.put({"type": "chunk", "content": chunk})
+                if tts_streamer:
+                    tts_streamer.feed(chunk)
         except Exception as e:
             await queue.put({"type": "error", "content": str(e)})
         else:
@@ -645,6 +692,8 @@ async def api_finale(sid: str):
                 s["ai_history"].append({"role": "user", "content": user_msg})
                 s["ai_history"].append({"role": "assistant", "content": full})
                 save_session(s)
+            if tts_streamer:
+                await tts_streamer.flush()
         await queue.put({"type": "done"})
 
     asyncio.create_task(_bg())
@@ -743,11 +792,14 @@ def _build_dm_system_prompt(session: dict, is_first: bool) -> str:
 10. 总轮次约{session['max_rounds']}轮，当前第{session['current_round']}轮
 11. 每次鉴定后，对应属性会自动+1（成功）或-1（失败），你不需要在stat_changes中重复这个变化"""
 
-    if remaining <= 5:
-        prompt += f"\n\n⚠️ 剩余约{remaining}轮，请开始收束剧情线，引导走向高潮和结局。不要草草结束，要给玩家一个有满足感的结局。"
-
     if remaining <= 0:
-        prompt += "\n\n🔚 已达到最大轮次，这应该是最后一轮，请给出结局。"
+        prompt += "\n\n🔚 已达到最大轮次，这是最后一轮。请在这一轮内给出最终决战/高潮场景，并将 game_over 设为 true，附带一段有余韵的收尾。不要草草敷衍了事，给玩家一个有满足感的结局。"
+    elif remaining == 1:
+        prompt += "\n\n⚠️ 下一轮就是最后一轮了！本轮请将剧情推向最终高潮，让玩家的选择具有决定性意义。不要在本轮结束故事，留到下一轮做最终结局。"
+    elif remaining == 2:
+        prompt += "\n\n⚠️ 还剩最后2轮。请开始汇聚所有悬念线索，本轮应制造最大的剧情张力，为下一轮的最终对决/抉择做铺垫。"
+    elif remaining <= 5:
+        prompt += f"\n\n📌 剩余约{remaining}轮，请有意识地逐步收束支线剧情，将散落的伏笔和线索串联起来，但不要急于结束，保持正常的剧情节奏和质量。"
 
     return prompt
 

@@ -329,6 +329,10 @@ def build_game_state_summary(session: dict) -> str:
         lines.append("[道具背包] 空")
     lines.append(f"[轮次] 第{session['current_round']}/{session['max_rounds']}轮")
     remaining = session["max_rounds"] - session["current_round"]
-    if remaining <= 3:
-        lines.append(f"⚠️ 剩余{remaining}轮，请开始收束剧情，引导走向结局")
+    if remaining <= 0:
+        lines.append("🔚 这是最后一轮，请给出有满足感的结局")
+    elif remaining == 1:
+        lines.append("⚠️ 下一轮是最后一轮，请推向最终高潮")
+    elif remaining <= 3:
+        lines.append(f"⚠️ 剩余{remaining}轮，请开始汇聚剧情走向结局")
     return "\n".join(lines)

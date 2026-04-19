@@ -31,11 +31,65 @@ body { background: var(--bg); }
 .top-bar .back-btn { color: var(--accent); }
 .top-bar h2 { color: var(--accent); font-family: serif; letter-spacing: 2px; }
 
+/* ── TTS 开关 ── */
+.tts-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text3);
+  font-size: 16px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.tts-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(201,162,39,0.1);
+}
+.tts-toggle .tts-label {
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+.tts-voice-popup {
+  position: fixed;
+  top: 50px;
+  right: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  z-index: 300;
+  min-width: 220px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  display: none;
+}
+.tts-voice-popup.show { display: block; }
+.tts-voice-popup label {
+  font-size: 12px;
+  color: var(--text2);
+  display: block;
+  margin-bottom: 6px;
+}
+.tts-voice-popup select {
+  width: 100%;
+  padding: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+.tts-voice-popup select:focus { outline: none; border-color: var(--accent); }
+
 /* ── 主内容区 ── */
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 2px;
 }
 
 /* ── 存档列表视图 ── */
@@ -266,8 +320,7 @@ body { background: var(--bg); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 4px;
-  flex-wrap: wrap;
+  margin-bottom: 2px;
   gap: 4px;
 }
 .hp-bar-wrap {
@@ -693,7 +746,7 @@ body { background: var(--bg); }
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 2px;
+  margin-top: 0px;
   margin-bottom: 2px;
   padding: 0 4px;
 }
@@ -744,11 +797,10 @@ body { background: var(--bg); }
 
 /* ── 回合信息 ── */
 .round-info {
-  text-align: center;
   font-size: 12px;
   color: var(--text3);
-  margin-bottom: 12px;
-  letter-spacing: 2px;
+  letter-spacing: 1px;
+  white-space: nowrap;
 }
 
 /* ── 加载动画 ── */
@@ -936,7 +988,13 @@ body { background: var(--bg); }
   <div class="top-bar">
     <button class="back-btn" onclick="goBack()">‹</button>
     <h2 id="pageTitle">⚔ 奥罗斯幽林</h2>
-    <div style="width:30px"></div>
+    <button class="tts-toggle" id="ttsToggleBtn" onclick="toggleGFTTS(event)" title="长按选择语音">🔊</button>
+  </div>
+
+  <!-- TTS 语音选择弹窗 -->
+  <div class="tts-voice-popup" id="ttsVoicePopup">
+    <label>🎵 选择语音</label>
+    <select id="gfTTSVoiceSelect" onchange="onGFTTSVoiceChange(this.value)"></select>
   </div>
 
   <div class="content" id="content">
@@ -1028,15 +1086,15 @@ body { background: var(--bg); }
     </div>
 
     <!-- ═══ 视图5: 游戏进行 ═══ -->
-    <div class="view" id="viewGame" style="display:none;flex-direction:column;height:calc(100vh - 50px);padding:0 10px 8px;">
+    <div class="view" id="viewGame" style="display:none;flex-direction:column;height:calc(100vh - 50px);padding:0 4px 8px;">
       <!-- 顶部状态区 -->
       <div style="flex-shrink:0;">
         <div class="game-header">
-          <span class="round-info" id="roundInfo"></span>
-          <div style="display:flex;gap:6px;">
-            <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 11px;" onclick="openRecap()">📜 前情</button>
-            <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 11px;" onclick="openTheaterChat()">📞 求助</button>
-            <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 11px;" onclick="pauseGame()">⏸ 暂停</button>
+          <span class="round-info" id="roundInfo" onclick="editMaxRounds()"></span>
+          <div style="display:flex;gap:4px;flex-shrink:0;">
+            <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px;" onclick="openRecap()">📜 前情</button>
+            <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px;" onclick="openTheaterChat()">📞 求助</button>
+            <button class="btn btn-secondary" style="padding:3px 8px;font-size:11px;" onclick="pauseGame()">⏸ 暂停</button>
           </div>
         </div>
         <div class="game-model-wrap">
@@ -1109,7 +1167,10 @@ body { background: var(--bg); }
     <div class="recap-overlay" id="recapOverlay">
       <div class="recap-header">
         <h3>📜 前情回顾</h3>
-        <button class="btn btn-secondary" style="padding:4px 14px;font-size:12px;" onclick="closeRecap()">✕ 关闭</button>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="recapAudioBtn" class="btn btn-secondary" style="padding:4px 10px;font-size:14px;" onclick="toggleRecapAudio()" title="播放/停止故事语音">🔊</button>
+          <button class="btn btn-secondary" style="padding:4px 14px;font-size:12px;" onclick="closeRecap()">✕ 关闭</button>
+        </div>
       </div>
       <div class="recap-body" id="recapBody"></div>
     </div>
@@ -1144,6 +1205,10 @@ let currentSession = null;
 let selectedOption = null;
 let diceResult = null;
 let isRolling = false;
+
+// ── 骰子音效 ────────────────────────────
+const diceAudio = new Audio('/public/掷骰子.mp3');
+diceAudio.preload = 'auto';
 
 // ── 视图切换 ────────────────────────────
 function showView(id) {
@@ -1610,6 +1675,8 @@ function updateGameUI() {
   const p = s.player;
 
   document.getElementById('roundInfo').textContent = `— 第 ${s.current_round} / ${s.max_rounds} 轮 —`;
+  document.getElementById('roundInfo').title = '点击修改总轮次';
+  document.getElementById('roundInfo').style.cursor = 'pointer';
 
   // HP bar
   const pct = Math.max(0, (p.hp / p.max_hp) * 100);
@@ -1628,6 +1695,25 @@ function updateGameUI() {
   document.getElementById('inventoryBar').innerHTML = inv.length ?
     inv.map(i => `<span class="inv-chip">${escHtml(i.name)}<span class="count">×${i.count}</span></span>`).join('') :
     '<span class="inv-chip" style="opacity:0.4">背包空空</span>';
+}
+
+// ── 修改总轮次 ──────────────────────────
+async function editMaxRounds() {
+  if (!currentSession) return;
+  const current = currentSession.max_rounds || 20;
+  const input = prompt(`修改总轮次（当前: ${current}，范围 5-100）：`, current);
+  if (input === null) return;
+  const val = parseInt(input, 10);
+  if (isNaN(val) || val < 5 || val > 100) { showToast('轮次范围 5-100'); return; }
+  if (val < currentSession.current_round) { showToast('不能低于当前轮次'); return; }
+  try {
+    await api('PATCH', `${API}/sessions/${currentSession.id}`, { max_rounds: val });
+    currentSession.max_rounds = val;
+    updateGameUI();
+    showToast(`总轮次已调整为 ${val}`);
+  } catch (e) {
+    showToast('修改失败');
+  }
 }
 
 // ── 处理 SSE 流 ─────────────────────────
@@ -1651,6 +1737,10 @@ async function readSSE(resp, onChunk, onParsed) {
         } else if (msg.type === 'parsed' && msg.data) {
           parsedData = msg.data;
           if (onParsed) onParsed(parsedData);
+        } else if (msg.type === 'tts_chunk' && msg.data) {
+          enqueueTTSChunk(msg.data.msg_id, msg.data.seq, msg.data.url);
+        } else if (msg.type === 'tts_done' && msg.data) {
+          finishTTSForMsg(msg.data.msg_id);
         } else if (msg.type === 'error') {
           showToast('生成失败: ' + msg.content);
         }
@@ -1670,12 +1760,11 @@ async function narrateRound() {
   document.getElementById('customInputWrap').classList.remove('show');
 
   try {
-    const resp = await fetch(`${API}/sessions/${currentSession.id}/narrate`, { method: 'POST' });
+    const resp = await fetch(`${API}/sessions/${currentSession.id}/narrate${_ttsQueryStr()}`, { method: 'POST' });
     const { parsedData } = await readSSE(resp,
-      // 流式显示（显示原始文本供阅读）
+      // 流式显示（显示原始文本供阅读，不自动滚动）
       (text) => {
         box.innerHTML = simpleMd(extractNarration(text));
-        document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
       }
     );
 
@@ -1716,6 +1805,22 @@ function extractNarration(raw) {
   } catch (e) {}
   // fallback：去掉 JSON 语法噪声
   return raw.replace(/```json/g, '').replace(/```/g, '').replace(/^\s*\{[\s\S]*?"narration"\s*:\s*"/m, '').replace(/",\s*"options"[\s\S]*$/m, '');
+}
+
+// ── 从 AI 原始输出提取 result_narration + narration（选择结果流式显示用） ──
+function extractResultThenNarration(raw) {
+  let parts = [];
+  try {
+    const rm = raw.match(/"result_narration"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (rm) parts.push(rm[1].replace(/\\n/g, '\n').replace(/\\"/g, '"'));
+  } catch (e) {}
+  try {
+    const nm = raw.match(/"narration"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if (nm) parts.push(nm[1].replace(/\\n/g, '\n').replace(/\\"/g, '"'));
+  } catch (e) {}
+  if (parts.length > 0) return parts.join('\n\n───────────────\n\n');
+  // fallback
+  return raw.replace(/```json/g, '').replace(/```/g, '').replace(/^\s*\{[\s\S]*?"result_narration"\s*:\s*"/m, '').replace(/",\s*"options"[\s\S]*$/m, '');
 }
 
 // ── 渲染选项按钮 ────────────────────────
@@ -1761,6 +1866,7 @@ function selectOption(key) {
       b.classList.toggle('selected', b.dataset.key === 'D');
     });
     document.getElementById('customInputWrap').classList.add('show');
+    document.getElementById('customInput').value = '';
     document.getElementById('customInput').focus();
     return;
   }
@@ -1931,6 +2037,9 @@ function _fallbackDiceRoll(chosenKey, rawStat, halfStat, statKey, statNames, opt
 function triggerDiceRoll(chosenKey) {
   if (isRolling) return;
   isRolling = true;
+
+  // 播放掷骰子音效
+  try { diceAudio.currentTime = 0; diceAudio.play(); } catch(e) {}
 
   const overlay = document.getElementById('diceOverlay');
   const numberOverlay = document.getElementById('diceNumberOverlay');
@@ -2116,7 +2225,7 @@ async function executeChoice(chosenKey) {
   box.classList.add('streaming');
 
   try {
-    const resp = await fetch(`${API}/sessions/${currentSession.id}/choose`, {
+    const resp = await fetch(`${API}/sessions/${currentSession.id}/choose${_ttsQueryStr()}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chosen: chosenKey, custom_input: customInput, dice_roll: diceResult }),
@@ -2124,8 +2233,7 @@ async function executeChoice(chosenKey) {
 
     const { parsedData } = await readSSE(resp,
       (text) => {
-        box.innerHTML = simpleMd(extractNarration(text));
-        document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
+        box.innerHTML = simpleMd(extractResultThenNarration(text));
       }
     );
 
@@ -2168,7 +2276,6 @@ async function executeChoice(chosenKey) {
         html += `<div style="margin-top:4px;">${items}</div>`;
       }
       box.innerHTML = html;
-      document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
 
       // 游戏结束 or 继续
       if (parsedData.game_over || currentSession.status === 'finished' || currentSession.player.hp <= 0) {
@@ -2217,7 +2324,10 @@ function openRecap() {
       }
       html += `<div class="recap-round-body">${simpleMd(entry.narration || '')}</div>`;
       if (entry.chosen) {
-        const optText = entry.options?.find(o => o.key === entry.chosen)?.text || entry.chosen;
+        let optText = entry.options?.find(o => o.key === entry.chosen)?.text || entry.chosen;
+        if (entry.chosen === 'D' && entry.custom_input) {
+          optText = `自由行动：${entry.custom_input}`;
+        }
         const diceStr = entry.dice_roll ? ` 🎲 D20=${entry.dice_roll}` : '';
         html += `<div class="recap-choice-tag">⚔ 选择: ${escHtml(entry.chosen)}. ${escHtml(optText)}${diceStr}</div>`;
       }
@@ -2232,6 +2342,13 @@ function openRecap() {
 
 function closeRecap() {
   document.getElementById('recapOverlay').classList.remove('show');
+  // 停止回放音频
+  if (gfRecapPlaying) {
+    gfRecapPlaying = false;
+    gfTTSAudio.pause();
+    gfTTSAudio.src = '';
+    document.getElementById('recapAudioBtn').textContent = '🔊';
+  }
 }
 
 // ── 获取 DM 名字 ────────────────────────
@@ -2272,11 +2389,10 @@ async function generateFinale() {
   document.getElementById('customInputWrap').classList.remove('show');
 
   try {
-    const resp = await fetch(`${API}/sessions/${currentSession.id}/finale`, { method: 'POST' });
+    const resp = await fetch(`${API}/sessions/${currentSession.id}/finale${_ttsQueryStr()}`, { method: 'POST' });
     const { fullText } = await readSSE(resp,
       (text) => {
         box.innerHTML = simpleMd(text);
-        document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
       }
     );
 
@@ -2285,7 +2401,6 @@ async function generateFinale() {
     // 最终渲染
     box.innerHTML = `<div style="text-align:center;margin-bottom:16px;"><div style="font-size:14px;color:var(--accent);font-family:serif;letter-spacing:4px;">─── 大 结 局 ───</div></div>` + simpleMd(fullText);
     box.innerHTML += `<div style="margin-top:24px;text-align:center;"><div style="font-size:11px;color:var(--text3);letter-spacing:2px;">── FIN ──</div></div>`;
-    document.getElementById('gameScrollArea').scrollTop = document.getElementById('gameScrollArea').scrollHeight;
 
     // 刷新状态
     currentSession = await api('GET', `${API}/sessions/${currentSession.id}`);
@@ -2526,7 +2641,217 @@ async function sendTheaterChat() {
   theaterSending = false;
 }
 
+// ── TTS 语音朗读 ─────────────────────────
+let gfTTSEnabled = localStorage.getItem('gf_tts_enabled') === 'true';
+let gfTTSVoice = localStorage.getItem('gf_tts_voice') || '';
+let gfTTSAudio = new Audio();
+let gfTTSVoices = [];
+
+function _updateTTSToggleUI() {
+  const btn = document.getElementById('ttsToggleBtn');
+  btn.classList.toggle('active', gfTTSEnabled);
+  btn.innerHTML = gfTTSEnabled ? '🔊' : '🔇';
+}
+
+function toggleGFTTS(e) {
+  // 长按弹出语音选择
+  if (e && e.type === 'contextmenu') { e.preventDefault(); showTTSVoicePopup(); return; }
+  gfTTSEnabled = !gfTTSEnabled;
+  localStorage.setItem('gf_tts_enabled', gfTTSEnabled);
+  _updateTTSToggleUI();
+  if (!gfTTSEnabled) {
+    _stopTTSPlayback();
+  } else if (!gfTTSVoice) {
+    showTTSVoicePopup();
+  }
+}
+
+function showTTSVoicePopup() {
+  const popup = document.getElementById('ttsVoicePopup');
+  popup.classList.toggle('show');
+  if (popup.classList.contains('show') && gfTTSVoices.length === 0) {
+    loadTTSVoices();
+  }
+}
+
+async function loadTTSVoices() {
+  try {
+    const data = await api('GET', '/api/tts/voices');
+    gfTTSVoices = (data && data.voices) ? data.voices : [];
+    const sel = document.getElementById('gfTTSVoiceSelect');
+    if (gfTTSVoices.length > 0) {
+      sel.innerHTML = gfTTSVoices.map(v => {
+        const label = v.customName || v.uri || 'Unknown';
+        return `<option value="${escHtml(v.uri)}" ${v.uri === gfTTSVoice ? 'selected' : ''}>${escHtml(label)}</option>`;
+      }).join('');
+      if (!gfTTSVoice || !gfTTSVoices.find(v => v.uri === gfTTSVoice)) {
+        gfTTSVoice = gfTTSVoices[0].uri;
+        localStorage.setItem('gf_tts_voice', gfTTSVoice);
+        sel.value = gfTTSVoice;
+      }
+    } else {
+      sel.innerHTML = '<option value="">无可用音色</option>';
+    }
+  } catch (e) {
+    showToast('加载语音列表失败');
+  }
+}
+
+function onGFTTSVoiceChange(val) {
+  gfTTSVoice = val;
+  localStorage.setItem('gf_tts_voice', val);
+  if (val) {
+    gfTTSEnabled = true;
+    localStorage.setItem('gf_tts_enabled', 'true');
+    _updateTTSToggleUI();
+  }
+  document.getElementById('ttsVoicePopup').classList.remove('show');
+}
+
+// ── TTS 查询参数 ────────────────────────
+function _ttsQueryStr() {
+  if (!gfTTSEnabled || !gfTTSVoice) return '';
+  return `?tts_enabled=true&tts_voice=${encodeURIComponent(gfTTSVoice)}`;
+}
+
+// ── TTS 分段播放（接收服务端推送的 tts_chunk/tts_done） ──
+let gfTTSChunkQueues = {};  // {msgId: {nextPlay:0, chunks:{seq:url}, finished:bool}}
+let gfTTSPlaying = false;
+let gfTTSPlayOrder = [];    // [msgId, ...]
+
+function enqueueTTSChunk(msgId, seq, url) {
+  if (!gfTTSEnabled) return;
+  if (!gfTTSChunkQueues[msgId]) {
+    gfTTSChunkQueues[msgId] = { nextPlay: 0, chunks: {}, finished: false };
+    gfTTSPlayOrder.push(msgId);
+  }
+  gfTTSChunkQueues[msgId].chunks[seq] = url;
+  if (!gfTTSPlaying) _playNextChunk();
+}
+
+function finishTTSForMsg(msgId) {
+  if (gfTTSChunkQueues[msgId]) {
+    gfTTSChunkQueues[msgId].finished = true;
+  }
+  // 如果没有在播放，尝试清理
+  if (!gfTTSPlaying) _playNextChunk();
+}
+
+function _playNextChunk() {
+  if (gfTTSPlayOrder.length === 0) { gfTTSPlaying = false; return; }
+  const msgId = gfTTSPlayOrder[0];
+  const q = gfTTSChunkQueues[msgId];
+  if (!q) { gfTTSPlayOrder.shift(); _playNextChunk(); return; }
+
+  const url = q.chunks[q.nextPlay];
+  if (url) {
+    gfTTSPlaying = true;
+    gfTTSAudio.src = url;
+    gfTTSAudio.onended = () => {
+      q.nextPlay++;
+      _playNextChunk();
+    };
+    gfTTSAudio.onerror = () => {
+      q.nextPlay++;
+      _playNextChunk();
+    };
+    gfTTSAudio.play().catch(() => { q.nextPlay++; _playNextChunk(); });
+  } else if (q.finished) {
+    // 该消息所有分段已播完
+    gfTTSPlayOrder.shift();
+    delete gfTTSChunkQueues[msgId];
+    _playNextChunk();
+  } else {
+    // 等待更多分段到达
+    gfTTSPlaying = false;
+  }
+}
+
+function _stopTTSPlayback() {
+  gfTTSAudio.pause();
+  gfTTSAudio.src = '';
+  gfTTSChunkQueues = {};
+  gfTTSPlayOrder = [];
+  gfTTSPlaying = false;
+}
+
+// ── 前情回顾：回放整个故事的音频 ──
+let gfRecapPlaying = false;
+
+async function toggleRecapAudio() {
+  if (gfRecapPlaying) {
+    gfTTSAudio.pause();
+    gfTTSAudio.src = '';
+    gfRecapPlaying = false;
+    document.getElementById('recapAudioBtn').textContent = '🔊';
+    return;
+  }
+  if (!currentSession) return;
+
+  // 收集所有轮次的音频 URL
+  const sid = currentSession.id.substring(0, 8);
+  const maxRound = currentSession.current_round || 0;
+  let allUrls = [];
+
+  for (let r = 1; r <= maxRound; r++) {
+    const baseId = `gf_${sid}_r${r}`;
+    // 探测分段音频 _s0, _s1, ...
+    for (let s = 0; s < 50; s++) {
+      const url = `/api/tts/audio/${baseId}_s${s}`;
+      try {
+        const resp = await fetch(url, { method: 'HEAD' });
+        if (resp.ok) { allUrls.push(url); } else { break; }
+      } catch { break; }
+    }
+  }
+
+  // 也检查大结局音频
+  const finaleId = `gf_${sid}_finale`;
+  for (let s = 0; s < 50; s++) {
+    const url = `/api/tts/audio/${finaleId}_s${s}`;
+    try {
+      const resp = await fetch(url, { method: 'HEAD' });
+      if (resp.ok) { allUrls.push(url); } else { break; }
+    } catch { break; }
+  }
+
+  if (allUrls.length === 0) {
+    showToast('暂无已缓存的语音，请开启语音后游玩生成');
+    return;
+  }
+
+  gfRecapPlaying = true;
+  document.getElementById('recapAudioBtn').textContent = '⏹';
+  let idx = 0;
+
+  function playNext() {
+    if (idx >= allUrls.length || !gfRecapPlaying) {
+      gfRecapPlaying = false;
+      document.getElementById('recapAudioBtn').textContent = '🔊';
+      return;
+    }
+    gfTTSAudio.src = allUrls[idx++];
+    gfTTSAudio.onended = playNext;
+    gfTTSAudio.onerror = playNext;
+    gfTTSAudio.play().catch(playNext);
+  }
+  playNext();
+}
+
+// 点击页面任意位置关闭语音弹窗
+document.addEventListener('click', (e) => {
+  const popup = document.getElementById('ttsVoicePopup');
+  const btn = document.getElementById('ttsToggleBtn');
+  if (popup.classList.contains('show') && !popup.contains(e.target) && e.target !== btn) {
+    popup.classList.remove('show');
+  }
+});
+
+// 长按支持
+document.getElementById('ttsToggleBtn').addEventListener('contextmenu', (e) => { e.preventDefault(); showTTSVoicePopup(); });
+
 // ── 初始化 ───────────────────────────────
+_updateTTSToggleUI();
 loadModels();
 loadPersonaSelects();
 loadSessions();
