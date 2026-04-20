@@ -81,17 +81,22 @@ async def recall_memories(query_text: str, query_keywords: list[str] = None,
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, content, type, created_at, embedding, keywords, importance, source_start_ts, source_end_ts "
+            "SELECT id, content, type, created_at, embedding, keywords, importance, source_start_ts, source_end_ts, unresolved "
             "FROM memories WHERE embedding IS NOT NULL"
         )
         rows = await cur.fetchall()
+    now_ts = time.time()
     all_scored = []
     for row in rows:
         mem_vec = _unpack_embedding(row["embedding"])
         vec_sim = cosine_similarity(query_vec, mem_vec)
         kw_score = _keyword_match_score(query_keywords, row["keywords"]) if query_keywords else 0.0
         importance = float(row["importance"] or 0.5)
-        final_score = vec_sim * 0.6 + kw_score * 0.3 + importance * 0.1
+        base_score = vec_sim * 0.6 + kw_score * 0.3 + importance * 0.1
+        # 时间衰减：半衰期 ~35 天；unresolved 豁免衰减
+        days = max(0.0, (now_ts - float(row["created_at"])) / 86400.0)
+        decay = 1.0 if row["unresolved"] else math.exp(-0.02 * days)
+        final_score = base_score * decay
         item = {
             "id": row["id"], "content": row["content"], "type": row["type"],
             "created_at": row["created_at"],
@@ -226,7 +231,7 @@ async def build_surfacing_memories(topic: str = "", keywords: list[str] = None,
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
                 "SELECT id, content, type, created_at FROM memories "
-                "WHERE created_at > ? ORDER BY created_at DESC LIMIT ?",
+                "WHERE created_at > ? ORDER BY importance DESC, created_at DESC LIMIT ?",
                 (three_days_ago, max_total)
             )
             recent_rows = await cur.fetchall()
