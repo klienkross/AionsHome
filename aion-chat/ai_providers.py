@@ -170,6 +170,45 @@ async def call_aipro(messages: list, model: str, meta: dict | None = None, tempe
                     except:
                         pass
 
+# ── 自定义 OpenAI 兼容端点 ────────────────────────
+async def call_custom(messages: list, model: str, base_url: str, key_name: str,
+                      meta: dict | None = None, temperature: float | None = None):
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {get_key(key_name)}", "Content-Type": "application/json"}
+    api_messages = build_multimodal_messages(messages)
+    payload = {"model": model, "messages": api_messages, "stream": True}
+    if temperature is not None:
+        payload["temperature"] = temperature
+    async with httpx.AsyncClient(timeout=120) as client:
+        async with client.stream("POST", url, json=payload, headers=headers) as resp:
+            if resp.status_code != 200:
+                body = await resp.aread()
+                try:
+                    err = json.loads(body).get("error", {}).get("message", body.decode())
+                except:
+                    err = body.decode(errors="replace")[:500]
+                yield f"[自定义端点错误 {resp.status_code}] {err}"
+                return
+            async for line in resp.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data.strip() == "[DONE]":
+                        return
+                    try:
+                        chunk = json.loads(data)
+                        if meta is not None and "usage" in chunk and chunk["usage"]:
+                            u = chunk["usage"]
+                            meta["prompt_tokens"] = u.get("prompt_tokens", 0)
+                            meta["completion_tokens"] = u.get("completion_tokens", 0)
+                            meta["total_tokens"] = u.get("total_tokens", 0)
+                            meta["raw"] = u
+                        delta = chunk["choices"][0].get("delta", {}) if chunk.get("choices") else {}
+                        if "content" in delta and delta["content"]:
+                            yield delta["content"]
+                    except:
+                        pass
+
+
 # ── 统一调度 ──────────────────────────────────────
 async def stream_ai(messages: list, model_key: str, meta: dict | None = None, temperature: float | None = None):
     normalized = []
@@ -193,3 +232,13 @@ async def stream_ai(messages: list, model_key: str, meta: dict | None = None, te
     elif cfg["provider"] == "aipro":
         async for chunk in call_aipro(normalized, cfg["model"], meta, temperature):
             yield chunk
+    elif cfg["provider"] == "custom":
+        base_url = cfg.get("base_url", "")
+        key_name = cfg.get("key_name", "")
+        if not base_url:
+            yield f"[错误] 模型 {model_key} 缺少 base_url 配置"
+            return
+        async for chunk in call_custom(normalized, cfg["model"], base_url, key_name, meta, temperature):
+            yield chunk
+    else:
+        yield f"[错误] 未知 provider: {cfg['provider']}"

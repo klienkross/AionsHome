@@ -34,7 +34,7 @@ def load_settings():
     if SETTINGS_PATH.exists():
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
-    keys = {"gemini_key": "", "siliconflow_key": "", "gemini_free_key": "", "aipro_key": ""}
+    keys = {"gemini_key": "", "siliconflow_key": "", "gemini_free_key": "", "aipro_key": "", "custom_keys": {}}
     txt = BASE_DIR.parent / "所需要的API.txt"
     if txt.exists():
         with open(txt, "r", encoding="utf-8") as f:
@@ -59,7 +59,10 @@ def get_key(provider: str) -> str:
         return SETTINGS.get("gemini_free_key", "") or SETTINGS.get("gemini_key", "")
     if provider == "aipro":
         return SETTINGS.get("aipro_key", "")
-    return SETTINGS.get("siliconflow_key", "")
+    if provider == "siliconflow":
+        return SETTINGS.get("siliconflow_key", "")
+    # 自定义端点：provider 传入 key_name，从 custom_keys 映射中取
+    return SETTINGS.get("custom_keys", {}).get(provider, "")
 
 # ── Worldbook ────────────────────────────────────
 def load_worldbook():
@@ -117,6 +120,12 @@ def sanitize_filename(name):
     return re.sub(r'[\\/:*?"<>|\n\r]', '_', name).strip().rstrip('.')
 
 # ── 模型配置 ─────────────────────────────────────
+# 添加自定义第三方 OpenAI 兼容端点（如 Claude 中转站）：
+#   1) 在 data/settings.json 里加 "custom_keys": {"<key_name>": "sk-xxxx"}
+#   2) 在下方 MODELS 里加一条：
+#        "显示名": {"provider": "custom", "model": "<上游模型名>",
+#                    "base_url": "https://xxx/v1", "key_name": "<上面的key_name>"}
+#   base_url 填到 /v1 层（代码会自动拼 /chat/completions）。
 MODELS = {
     "硅基GLM-5":        {"provider": "siliconflow", "model": "Pro/zai-org/GLM-5"},
     "硅基GLM-5.1":      {"provider": "siliconflow", "model": "Pro/zai-org/GLM-5.1"},
@@ -130,8 +139,9 @@ MODELS = {
     "claude-opus4.6T":    {"provider": "aipro", "model": "claude-opus-4-6-thinking"},
     "哈基米3.1pro":    {"provider": "aipro", "model": "gemini-3.1-pro-high"},
     "哈基米2.5pro":    {"provider": "aipro", "model": "gemini-2.5-pro"},
-    
-    
+
+    # 自定义第三方 OpenAI 兼容端点示例（删掉注释#即可启用，填好 base_url 与 key_name）
+    # "自定义-claude":  {"provider": "custom", "model": "claude-sonnet-4-6", "base_url": "https://your-relay.example.com/v1", "key_name": "myrelay"},
 }
 
 DEFAULT_MODEL = "gemini-3-flash"
