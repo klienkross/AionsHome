@@ -10,6 +10,9 @@ venv/
 .vscode/
 .idea/
 
+# ── 构建工具（本地缓存，不应上传） ──
+.tools/
+
 # ── 用户数据（含隐私信息，不应上传） ──
 aion-chat/data/chat.db
 aion-chat/data/settings.json
@@ -26,6 +29,7 @@ aion-chat/data/activity_logs/*.jsonl
 aion-chat/data/screenshots/*
 aion-chat/data/uploads/*
 aion-chat/data/tts_cache/*
+aion-chat/data/books/
 
 # ── 保留空文件夹的 .gitkeep ──
 !aion-chat/data/chats/.gitkeep
