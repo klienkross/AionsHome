@@ -36,6 +36,9 @@ from schedule import process_schedule_commands, get_active_schedules, build_sche
 router = APIRouter()
 
 POI_SEARCH_PATTERN = re.compile(r'\[POI_SEARCH:([^\]]+)\]')
+OBSIDIAN_READ_PATTERN   = re.compile(r'\[OBSIDIAN_READ:(\d{4}-\d{2}-\d{2})\]')
+OBSIDIAN_RECENT_PATTERN = re.compile(r'\[OBSIDIAN_RECENT:(\d+)\]')
+OBSIDIAN_SEARCH_PATTERN = re.compile(r'\[OBSIDIAN_SEARCH:([^\]]+)\]')
 TOY_CMD_PATTERN = re.compile(r'\[TOY:(\d|STOP)\]')
 META_TAG_PATTERN = re.compile(r'\s*<meta>.*?</meta>', re.DOTALL)
 
@@ -331,6 +334,8 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     if SETTINGS.get("video_call_enabled", True):
         abilities.append(f"[视频电话] — 当你想和{user_name}进行视频聊天看看对方当前状态时可以用该指令发起视频通话。")
     abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
+    if SETTINGS.get("obsidian_vault_path"):
+        abilities.append(f"[OBSIDIAN_READ:YYYY-MM-DD] — 查看{user_name}指定日期的Obsidian日记全文。[OBSIDIAN_RECENT:N] — 查看最近N天日记摘要（N最大14）。[OBSIDIAN_SEARCH:关键词] — 搜索日记中含某关键词的内容（最多返回10篇）。当{user_name}提到日记、某天发生的事、想回顾过去时主动使用，使用后系统会自动读取并将内容发给你，查看前不要编造内容。")
     abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。")
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
@@ -478,6 +483,16 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                 activity_n = max(1, min(12, activity_n)) if activity_n > 0 else 6
                 full_text = ACTIVITY_CHECK_PATTERN.sub("", full_text).strip()
 
+            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(full_text)
+            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(full_text)
+            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(full_text)
+            if obsidian_read_match:
+                full_text = OBSIDIAN_READ_PATTERN.sub("", full_text).strip()
+            if obsidian_recent_match:
+                full_text = OBSIDIAN_RECENT_PATTERN.sub("", full_text).strip()
+            if obsidian_search_match:
+                full_text = OBSIDIAN_SEARCH_PATTERN.sub("", full_text).strip()
+
             poi_matches = POI_SEARCH_PATTERN.findall(full_text)
             if poi_matches:
                 full_text = POI_SEARCH_PATTERN.sub("", full_text).strip()
@@ -569,6 +584,14 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                 await _q.put(poi_data)
                 await manager.broadcast({"type": "poi_search", "data": poi_data})
                 asyncio.create_task(perform_poi_check(conv_id, model_key, poi_matches))
+
+            if obsidian_read_match or obsidian_recent_match or obsidian_search_match:
+                asyncio.create_task(perform_obsidian_check(
+                    conv_id, model_key,
+                    obsidian_read_match.group(1) if obsidian_read_match else None,
+                    int(obsidian_recent_match.group(1)) if obsidian_recent_match else None,
+                    obsidian_search_match.group(1) if obsidian_search_match else None,
+                ))
 
             if activity_n > 0:
                 activity_data = {'type': 'activity_check', 'conv_id': conv_id, 'n': activity_n, 'msg_id': ai_msg_id}
@@ -736,6 +759,8 @@ async def send_message(conv_id: str, body: MsgCreate):
     if SETTINGS.get("video_call_enabled", True):
         abilities.append(f"[视频电话] — 当你想和{user_name}进行视频聊天看看对方当前状态时可以用该指令发起视频通话。")
     abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
+    if SETTINGS.get("obsidian_vault_path"):
+        abilities.append(f"[OBSIDIAN_READ:YYYY-MM-DD] — 查看{user_name}指定日期的Obsidian日记全文。[OBSIDIAN_RECENT:N] — 查看最近N天日记摘要（N最大14）。[OBSIDIAN_SEARCH:关键词] — 搜索日记中含某关键词的内容（最多返回10篇）。当{user_name}提到日记、某天发生的事、想回顾过去时主动使用，使用后系统会自动读取并将内容发给你，查看前不要编造内容。")
     abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。")
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
@@ -950,6 +975,17 @@ async def send_message(conv_id: str, body: MsgCreate):
                 activity_n = max(1, min(12, activity_n)) if activity_n > 0 else 6
                 full_text = ACTIVITY_CHECK_PATTERN.sub("", full_text).strip()
 
+            # 检测 Obsidian 日记指令
+            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(full_text)
+            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(full_text)
+            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(full_text)
+            if obsidian_read_match:
+                full_text = OBSIDIAN_READ_PATTERN.sub("", full_text).strip()
+            if obsidian_recent_match:
+                full_text = OBSIDIAN_RECENT_PATTERN.sub("", full_text).strip()
+            if obsidian_search_match:
+                full_text = OBSIDIAN_SEARCH_PATTERN.sub("", full_text).strip()
+
             # 检测 [POI_SEARCH:xxx] 指令 → 标记，后续触发自动搜索+追加回复
             poi_matches = POI_SEARCH_PATTERN.findall(full_text)
             if poi_matches:
@@ -1092,6 +1128,14 @@ async def send_message(conv_id: str, body: MsgCreate):
                 await _q.put(poi_data)
                 await manager.broadcast({"type": "poi_search", "data": poi_data})
                 asyncio.create_task(perform_poi_check(conv_id, model_key, poi_matches))
+
+            if obsidian_read_match or obsidian_recent_match or obsidian_search_match:
+                asyncio.create_task(perform_obsidian_check(
+                    conv_id, model_key,
+                    obsidian_read_match.group(1) if obsidian_read_match else None,
+                    int(obsidian_recent_match.group(1)) if obsidian_recent_match else None,
+                    obsidian_search_match.group(1) if obsidian_search_match else None,
+                ))
 
             # [查看动态:n] 查看设备活动摘要 → 携带摘要自动追加一轮 Core 回复
             if activity_n > 0:
@@ -1467,6 +1511,111 @@ async def perform_activity_check(conv_id: str, model_key: str, n: int = 6):
     print(f"[ACTIVITY_CHECK] 查看动态完成，n={n}，已自动追加回复")
 
 
+# ── [OBSIDIAN_*] 日记查看 → 读取内容后自动追加一轮 Core 回复 ─────
+async def perform_obsidian_check(
+    conv_id: str,
+    model_key: str,
+    read_date: str | None,
+    recent_n: int | None,
+    search_kw: str | None,
+):
+    from obsidian import read_diary, read_recent, search_diary
+
+    wb = load_worldbook()
+    user_name = wb.get("user_name", "用户")
+    ai_name = wb.get("ai_name", "AI")
+
+    if read_date:
+        diary_text = await read_diary(read_date)
+        sys_label = f"{ai_name}查看了{user_name} {read_date} 的日记"
+        prompt_hint = f"你刚才查看了{user_name} {read_date} 的日记，内容如下：\n\n{diary_text}\n\n请根据日记内容自然地和{user_name}聊聊，不要再说\"让我看一下\"之类的话，直接根据内容回应。"
+    elif recent_n:
+        recent_n = max(1, min(14, recent_n))
+        diary_text = await read_recent(recent_n)
+        sys_label = f"{ai_name}查看了{user_name}最近{recent_n}天的日记"
+        prompt_hint = f"你刚才查看了{user_name}最近{recent_n}天的日记摘要：\n\n{diary_text}\n\n请根据这些摘要自然地和{user_name}聊聊，不要再说\"让我看一下\"之类的话，直接根据内容回应。"
+    elif search_kw:
+        diary_text = await search_diary(search_kw)
+        sys_label = f"{ai_name}搜索了{user_name}日记中含「{search_kw}」的内容"
+        prompt_hint = f"你刚才搜索了{user_name}日记中含「{search_kw}」的内容，搜索结果如下：\n\n{diary_text}\n\n请根据搜索结果自然地和{user_name}聊聊，不要再说\"让我搜一下\"之类的话，直接根据内容回应。"
+    else:
+        return
+
+    prefix = []
+    if wb.get("ai_persona"):
+        prefix.append({"role": "user", "content": f"[系统设定 - AI人设]\n{wb['ai_persona']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会按照设定扮演角色。"})
+    if wb.get("user_persona"):
+        prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
+    if wb.get("system_prompt"):
+        prefix.append({"role": "user", "content": f"[系统提示]\n{wb['system_prompt']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会遵循这些规则。"})
+
+    import aiosqlite
+    async with get_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT role, content FROM messages WHERE conv_id=? AND role IN ('user','assistant') ORDER BY created_at DESC LIMIT 6",
+            (conv_id,)
+        )
+        rows = await cur.fetchall()
+    recent = [{"role": r["role"], "content": r["content"], "attachments": []} for r in reversed(rows)]
+    messages = prefix + recent + [{"role": "user", "content": prompt_hint}]
+
+    msg_id = f"msg_{int(time.time()*1000)}_obs"
+    obs_tts = None
+    if manager.any_tts_enabled():
+        tts_voice = manager.get_tts_voice()
+        if tts_voice:
+            obs_tts = TTSStreamer(msg_id, tts_voice, manager)
+
+    full_text = ""
+    try:
+        _temp = SETTINGS.get("temperature")
+        async for chunk in stream_ai(messages, model_key, temperature=_temp):
+            full_text += chunk
+            if obs_tts:
+                obs_tts.feed(chunk)
+    except Exception as e:
+        full_text = f"[日记读取完成但回复生成失败] {e}"
+
+    if not full_text.strip():
+        return
+
+    sys_now = time.time()
+    sys_msg_id = f"msg_{int(sys_now*1000)}_obs_sys"
+    async with get_db() as db:
+        await db.execute(
+            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+            (sys_msg_id, conv_id, "system", sys_label, sys_now, "[]")
+        )
+        await db.commit()
+    sys_msg = {"id": sys_msg_id, "conv_id": conv_id, "role": "system",
+               "content": sys_label, "created_at": sys_now, "attachments": []}
+    await manager.broadcast({"type": "msg_created", "data": sys_msg})
+
+    now = time.time()
+    async with get_db() as db:
+        await db.execute(
+            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+            (msg_id, conv_id, "assistant", full_text, now, "[]")
+        )
+        await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
+        await db.commit()
+
+    ai_msg = {"id": msg_id, "conv_id": conv_id, "role": "assistant",
+              "content": full_text, "created_at": now, "attachments": []}
+    await manager.broadcast({"type": "msg_created", "data": ai_msg})
+    if obs_tts:
+        try:
+            await obs_tts.flush()
+        except Exception:
+            pass
+    await export_conversation(conv_id)
+    print(f"[OBSIDIAN] 日记读取完成，已自动追加回复")
+
+
 # ── 重新生成 AI 回复 ──────────────────────────────
 @router.post("/api/conversations/{conv_id}/regenerate")
 async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode: bool = False, fast_mode: bool = False, temperature: Optional[float] = None, tts_enabled: bool = False, tts_voice: str = ""):
@@ -1561,6 +1710,8 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     if SETTINGS.get("video_call_enabled", True):
         abilities.append(f"[视频电话] — 当你想和{user_name}进行视频聊天看看对方当前状态时可以用该指令发起视频通话。")
     abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
+    if SETTINGS.get("obsidian_vault_path"):
+        abilities.append(f"[OBSIDIAN_READ:YYYY-MM-DD] — 查看{user_name}指定日期的Obsidian日记全文。[OBSIDIAN_RECENT:N] — 查看最近N天日记摘要（N最大14）。[OBSIDIAN_SEARCH:关键词] — 搜索日记中含某关键词的内容（最多返回10篇）。当{user_name}提到日记、某天发生的事、想回顾过去时主动使用，使用后系统会自动读取并将内容发给你，查看前不要编造内容。")
     abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。")
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
@@ -1731,6 +1882,17 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 full_text = ACTIVITY_CHECK_PATTERN.sub("", full_text).strip()
 
             # 检测 [POI_SEARCH:xxx] 指令
+            # 检测 Obsidian 日记指令
+            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(full_text)
+            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(full_text)
+            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(full_text)
+            if obsidian_read_match:
+                full_text = OBSIDIAN_READ_PATTERN.sub("", full_text).strip()
+            if obsidian_recent_match:
+                full_text = OBSIDIAN_RECENT_PATTERN.sub("", full_text).strip()
+            if obsidian_search_match:
+                full_text = OBSIDIAN_SEARCH_PATTERN.sub("", full_text).strip()
+
             poi_matches = POI_SEARCH_PATTERN.findall(full_text)
             if poi_matches:
                 full_text = POI_SEARCH_PATTERN.sub("", full_text).strip()
@@ -1832,6 +1994,14 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 await _q.put(poi_data)
                 await manager.broadcast({"type": "poi_search", "data": poi_data})
                 asyncio.create_task(perform_poi_check(conv_id, model_key, poi_matches))
+
+            if obsidian_read_match or obsidian_recent_match or obsidian_search_match:
+                asyncio.create_task(perform_obsidian_check(
+                    conv_id, model_key,
+                    obsidian_read_match.group(1) if obsidian_read_match else None,
+                    int(obsidian_recent_match.group(1)) if obsidian_recent_match else None,
+                    obsidian_search_match.group(1) if obsidian_search_match else None,
+                ))
 
             # [查看动态:n] 查看设备活动摘要 → 携带摘要自动追加一轮 Core 回复
             if activity_n > 0:
