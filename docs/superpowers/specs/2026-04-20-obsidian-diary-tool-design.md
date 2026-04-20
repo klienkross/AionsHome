@@ -16,7 +16,7 @@
 | 命令 | 格式 | 说明 |
 |------|------|------|
 | 读指定日期 | `[OBSIDIAN_READ:2026-04-20]` | 读取对应日期的 `.md` 文件全文 |
-| 读最近N天 | `[OBSIDIAN_RECENT:7]` | 读最近 N 篇日记，每篇截取前300字作摘要 |
+| 读最近N天 | `[OBSIDIAN_RECENT:7]` | 读最近 N 篇日记，每篇调用 flash-lite 提取实质内容摘要 |
 | 关键词搜索 | `[OBSIDIAN_SEARCH:关键词]` | 全库搜索含该关键词的日记，返回文件名+命中行 |
 
 N 上限：14 天，搜索结果上限：10 篇。
@@ -30,7 +30,8 @@ N 上限：14 天，搜索结果上限：10 篇。
 三个异步函数：
 
 - `read_diary(date_str: str) -> str` — 读取 `{vault}/{date_str}.md`，文件不存在返回提示
-- `read_recent(n: int) -> str` — 列出最近 N 个日记文件，读取内容并截取摘要拼接
+- `read_recent(n: int) -> str` — 列出最近 N 个日记文件，每篇调用 `summarize_diary()` 生成摘要后拼接
+- `summarize_diary(date_str: str, content: str) -> str` — 调用 Gemini flash-lite，提取日记实质内容（跳过模板头部），返回100字内摘要
 - `search_diary(keyword: str) -> str` — 遍历 vault 内所有 `.md` 文件，返回含关键词的文件名和命中行
 
 vault 路径从 `config.SETTINGS` 读取 `obsidian_vault_path` 字段。
@@ -79,7 +80,7 @@ OBSIDIAN_SEARCH_PATTERN = re.compile(r'\[OBSIDIAN_SEARCH:([^\]]+)\]')
 用户："帮我看看上周的日记"
   → bot 输出 [OBSIDIAN_RECENT:7]
   → chat.py 检测命令
-  → obsidian.py 读取最近7篇，拼接摘要
+  → obsidian.py 读取最近7篇，每篇调用 flash-lite 摘要（跳过模板）
   → 插入 system 消息："📖 已读取最近7篇日记：\n..."
   → 二次调用 AI，bot 结合内容回复用户
 ```
@@ -101,5 +102,7 @@ OBSIDIAN_SEARCH_PATTERN = re.compile(r'\[OBSIDIAN_SEARCH:([^\]]+)\]')
 
 - N 最大 14，超出截断为 14
 - 搜索结果最多返回 10 篇
-- 每篇日记摘要截取前 300 字（RECENT 模式）
+- RECENT 模式：每篇调用 flash-lite 摘要，跳过模板头，提取实质内容（100字内）
+- OBSIDIAN_READ 单篇：返回全文，由 bot 自行处理（无需摘要）
+- flash-lite 摘要失败时降级为截取正文第一个非空标题段落后的内容
 - 不写入、不修改任何日记文件，只读
