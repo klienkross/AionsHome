@@ -368,31 +368,19 @@ def _subdivide_long(seg: list, target_max: int) -> list[list]:
     return _fixed_size_split(seg, target_max)
 
 
-def _split_into_groups(
-    msgs: list,
-    gap_seconds: int = 3600,
-    target_min: int = 10,
-    target_max: int = 20,
-) -> list[list]:
-    """按时间戳聚合消息分组：
-    1) 相邻间隔 > gap_seconds 切段；
-    2) 短段（<target_min）单次贪心合并到时间近邻段；
-    3) 长段（>target_max）按段内最大显著 gap 切分，找不到则按 target_max 硬切。
-    """
-    if not msgs:
-        return []
-    if len(msgs) <= target_max:
-        return [msgs]
-
-    # Step 1: 按时间间隙粗切
+def _time_gap_split(msgs: list, gap_seconds: int) -> list[list]:
+    """Step 1: 按相邻时间间隔 > gap_seconds 切段"""
     segments: list[list] = [[msgs[0]]]
     for i in range(1, len(msgs)):
         if msgs[i]["created_at"] - msgs[i - 1]["created_at"] > gap_seconds:
             segments.append([msgs[i]])
         else:
             segments[-1].append(msgs[i])
+    return segments
 
-    # Step 2: 短段单次贪心合并
+
+def _merge_short_segments(segments: list[list], target_min: int) -> list[list]:
+    """Step 2: 短段单次贪心合并到时间近邻段"""
     merged: list[list] = []
     i = 0
     while i < len(segments):
@@ -401,18 +389,13 @@ def _split_into_groups(
             merged.append(seg)
             i += 1
             continue
-
-        # 候选邻居：merged 末尾 (prev) 与 segments[i+1] (next)
         prev = merged[-1] if merged else None
         nxt = segments[i + 1] if i + 1 < len(segments) else None
-
         if prev is None and nxt is None:
             merged.append(seg)
         elif prev is None:
-            # 边界（首段）：只能并入下一段
             segments[i + 1] = seg + nxt
         elif nxt is None:
-            # 边界（末段）：只能并入前一段
             merged[-1] = prev + seg
         else:
             gap_left = seg[0]["created_at"] - prev[-1]["created_at"]
@@ -422,11 +405,99 @@ def _split_into_groups(
             else:
                 segments[i + 1] = seg + nxt
         i += 1
+    return merged
 
-    # Step 3: 长段细分
+
+def _split_into_groups(
+    msgs: list,
+    gap_seconds: int = 3600,
+    target_min: int = 10,
+    target_max: int = 20,
+) -> list[list]:
+    """同步版：时间 gap 切段 + 短段合并 + 长段时间/B1 细分"""
+    if not msgs:
+        return []
+    if len(msgs) <= target_max:
+        return [msgs]
+    segments = _time_gap_split(msgs, gap_seconds)
+    merged = _merge_short_segments(segments, target_min)
     result: list[list] = []
     for seg in merged:
         result.extend(_subdivide_long(seg, target_max))
+    return result
+
+
+async def _semantic_split_segment(
+    seg: list,
+    user_name: str,
+    ai_name: str,
+    target_max: int,
+) -> list[list]:
+    """调 flash-lite 找话题切点；失败/无切点时返回 [seg]。"""
+    if len(seg) <= target_max:
+        return [seg]
+
+    lines = []
+    for idx, m in enumerate(seg):
+        ts = datetime.fromtimestamp(m["created_at"]).strftime("%m-%d %H:%M")
+        speaker = user_name if m["role"] == "user" else ai_name
+        snippet = m["content"][:80].replace("\n", " ")
+        lines.append(f"{idx}. [{ts}] {speaker}: {snippet}")
+    body = "\n".join(lines)
+
+    prompt = (
+        "下面是一段连续对话，请识别其中的话题切换点。\n"
+        "返回 JSON 对象 {\"breaks\": [索引列表]}，索引指**新话题起始消息**的编号"
+        f"（必须在 1 到 {len(seg)-1} 范围内，升序，去重）。\n"
+        "如果整段只有一个话题，返回 {\"breaks\": []}。\n"
+        "话题切换的判定：明显从一个主题/任务/情境跳到另一个；"
+        "纯粹的细节延伸或情绪起伏不算切换。\n"
+        "严格只输出 JSON 对象，不要其它内容。\n\n"
+        f"【对话】\n{body}"
+    )
+
+    result = await _call_flash_lite(prompt)
+    if not result:
+        return [seg]
+    breaks = result.get("breaks", [])
+    if not isinstance(breaks, list):
+        return [seg]
+    valid = sorted({int(b) for b in breaks if isinstance(b, (int, float)) and 1 <= int(b) <= len(seg) - 1})
+    if not valid:
+        return [seg]
+
+    parts: list[list] = []
+    prev = 0
+    for b in valid:
+        parts.append(seg[prev:b])
+        prev = b
+    parts.append(seg[prev:])
+    return [p for p in parts if p]
+
+
+async def _split_into_groups_smart(
+    msgs: list,
+    user_name: str,
+    ai_name: str,
+    gap_seconds: int = 3600,
+    target_min: int = 10,
+    target_max: int = 20,
+) -> list[list]:
+    """异步版：在长段进入时间/B1 细分前，先尝试语义切分。"""
+    if not msgs:
+        return []
+    if len(msgs) <= target_max:
+        return [msgs]
+    segments = _time_gap_split(msgs, gap_seconds)
+    merged = _merge_short_segments(segments, target_min)
+    result: list[list] = []
+    for seg in merged:
+        if len(seg) <= target_max:
+            result.append(seg)
+            continue
+        sub = await _semantic_split_segment(seg, user_name, ai_name, target_max)
+        for s in sub:
+            result.extend(_subdivide_long(s, target_max))
     return result
 
 
@@ -479,7 +550,7 @@ async def manual_digest() -> dict:
     user_name = wb.get("user_name", "用户")
     ai_name = wb.get("ai_name", "AI")
 
-    groups = _split_into_groups(new_msgs, 20)
+    groups = await _split_into_groups_smart(new_msgs, user_name, ai_name)
     total_new = 0
 
     for group in groups:
