@@ -34,7 +34,7 @@ def load_settings():
     if SETTINGS_PATH.exists():
         with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
             return json.load(f)
-    keys = {"gemini_key": "", "siliconflow_key": "", "gemini_free_key": "", "aipro_key": "", "custom_keys": {}}
+    keys = {"gemini_key": "", "siliconflow_key": "", "gemini_free_key": "", "aipro_key": "", "dashscope_key": "", "custom_keys": {}}
     txt = BASE_DIR.parent / "所需要的API.txt"
     if txt.exists():
         with open(txt, "r", encoding="utf-8") as f:
@@ -61,6 +61,8 @@ def get_key(provider: str) -> str:
         return SETTINGS.get("aipro_key", "")
     if provider == "siliconflow":
         return SETTINGS.get("siliconflow_key", "")
+    if provider == "dashscope":
+        return SETTINGS.get("dashscope_key", "")
     # 自定义端点：provider 传入 key_name，从 custom_keys 映射中取
     return SETTINGS.get("custom_keys", {}).get(provider, "")
 

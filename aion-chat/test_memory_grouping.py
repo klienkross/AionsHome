@@ -1,6 +1,8 @@
 """测试 memory._split_into_groups 的时间戳聚合行为"""
 
 import asyncio
+from unittest.mock import AsyncMock, patch
+
 import memory
 from memory import _split_into_groups, _subdivide_long, _fixed_size_split, _split_into_groups_smart
 
@@ -9,11 +11,11 @@ def mk(msgs_ts: list[float]) -> list[dict]:
     return [{"id": i, "created_at": ts, "role": "user", "content": "x"} for i, ts in enumerate(msgs_ts)]
 
 
-def stub_flash_lite(result_or_fn):
-    """替换 memory._call_flash_lite 为返回固定结果（或调用回调）的 stub。"""
-    async def fake(prompt):
+def stub_sentinel(result_or_fn):
+    """替换 sentinel.call_sentinel 为返回固定结果的 stub。"""
+    async def fake(prompt, **kwargs):
         return result_or_fn(prompt) if callable(result_or_fn) else result_or_fn
-    memory._call_flash_lite = fake
+    memory.call_sentinel = fake
 
 
 def total_len(groups):
@@ -110,7 +112,7 @@ def test_long_segment_uniform_falls_back_to_b1():
 def test_smart_semantic_split_uses_breaks():
     # 30 条均匀间隔（>20 触发语义路径）；stub 返回 breaks=[10, 20] → 切成 [10, 10, 10]
     msgs = mk([i * 60.0 for i in range(30)])
-    stub_flash_lite({"breaks": [10, 20]})
+    stub_sentinel({"breaks": [10, 20]})
     groups = asyncio.run(_split_into_groups_smart(msgs, "K", "bot"))
     assert [len(g) for g in groups] == [10, 10, 10]
 
@@ -118,7 +120,7 @@ def test_smart_semantic_split_uses_breaks():
 def test_smart_semantic_no_breaks_falls_back_to_b1():
     # 50 条均匀间隔；stub 返回空 breaks → 走 _subdivide_long → B1 切 20+20+10
     msgs = mk([i * 60.0 for i in range(50)])
-    stub_flash_lite({"breaks": []})
+    stub_sentinel({"breaks": []})
     groups = asyncio.run(_split_into_groups_smart(msgs, "K", "bot"))
     assert sum(len(g) for g in groups) == 50
     assert all(len(g) <= 20 for g in groups)
@@ -126,9 +128,9 @@ def test_smart_semantic_no_breaks_falls_back_to_b1():
 
 
 def test_smart_semantic_failure_falls_back_gracefully():
-    # flash-lite 调用失败（返回 None）→ 不应抛错，等价于无切点 → B1 兜底
+    # sentinel 调用失败（返回 None）→ 不应抛错，等价于无切点 → B1 兜底
     msgs = mk([i * 60.0 for i in range(50)])
-    stub_flash_lite(None)
+    stub_sentinel(None)
     groups = asyncio.run(_split_into_groups_smart(msgs, "K", "bot"))
     assert sum(len(g) for g in groups) == 50
     assert len(groups) == 3
@@ -137,7 +139,7 @@ def test_smart_semantic_failure_falls_back_gracefully():
 def test_smart_semantic_break_then_long_subseg_recurses_to_b1():
     # 30 条均匀；stub 返回 breaks=[5] → 切成 [5, 25]；25 仍超 target_max → B1 切成 [5, 20, 5]
     msgs = mk([i * 60.0 for i in range(30)])
-    stub_flash_lite({"breaks": [5]})
+    stub_sentinel({"breaks": [5]})
     groups = asyncio.run(_split_into_groups_smart(msgs, "K", "bot"))
     assert sum(len(g) for g in groups) == 30
     assert all(len(g) <= 20 for g in groups)

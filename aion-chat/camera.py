@@ -5,16 +5,17 @@
 import json, time, re, base64, asyncio, threading, sqlite3, random
 from pathlib import Path
 
-import cv2, httpx, aiosqlite
+import cv2, aiosqlite
 
 from config import (
     DB_PATH, SCREENSHOTS_DIR, MONITOR_LOGS_DIR,
-    get_key, load_worldbook, load_chat_status, load_cam_config, save_cam_config, DEFAULT_MODEL, SETTINGS,
+    load_worldbook, load_chat_status, load_cam_config, save_cam_config, DEFAULT_MODEL, SETTINGS,
 )
 from database import get_db
 from ws import manager
 from ai_providers import stream_ai
 from memory import recall_memories
+from sentinel import call_sentinel
 from tts import TTSStreamer
 
 
@@ -519,50 +520,22 @@ call_core判断依据：
 - 结合设备活动动态综合判断：根据上下文分析，如果动态显示{user_name}不符合上下文讨论到的内容，例如：说去睡觉了，却在刷抖音小红书。说去工作了，却在浏览不相干的内容，进行评估，自行决定是否向Core报告情况。"""
 
         img_b64 = base64.b64encode(filepath.read_bytes()).decode()
-        sentinel_model = "gemini-3.1-flash-lite-preview"
-        gemini_key = get_key("gemini_free")
-        if not gemini_key:
-            print("[Monitor] Gemini API Key 未配置，跳过分析")
-            return
-
-        contents = [{"role": "user", "parts": [
-            {"text": prompt},
-            {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
-        ]}]
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{sentinel_model}:generateContent?key={gemini_key}"
-        payload = {"contents": contents}
-        print(f"[Monitor] 正在调用 Sentinel 模型: {sentinel_model}")
+        print("[Monitor] 正在调用 Sentinel (qwen3-vl-flash)")
 
         monitoring_log = ""
         call_core = False
+        summary = ""
+        core_reason = ""
 
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(url, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-
-            cleaned = raw_text.strip()
-            if cleaned.startswith("```"):
-                cleaned = re.sub(r"^```\w*\n?", "", cleaned)
-                cleaned = re.sub(r"\n?```$", "", cleaned)
-                cleaned = cleaned.strip()
-            parsed = json.loads(cleaned)
-            monitoring_log = parsed.get("monitoringlog", raw_text)
+        parsed = await call_sentinel(prompt, image_b64=img_b64, timeout=60)
+        if parsed is None:
+            monitoring_log = "[Sentinel 分析失败]"
+            print("[Monitor] Sentinel API 调用失败或 key 未配置")
+        else:
+            monitoring_log = parsed.get("monitoringlog", "")
             call_core = bool(parsed.get("call_core", False))
             summary = parsed.get("summary", "")
             core_reason = parsed.get("core_reason", "")
-        except json.JSONDecodeError:
-            monitoring_log = raw_text.strip() if 'raw_text' in dir() else "[Sentinel 无响应]"
-            summary = ""
-            core_reason = ""
-        except Exception as e:
-            monitoring_log = f"[Sentinel 分析失败] {e}"
-            print(f"[Monitor] Sentinel API 调用异常: {e}")
-            summary = ""
-            core_reason = ""
 
         print(f"[Monitor] 分析完成, call_core={call_core}, log长度={len(monitoring_log)}")
         now = time.time()

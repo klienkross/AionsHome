@@ -5,9 +5,7 @@ Obsidian 日记读取：read_diary / read_recent / search_diary / summarize_diar
 from datetime import date, timedelta
 from pathlib import Path
 
-import httpx
-
-from config import SETTINGS, get_key
+from config import SETTINGS
 
 
 def _vault() -> Path | None:
@@ -51,25 +49,15 @@ async def search_diary(keyword: str) -> str:
 
 
 async def summarize_diary(date_str: str, content: str) -> str:
-    """调用 Gemini flash-lite 提取日记实质内容（跳过模板头），失败则降级截取。"""
-    gemini_key = get_key("gemini_free")
-    if not gemini_key:
-        return _fallback_summary(content)
+    """调用哨兵提取日记实质内容（跳过模板头），失败则降级截取。"""
+    from sentinel import call_sentinel_text
+
     prompt = (
         f"以下是 {date_str} 的日记，可能有固定模板头部（如天气、习惯打卡等）。"
         f"请跳过模板内容，用100字以内提取今天实际发生的事和心情。若无实质内容则回复'（无记录）'。\n\n{content}"
     )
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash-lite:generateContent?key={gemini_key}"
-    )
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(url, json={"contents": [{"role": "user", "parts": [{"text": prompt}]}]})
-            resp.raise_for_status()
-            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except Exception:
-        return _fallback_summary(content)
+    result = await call_sentinel_text(prompt, timeout=15)
+    return result if result else _fallback_summary(content)
 
 
 def _fallback_summary(content: str) -> str:

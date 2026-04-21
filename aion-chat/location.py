@@ -604,11 +604,6 @@ async def _notify_sentinel(old_state: str, new_state: str, status: dict, event_d
     ai_name = wb.get("ai_name", "AI")
     now_str = time.strftime("%Y年%m月%d日 %H:%M:%S")
 
-    gemini_key = get_key("gemini_free")
-    if not gemini_key:
-        print("[Location] Gemini API Key 未配置，跳过哨兵通知")
-        return
-
     last_user_ts = await async_get_last_user_msg_time()
     last_user_time_str = (
         time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_user_ts))
@@ -676,36 +671,21 @@ async def _notify_sentinel(old_state: str, new_state: str, status: dict, event_d
 请严格按照以下JSON格式回复，不要包含其他内容：
 {{"monitoringlog":"位置变化事件记录，例如：检测到{user_name}离开了家，当前位于XX。","call_core":false,"core_reason":""}}"""
 
-    sentinel_model = "gemini-3.1-flash-lite-preview"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{sentinel_model}:generateContent?key={gemini_key}"
-    contents = [{"role": "user", "parts": [{"text": prompt}]}]
-    payload = {"contents": contents}
+    from sentinel import call_sentinel
 
     monitoring_log = event_desc
     call_core = False
     core_reason = ""
 
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-
-        cleaned = raw_text.strip()
-        if cleaned.startswith("```"):
-            cleaned = re.sub(r"^```\w*\n?", "", cleaned)
-            cleaned = re.sub(r"\n?```$", "", cleaned)
-            cleaned = cleaned.strip()
-        parsed = json.loads(cleaned)
+    parsed = await call_sentinel(prompt, timeout=60)
+    if parsed is None:
+        print("[Location] 哨兵分析失败")
+        call_core = True
+        core_reason = f"位置变化哨兵分析失败，默认唤醒Core通知：{event_desc}"
+    else:
         monitoring_log = parsed.get("monitoringlog", event_desc)
         call_core = bool(parsed.get("call_core", False))
         core_reason = parsed.get("core_reason", "")
-    except Exception as e:
-        print(f"[Location] 哨兵分析失败: {e}")
-        # 分析失败时默认通知 Core（保守策略）
-        call_core = True
-        core_reason = f"位置变化哨兵分析失败，默认唤醒Core通知：{event_desc}"
 
     print(f"[Location] 哨兵判断: call_core={call_core}, reason={core_reason}")
 

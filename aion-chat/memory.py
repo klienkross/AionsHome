@@ -1,28 +1,30 @@
 """
 向量记忆库：embedding、recall、手动总结、即时哨兵（RAG 路由）
+底层哨兵/向量调用统一走 sentinel 模块（阿里云百炼 DashScope）。
 """
 
-import json, time, struct, math
+import json, time, math
 from datetime import datetime
 
-import aiosqlite, httpx
+import aiosqlite
 
-from config import get_key, load_worldbook, save_chat_status, load_digest_anchor, save_digest_anchor
+from config import load_worldbook, save_chat_status, load_digest_anchor, save_digest_anchor
 from database import get_db
 from ws import manager
+from sentinel import (
+    call_sentinel,
+    get_embedding,
+    _pack_embedding,
+    _unpack_embedding,
+    EMBEDDING_DIMS,
+)
 
-# ── 向量工具 ──────────────────────────────────────
-EMBEDDING_MODEL = "gemini-embedding-001"
-EMBEDDING_DIMS = 3072
-
-
-def _pack_embedding(values: list[float]) -> bytes:
-    return struct.pack(f'{len(values)}f', *values)
-
-
-def _unpack_embedding(blob: bytes) -> list[float]:
-    n = len(blob) // 4
-    return list(struct.unpack(f'{n}f', blob))
+# 供外部 `from memory import get_embedding, _pack_embedding, _unpack_embedding` 继续工作
+__all__ = [
+    "get_embedding", "_pack_embedding", "_unpack_embedding",
+    "cosine_similarity", "recall_memories", "fetch_source_details",
+    "build_surfacing_memories", "instant_digest", "manual_digest",
+]
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -32,21 +34,6 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
-
-
-async def get_embedding(text: str) -> list[float] | None:
-    gemini_key = get_key("gemini_free")
-    if not gemini_key:
-        return None
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{EMBEDDING_MODEL}:embedContent?key={gemini_key}"
-    body = {"content": {"parts": [{"text": text}]}}
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(url, json=body)
-            resp.raise_for_status()
-            return resp.json()["embedding"]["values"]
-    except Exception:
-        return None
 
 
 # ── 关键词匹配辅助 ──────────────────────
@@ -249,11 +236,10 @@ async def build_surfacing_memories(topic: str = "", keywords: list[str] = None,
 # ── 即时哨兵：每次用户发消息后触发（RAG 路由） ────
 async def instant_digest(recent_messages: list[dict]) -> dict:
     """
-    用户每次发消息后即时调用 flash-lite，返回结构化 JSON：
-    {is_search_needed, keywords, require_detail, status}
+    用户每次发消息后即时调用哨兵，返回结构化 JSON：
+    {is_search_needed, keywords, require_detail, status, topic}
     """
-    gemini_key = get_key("gemini_free")
-    if not gemini_key or not recent_messages:
+    if not recent_messages:
         return {"is_search_needed": False, "keywords": [], "require_detail": False, "status": "", "topic": ""}
 
     wb = load_worldbook()
@@ -284,47 +270,30 @@ async def instant_digest(recent_messages: list[dict]) -> dict:
         f"对话：\n{messages_text}"
     )
 
-    model = "gemini-3.1-flash-lite-preview"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
-    contents = [{"role": "user", "parts": [{"text": prompt}]}]
-
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(url, json={"contents": contents})
-            resp.raise_for_status()
-            data = resp.json()
-            raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-
-        # 提取 JSON（可能包裹在 ```json ... ``` 中）
-        if "```" in raw:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                raw = raw[start:end]
-
-        result = json.loads(raw)
-        is_search = bool(result.get("is_search_needed", False))
-        keywords = result.get("keywords", [])
-        if isinstance(keywords, str):
-            keywords = [k.strip() for k in keywords.replace("、", ",").split(",") if k.strip()]
-        require_detail = bool(result.get("require_detail", False))
-        status = str(result.get("status", "")).strip()
-
-        if status:
-            save_chat_status(status)
-            await manager.broadcast({"type": "chat_status", "data": {"status": status, "updated_at": time.time()}})
-
-        topic = str(result.get("topic", "")).strip()
-
-        return {
-            "is_search_needed": is_search,
-            "keywords": keywords,
-            "require_detail": require_detail,
-            "status": status,
-            "topic": topic,
-        }
-    except Exception:
+    result = await call_sentinel(prompt, timeout=15, max_retries=1)
+    if not result:
         return {"is_search_needed": False, "keywords": [], "require_detail": False, "status": "", "topic": ""}
+
+    is_search = bool(result.get("is_search_needed", False))
+    keywords = result.get("keywords", [])
+    if isinstance(keywords, str):
+        keywords = [k.strip() for k in keywords.replace("、", ",").split(",") if k.strip()]
+    require_detail = bool(result.get("require_detail", False))
+    status = str(result.get("status", "")).strip()
+
+    if status:
+        save_chat_status(status)
+        await manager.broadcast({"type": "chat_status", "data": {"status": status, "updated_at": time.time()}})
+
+    topic = str(result.get("topic", "")).strip()
+
+    return {
+        "is_search_needed": is_search,
+        "keywords": keywords,
+        "require_detail": require_detail,
+        "status": status,
+        "topic": topic,
+    }
 
 
 # ── 手动总结：分组提取记忆 ─────────────────────────
@@ -433,7 +402,7 @@ async def _semantic_split_segment(
     ai_name: str,
     target_max: int,
 ) -> list[list]:
-    """调 flash-lite 找话题切点；失败/无切点时返回 [seg]。"""
+    """调哨兵找话题切点；失败/无切点时返回 [seg]。"""
     if len(seg) <= target_max:
         return [seg]
 
@@ -456,7 +425,7 @@ async def _semantic_split_segment(
         f"【对话】\n{body}"
     )
 
-    result = await _call_flash_lite(prompt)
+    result = await call_sentinel(prompt)
     if not result:
         return [seg]
     breaks = result.get("breaks", [])
@@ -496,34 +465,12 @@ async def _split_into_groups_smart(
             result.append(seg)
             continue
         sub = await _semantic_split_segment(seg, user_name, ai_name, target_max)
+        # 语义切出的子段可能过碎，再跑一次短段合并（仅在本段产物内）
+        if len(sub) > 1:
+            sub = _merge_short_segments(sub, target_min)
         for s in sub:
             result.extend(_subdivide_long(s, target_max))
     return result
-
-
-async def _call_flash_lite(prompt: str) -> dict | None:
-    """调用 flash-lite 模型，返回 JSON 结果"""
-    gemini_key = get_key("gemini_free")
-    if not gemini_key:
-        return None
-    model = "gemini-3.1-flash-lite-preview"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={gemini_key}"
-    contents = [{"role": "user", "parts": [{"text": prompt}]}]
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(url, json={"contents": contents})
-            resp.raise_for_status()
-            data = resp.json()
-            raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        # 提取 JSON
-        if "```" in raw:
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            if start >= 0 and end > start:
-                raw = raw[start:end]
-        return json.loads(raw)
-    except Exception:
-        return None
 
 
 async def manual_digest() -> dict:
@@ -589,7 +536,7 @@ async def manual_digest() -> dict:
             f"【一段对话记录】：\n{messages_text}"
         )
 
-        result = await _call_flash_lite(prompt)
+        result = await call_sentinel(prompt)
         if not result:
             continue
 
