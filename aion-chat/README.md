@@ -42,18 +42,19 @@
 │   ├── toy_control_v4.html       # 独立 BLE 控制页面（可单独使用）
 │   └── 逆向分析笔记.md           # SOSEXY 设备协议逆向笔记
 └── aion-chat/
-    ├── main.py                   # 入口：lifespan、路由注册、静态挂载、WebSocket、PWA 路由
+    ├── main.py                   # 入口：lifespan、路由注册、静态挂载、WebSocket、PWA 路由、自动记忆总结定时任务
     ├── config.py                 # 全局路径、常量、settings/worldbook/chat_status/cam_config 读写
     ├── database.py               # SQLite 初始化（conversations/messages/memories/schedules/theater 等表 + 性能索引）
     ├── ws.py                     # WebSocket ConnectionManager 单例，含 tts_clients 状态追踪 + _tts_fallback HTTP 回落机制 + client_id 注册/定向推送
-    ├── ai_providers.py           # AI 调用：硅基流动/Gemini/AiPro中转站 流式 + 多模态消息构建
-    ├── memory.py                 # 向量记忆：embedding、综合评分召回、手动总结、即时哨兵(RAG路由)、原文追溯
+    ├── ai_providers.py           # AI 调用：硅基流动/Gemini/AiPro中转站 流式 + 非流式 + 多模态消息构建
+    ├── memory.py                 # 向量记忆：embedding、综合评分召回、手动/自动总结、即时哨兵(RAG路由)、原文追溯
     ├── camera.py                 # 摄像头：CameraMonitor 类、Sentinel 分析（注入设备活动摘要）、Core 唤醒、[CAM_CHECK]
     ├── location.py               # 高德地图定位：GPS心跳处理、三级研判、状态机(at_home/outside)、哨兵通知、POI搜索
     ├── voice.py                  # 语音唤醒 + 半双工通话（WebRTC VAD + 硬基流动 ASR），通话中自动携带 TTS 参数
     ├── tts.py                    # 服务端流式 TTS：按句切分（100-200字）+ 异步并行合成 + WebSocket/SSE 推送音频分片
     ├── schedule.py               # 日程/闹铃/定时监控管理器：ScheduleManager、文本指令解析、闹铃触发Core唤醒、定时监控截图+Core分析（注入设备活动摘要）
     ├── ghost_forest.py            # 奥罗斯幽林 TRPG 引擎：会话管理、AI 对话历史压缩、D20 骰子判定、角色属性/道具系统
+    ├── gift.py                    # 礼物系统：AI 判断送礼 + 硅基流动 Kolors 生图 + 礼物数据 CRUD
     ├── book.py                    # EPUB 解析模块：书籍导入、章节拆分、段落标注、图片提取
     ├── routes/
     │   ├── __init__.py
@@ -70,7 +71,8 @@
     │   ├── heart_whispers.py     # 心语 API（列表查询 + 删除）
     │   ├── activity.py           # 活动日志 API（上报/查询/清理/状态诊断/10分钟摘要/AI联动开关配置）
     │   ├── voice.py              # 语音唤醒/通话控制 API
-    │   └── ghost_forest.py       # 奥罗斯幽林 TRPG API（16 个端点：人设/会话/剧情生成/选择/骰子/大结局）+ SSE 流式 TTS
+    │   ├── ghost_forest.py       # 奥罗斯幽林 TRPG API（16 个端点：人设/会话/剧情生成/选择/骰子/大结局）+ SSE 流式 TTS
+    │   └── gift.py               # 礼物系统 API（pending/receive/list/delete/test）
     ├── activity.py               # 设备活动日志：JSONL 存储、自动清理（保留最近 3 小时）、PC 前台窗口采集（win32gui+psutil）、App 包名→中文名映射、10分钟窗口摘要（时长权重+carry-forward状态追溯）、AI联动开关+Prompt摘要生成
     ├── music.py                  # pyncm 封装层（搜索/歌曲详情/音频URL/MUSIC_U Cookie 登录/匿名登录）
     ├── README.md                 # 本文件
@@ -92,6 +94,7 @@
     │   ├── reading.html          # 阅读页 → /reading（书架+阅读器+AI批注+选文聊天+音乐播放）
     │   ├── theater.html          # 小剧场页 → /theater（独立聊天+多角色管理+TTS，茶色暗色主题）
     │   ├── ghost-forest.html     # 奥罗斯幽林页 → /ghost-forest（TRPG 游戏：D20 骰子+角色扮演+AI DM）
+    │   ├── gift.html              # 爱的印记页 → /gift（礼物陈列馆，缩略图网格+详情弹窗）
     │   ├── video-call.js         # 视频通话模块：摄像头预览 + 截图 + 语音复用 + 来电/去电 UI
     │   ├── manifest.json         # PWA Web App Manifest（从 /manifest.json 提供）
     │   └── sw.js                 # PWA Service Worker（从 /sw.js 提供）
@@ -133,6 +136,7 @@
 | `/reading` | reading.html 阅读页（书架+阅读器+AI批注+选文聊天） |
 | `/theater` | theater.html 小剧场页（独立聊天+多角色+TTS） |
 | `/ghost-forest` | ghost-forest.html 奥罗斯幽林页（TRPG 冒险游戏） |
+| `/gift` | gift.html 爱的印记页（礼物陈列馆） |
 | `/manifest.json` | PWA Web App Manifest |
 | `/sw.js` | PWA Service Worker（根路径提供，作用域覆盖全站） |
 | `/public/*` | 公共资源 |
@@ -160,7 +164,8 @@
 ### 哨兵/向量模型（支持独立 Gemini Free Key）
 - Sentinel 哨兵分析 → `gemini-3.1-flash-lite-preview`
 - 向量 Embedding → `gemini-embedding-001`（3072维）
-- 即时哨兵 / 手动总结 → `gemini-3.1-flash-lite-preview`
+- 即时哨兵 → `gemini-3.1-flash-lite-preview`
+- 记忆总结（手动/自动） → 当前聊天对话的核心模型（跟随用户选择）
 
 哨兵和向量模型支持配置独立的 Gemini Free Key，留空则自动复用主 Gemini Key。
 
@@ -190,7 +195,7 @@
 16. **Debug 条** — 每条 AI 消息下方显示：模型名、输入/输出/总 token、召回记忆数，点击展开详情
 
 ### 向量记忆库（RAG 重构）
-17. **手动总结（manual_digest）** — 用户点击「总结新记忆」按钮触发，从锚点之后的消息开始，每 20 条一组串行处理（余数 <5 合并到最后一组），flash-lite 提取结构化记忆（含关键词 + 重要度 0-1 + unresolved 判断），每组成功后更新锚点
+17. **记忆总结（手动 + 自动）** — 手动：用户点击「总结新记忆」按钮触发（无最低条数限制）。自动：每 30 分钟检测，若用户已 30 分钟未对话且未总结消息 ≥ 30 条则自动触发。两者共用同一套逻辑和锚点，不会重复总结。从锚点之后的消息开始，每 30 条一组串行处理（余数 <10 合并到最后一组），使用当前聊天的核心模型（而非 flash-lite）提取结构化记忆（含关键词 + 重要度 0-1 + unresolved 判断），Prompt 注入世界书 AI/用户人设使记忆更具个人视角。每组成功后更新锚点。全部总结完成后，带最近 30 条聊天上下文 + 人设再调用一次核心模型，生成一句感慨/吐槽，作为 assistant 消息插入聊天（前置一条「🧠 AI整理了记忆库」系统胶囊）
 18. **即时哨兵（instant_digest）** — 每次用户发消息时自动调用 flash-lite 分析最近对话，返回结构化 JSON：`{is_search_needed, keywords, require_detail, status, topic}`，决定是否需要搜索记忆、是否需要追溯原文细节，同时提供 topic 用于背景记忆浮现
 19. **向量化存储** — 使用 Gemini `gemini-embedding-001`（3072维）将记忆向量化，存入 SQLite memories 表，每条记忆含 keywords（JSON 关键词数组）、importance（重要度）、source_start_ts/source_end_ts（来源时间范围）、unresolved（是否待办/未完成）
 20. **综合评分召回** — `final_score = vec_sim × 0.6 + kw_score × 0.3 + importance × 0.1`，threshold=0.45，Top 5。关键词匹配支持子串模糊命中
@@ -409,7 +414,7 @@
 
 ### 背景记忆浮现（替代旧版“近期记忆注入”）
 104. **智能背景记忆浮现** — 每次发消息/重新生成时，通过三层策略构建背景记忆（最多 8 条）：① unresolved 记忆优先（最多 2 条，待办/未完成的事项）→ ② 话题相关浮现（用即时哨兵的 topic 做 embedding 匹配，Top 3）→ ③ 近期补充（最近 3 天，补满 8 条）。与 RAG 精确召回自动去重
-105. **Unresolved 标记** — 记忆表新增 `unresolved` 字段，标记悬而未决的计划/约定/承诺。手动总结时 flash-lite 自动判断，UI 中可通过 📌 按钮手动切换。unresolved 记忆在背景记忆中以 📌 前缀注入，确保 AI 记得追问
+105. **Unresolved 标记** — 记忆表新增 `unresolved` 字段，标记悬而未决的计划/约定/承诺。总结时核心模型自动判断，UI 中可通过 📌 按钮手动切换。unresolved 记忆在背景记忆中以 📌 前缀注入，确保 AI 记得追问
 
 ### 高德地图定位系统
 
@@ -805,6 +810,47 @@
   ⚠ AI联动开关关闭时，以上三条路径均返回空字符串，不注入任何摘要
 ```
 
+### 爱的印记（AI 礼物系统）
+317. **AI 自主送礼** — 每次自动记忆总结完成后，AI 综合判断是否需要给用户送一份礼物。判断依据：今天的聊天是否有特别温馨/感动/有意义的内容、是否是特殊日子（节日/纪念日/生日等）、用户的心情状态。Prompt 注入当前精确时间（年月日星期时分秒）+ 本次总结的所有记忆摘要 + 最近聊天上下文 + 世界书人设，要求 AI 返回结构化 JSON（`givegift` / `image_prompt` / `message`）
+318. **硅基流动 Kolors 生图** — AI 决定送礼后，使用 `image_prompt` 调用硅基流动 `Kwai-Kolors/Kolors` 模型（免费）生成 1024×1024 图片。Prompt 约束为 cute cartoon style、不生成真实人物。图片 URL 1 小时过期，后端立即下载保存到 `data/uploads/gift_{timestamp}.png`
+319. **礼物弹窗动画（全页面）** — 礼物生成后通过 WebSocket 广播 `gift_pending` 事件。前端任何页面（聊天页 chat.html + 所有子页面 common.js）收到后弹出全屏礼物动画。打开聊天页/子页面时也会自动检查 `GET /api/gift/pending` 并弹窗
+320. **礼物盒开启流程** — ① SVG 礼物盒从底部弹跳入场 → ② 用户点击打开 → 播放「打开礼物.mp3」音效 → 盒盖飞走 + 60 个彩色礼花粒子爆炸 → ③ 图片从中心缩放淡入 → ④ 点击图片 → AI 的配图文字滑出 → 「💝 收下礼物」按钮出现 → ⑤ 点击收下 → 整体缩小飞走动画 → POST 标记 received
+321. **爱的印记陈列馆** — `/gift` 页面（`gift.html`），暗色画廊风格，3 列缩略图网格展示所有已收到的礼物（缩略图+日期），点击打开详情弹窗（大图+日期+文字+删除按钮），按时间倒序排列
+322. **礼物数据** — 存储在 SQLite `gifts` 表（id, image_path, message, created_at, status, received_at），status 为 `pending`（未领取）或 `received`（已领取）。删除礼物时同步清理本地图片文件
+323. **不过度送礼** — Prompt 中明确要求 AI「不要每次都送，只在真正值得的时候才送，大部分时候应该返回 false」
+324. **测试按钮** — 爱的印记页面右上角「🎁 测试送礼」按钮，取最近 5 条记忆 + 最近 20 条上下文触发完整送礼流程（AI 判断 + 生图 + 入库 + WebSocket 推送）
+325. **主页入口** — home.html APPS 数组增加「爱的印记」（`/public/funIcon_0018_爱的印记.png`）
+
+### 爱的印记工作流程
+```
+【触发时机（记忆总结完成后）】
+  _do_digest() 完成记忆总结 + 生成感慨消息
+  → 调用 gift.judge_and_send_gift()
+  → 构建判断 Prompt（人设 + 当前时间 + 记忆摘要 + 上下文）
+  → simple_ai_call() 调用核心模型 → 返回 JSON
+  → givegift = false？→ 结束
+  → givegift = true？→ 提取 image_prompt + message
+
+【生图 + 入库】
+  → POST https://api.siliconflow.cn/v1/images/generations
+    model: Kwai-Kolors/Kolors, 1024x1024
+  → 下载图片 → 保存 data/uploads/gift_{ts}.png
+  → INSERT INTO gifts (status='pending')
+  → WebSocket 广播 gift_pending 事件
+
+【前端弹窗（chat.html + common.js）】
+  页面加载 → GET /api/gift/pending → 有未领取？弹窗
+  WebSocket 收到 gift_pending → 弹窗
+  → SVG 礼物盒弹入 → 点击打开 → 播放音效 + 礼花 → 图片展示
+  → 点击图片 → 显示配图文字 → 「收下礼物」
+  → POST /api/gift/{id}/receive → 飞走动画
+
+【陈列馆（gift.html）】
+  GET /api/gift/list → 3列缩略图网格
+  → 点击缩略图 → 详情弹窗（大图+文字+日期）
+  → 可删除 → DELETE /api/gift/{id}（同步清理图片文件）
+```
+
 ### 浏览器保活 & 系统通知
 105. **静音音频保活** — 页面加载后自动创建 AudioContext 播放无声音频（30秒循环），防止手机浏览器后台休眠导致 WebSocket 断连和闹铃失效
 106. **Web Notification** — 闹铃触发和监控提醒时通过 `Notification API` 发送系统级推送通知，即使浏览器在后台也能看到
@@ -943,11 +989,14 @@
     fetch_source_details: 在记忆 source 时间范围内按关键词筛选原始对话
     → 原文细节追加注入 prompt
 
-【手动总结 manual_digest — 用户点击按钮触发】
-  从锚点时间之后取消息 → 每 20 条一组（余数<5合并）→ 串行处理：
-    flash-lite 分析 → 输出 JSON 数组:
-      [{"content": "记忆内容", "type": "类型", "keywords": [...], "importance": 0.8, "unresolved": true/false}]
-    → 逐条 embedding 向量化 → 存入 SQLite → 更新锚点
+【记忆总结 _do_digest — 手动点击按钮 / 自动定时触发】
+  自动触发条件：每 30 分钟检测，用户已 30 分钟未对话 且 未总结消息 ≥ 30 条
+  手动触发：无最低条数限制，共用锚点不会重复总结
+  从锚点时间之后取消息 → 每 30 条一组（余数<10合并）→ 串行处理：
+    核心模型（当前聊天模型）分析，注入世界书 AI/用户人设 → 输出 JSON:
+      {"summary": "...", "keywords": [...], "importance": 0.8, "unresolved": true/false}
+    → embedding 向量化 → 存入 SQLite → 更新锚点
+  全部组处理完毕后 → 核心模型带上下文生成感慨 → 插入系统胶囊 + assistant 消息
 ```
 
 ### 向量记忆库工作流程
@@ -964,10 +1013,12 @@
   recall_memories: 向量相似度×0.6 + 关键词×0.3 + 重要度×0.1
   → 过滤掉已在背景记忆中的 id → Top 5 注入 [相关记忆]
 
-【写入】manual_digest 用户手动触发
-  → flash-lite 从消息提取记忆（summary + keywords + importance + unresolved）
+【写入】手动按钮 / 自动定时触发（共用 _do_digest）
+  → 核心模型（当前聊天模型）+ 世界书人设注入，从消息提取记忆
+    （summary + keywords + importance + unresolved）
   → gemini-embedding-001 向量化（3072维）
   → 存入 SQLite memories 表 + WebSocket 广播
+  → 全部完成后生成感慨，插入聊天（系统胶囊 + assistant 消息）
 ```
 
 ## API 一览
