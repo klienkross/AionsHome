@@ -329,29 +329,105 @@ async def instant_digest(recent_messages: list[dict]) -> dict:
 
 # ── 手动总结：分组提取记忆 ─────────────────────────
 
-def _split_into_groups(msgs: list, group_size: int = 20) -> list[list]:
-    """将消息列表按每 group_size 条分组，余数<5并入最后一组，>=5单独一组"""
+def _fixed_size_split(msgs: list, group_size: int = 20) -> list[list]:
+    """按固定 group_size 切分，余数<5 并入末组（B1 兜底用）"""
     total = len(msgs)
     if total <= group_size:
         return [msgs]
-
     full_groups = total // group_size
     remainder = total % group_size
-
-    if remainder > 0 and remainder < 5:
-        # 余数<5，并入最后一个完整组
+    if 0 < remainder < 5:
         full_groups -= 1
-        # 前面的完整组
         groups = [msgs[i * group_size:(i + 1) * group_size] for i in range(full_groups)]
-        # 最后一组 = 最后一个20条 + 余数
         groups.append(msgs[full_groups * group_size:])
     else:
-        # 余数>=5 或余数=0
         groups = [msgs[i * group_size:(i + 1) * group_size] for i in range(full_groups)]
         if remainder > 0:
             groups.append(msgs[full_groups * group_size:])
-
     return groups
+
+
+def _subdivide_long(seg: list, target_max: int) -> list[list]:
+    """B2: 在段内最大显著 gap 处切分；找不到则降级 B1 硬切。"""
+    if len(seg) <= target_max:
+        return [seg]
+
+    gaps = [seg[i]["created_at"] - seg[i - 1]["created_at"] for i in range(1, len(seg))]
+    max_gap = max(gaps)
+    sorted_gaps = sorted(gaps)
+    median_gap = sorted_gaps[len(sorted_gaps) // 2]
+
+    # 启发式：最大 gap 显著（> 中位数 ×3 且 > 60s）才用它切分
+    if max_gap > 60 and max_gap > median_gap * 3:
+        cut_idx = gaps.index(max_gap) + 1  # seg[cut_idx] 是新段首条
+        left = seg[:cut_idx]
+        right = seg[cut_idx:]
+        return _subdivide_long(left, target_max) + _subdivide_long(right, target_max)
+
+    # 时间分布过于均匀，B1 兜底
+    return _fixed_size_split(seg, target_max)
+
+
+def _split_into_groups(
+    msgs: list,
+    gap_seconds: int = 3600,
+    target_min: int = 10,
+    target_max: int = 20,
+) -> list[list]:
+    """按时间戳聚合消息分组：
+    1) 相邻间隔 > gap_seconds 切段；
+    2) 短段（<target_min）单次贪心合并到时间近邻段；
+    3) 长段（>target_max）按段内最大显著 gap 切分，找不到则按 target_max 硬切。
+    """
+    if not msgs:
+        return []
+    if len(msgs) <= target_max:
+        return [msgs]
+
+    # Step 1: 按时间间隙粗切
+    segments: list[list] = [[msgs[0]]]
+    for i in range(1, len(msgs)):
+        if msgs[i]["created_at"] - msgs[i - 1]["created_at"] > gap_seconds:
+            segments.append([msgs[i]])
+        else:
+            segments[-1].append(msgs[i])
+
+    # Step 2: 短段单次贪心合并
+    merged: list[list] = []
+    i = 0
+    while i < len(segments):
+        seg = segments[i]
+        if len(seg) >= target_min:
+            merged.append(seg)
+            i += 1
+            continue
+
+        # 候选邻居：merged 末尾 (prev) 与 segments[i+1] (next)
+        prev = merged[-1] if merged else None
+        nxt = segments[i + 1] if i + 1 < len(segments) else None
+
+        if prev is None and nxt is None:
+            merged.append(seg)
+        elif prev is None:
+            # 边界（首段）：只能并入下一段
+            segments[i + 1] = seg + nxt
+        elif nxt is None:
+            # 边界（末段）：只能并入前一段
+            merged[-1] = prev + seg
+        else:
+            gap_left = seg[0]["created_at"] - prev[-1]["created_at"]
+            gap_right = nxt[0]["created_at"] - seg[-1]["created_at"]
+            if gap_left <= gap_right:
+                merged[-1] = prev + seg
+            else:
+                segments[i + 1] = seg + nxt
+        i += 1
+
+    # Step 3: 长段细分
+    result: list[list] = []
+    for seg in merged:
+        result.extend(_subdivide_long(seg, target_max))
+    return result
 
 
 async def _call_flash_lite(prompt: str) -> dict | None:
