@@ -1,17 +1,55 @@
-"""补标脚本：为已有记忆补充 valence / arousal 情绪维度。
-使用 sentinel（小模型）+ 原始对话文本标注。
+"""补标脚本：为已有记忆补充 valence / arousal 情绪维度（Russell 环形模型）。
+回溯原始对话文本标注，无原文时降级用摘要。
+兼容 sentinel 模块（DashScope）和无 sentinel 环境（Gemini / 其他）。
 """
 
 import asyncio
+import json
 import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import load_worldbook
-from sentinel import call_sentinel
 from database import init_db, get_db
 import aiosqlite
+
+# ── 模型调用：优先 sentinel，fallback 到 simple_ai_call ──
+try:
+    from sentinel import call_sentinel
+    _USE_SENTINEL = True
+    print("[backfill] 使用 sentinel（DashScope）标注")
+except ImportError:
+    _USE_SENTINEL = False
+    print("[backfill] sentinel 不可用，使用 simple_ai_call 标注")
+
+
+def _parse_json_response(raw: str) -> dict | None:
+    raw = raw.strip()
+    if "```" in raw:
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start >= 0 and end > start:
+            raw = raw[start:end]
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+async def _call_model(prompt: str) -> dict | None:
+    if _USE_SENTINEL:
+        return await call_sentinel(prompt)
+    else:
+        from ai_providers import simple_ai_call
+        from config import DEFAULT_MODEL
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            raw = await simple_ai_call(messages, DEFAULT_MODEL, temperature=0.1)
+            return _parse_json_response(raw)
+        except Exception as e:
+            print(f"    模型调用失败: {e}")
+            return None
 
 
 async def _fetch_source_messages(mem) -> str | None:
@@ -90,7 +128,7 @@ async def backfill():
             f"【{input_label}】\n{input_text}"
         )
 
-        result = await call_sentinel(prompt)
+        result = await _call_model(prompt)
         if not result or "valence" not in result:
             print(f"  [{i+1}/{len(rows)}] FAIL {mem_id[:16]}... -> {result}")
             fail += 1
