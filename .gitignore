@@ -32,6 +32,7 @@ aion-chat/data/tts_cache/*
 aion-chat/data/books/
 aion-chat/data/aion.db
 aion-chat/data/theater_personas.json
+aion-chat/data/ghost_forest/*.json
 
 # ── 保留空文件夹的 .gitkeep ──
 !aion-chat/data/chats/.gitkeep

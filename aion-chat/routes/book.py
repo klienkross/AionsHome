@@ -7,7 +7,7 @@
 - AI 批注（邀请共读）
 """
 
-import asyncio, json, logging, re, time, os
+import asyncio, hashlib, json, logging, re, time, os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -20,6 +20,7 @@ from config import DATA_DIR, load_worldbook, MODELS, DEFAULT_MODEL
 from database import get_db
 from ai_providers import stream_ai
 from book import parse_epub, delete_book_files, build_annotate_text, BOOKS_DIR
+from sentinel import get_embedding, _pack_embedding
 
 router = APIRouter()
 logger = logging.getLogger("book")
@@ -367,8 +368,9 @@ async def annotate_segment(book_id: str, ch_idx: int, body: AnnotateRequest):
                 yield "data: {\"type\": \"done\"}\n\n"
                 return
 
-            # 保存到数据库（覆盖合并策略）
-            await _save_annotations(book_id, ch_idx, seg_idx, result)
+            # 保存到数据库（覆盖合并策略）+ 写入向量记忆
+            await _save_annotations(book_id, ch_idx, seg_idx, result,
+                                    book_title=book_title, ch_title=chapter['title'])
 
             # 更新 segments_meta 状态
             await _update_segment_status(book_id, ch_idx, seg_idx, 'done')
@@ -458,7 +460,8 @@ async def annotate_all_segments(book_id: str, ch_idx: int, body: AnnotateAllRequ
                     yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': '格式解析失败'})}\n\n"
                     continue
 
-                await _save_annotations(book_id, ch_idx, seg_idx, result)
+                await _save_annotations(book_id, ch_idx, seg_idx, result,
+                                        book_title=book_title, ch_title=chapter['title'])
                 await _update_segment_status(book_id, ch_idx, seg_idx, 'done')
 
                 yield f"data: {json.dumps({'type': 'segment_done', 'segment_index': seg_idx, 'annotations': result['annotations'], 'summary': result['summary']})}\n\n"
@@ -623,8 +626,9 @@ async def _get_prev_summaries(book_id: str, ch_idx: int, limit: int = 3) -> list
     return summaries
 
 
-async def _save_annotations(book_id: str, ch_idx: int, seg_idx: int, result: dict):
-    """保存批注，覆盖合并策略"""
+async def _save_annotations(book_id: str, ch_idx: int, seg_idx: int, result: dict,
+                            book_title: str = '', ch_title: str = ''):
+    """保存批注，覆盖合并策略；同时将 summary 写入向量记忆库供 RAG 召回"""
     now = time.time()
     async with get_db() as db:
         db.row_factory = _row_dict
@@ -662,6 +666,32 @@ async def _save_annotations(book_id: str, ch_idx: int, seg_idx: int, result: dic
                   json.dumps(new_annotations, ensure_ascii=False),
                   result['summary'], now, now))
 
+        await db.commit()
+
+    # 将 summary 写入向量记忆库
+    summary = result.get('summary', '').strip()
+    if summary:
+        await _sync_book_note_to_memory(book_id, ch_idx, seg_idx, summary,
+                                        book_title, ch_title, now)
+
+
+async def _sync_book_note_to_memory(book_id: str, ch_idx: int, seg_idx: int,
+                                     summary: str, book_title: str, ch_title: str,
+                                     ts: float):
+    """将读书笔记 summary 向量化后写入 memories 表，供 RAG 召回"""
+    mem_id = "book_" + hashlib.sha256(f"{book_id}:{ch_idx}:{seg_idx}".encode()).hexdigest()[:12]
+    content = f"【读书笔记】《{book_title}》{ch_title}\n{summary}"
+    keywords = json.dumps([book_title, ch_title, "读书笔记"], ensure_ascii=False)
+
+    vec = await get_embedding(summary)
+    blob = _pack_embedding(vec) if vec else None
+
+    async with get_db() as db:
+        await db.execute("""
+            INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance)
+            VALUES (?, ?, 'book_note', ?, NULL, ?, ?, 0.6)
+            ON CONFLICT(id) DO UPDATE SET content=excluded.content, embedding=excluded.embedding, created_at=excluded.created_at
+        """, (mem_id, content, ts, blob, keywords))
         await db.commit()
 
 
