@@ -53,6 +53,8 @@ async def init_db():
             ("source_end_ts", "REAL"),
             ("unresolved", "INTEGER DEFAULT 0"),
             ("source_msg_id", "TEXT"),
+            ("valence", "REAL DEFAULT 0.0"),
+            ("arousal", "REAL DEFAULT 0.0"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE memories ADD COLUMN {col} {defn}")

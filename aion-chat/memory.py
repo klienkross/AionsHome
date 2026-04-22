@@ -576,6 +576,9 @@ async def _do_digest(min_messages: int = 0) -> dict:
             f"   - 0.1 - 0.3 (默认分数): 闲聊、情绪发泄、日常问候、没有信息增量的互动。\n"
             f"   【注意】：不要因为用户情绪激动就给高分，除非这揭示了新的性格特质。\n\n"
             f"4. \"unresolved\": Boolean。当摘要中包含**尚未完成**的计划、约定、承诺（如\"说好了要去…\"、\"打算下次…\"、\"答应了…\"、\"准备买…\"等），输出 true。纯粹的已发生事实输出 false。\n\n"
+            f"5. \"valence\": (-1.0 ~ 1.0) 情绪效价。正值=正面情绪（开心、感动、满足），负值=负面情绪（难过、愤怒、焦虑），0=中性/纯事务性对话。\n"
+            f"6. \"arousal\": (-1.0 ~ 1.0) 情绪唤醒度。正值=高能量（兴奋、激动、暴怒），负值=低能量（平静、低落、疲惫），0=平淡。\n"
+            f"   示例：惊喜收到礼物→valence:0.8,arousal:0.7；安静地回忆往事→valence:0.3,arousal:-0.5；吵架→valence:-0.7,arousal:0.8；无聊闲聊→valence:0.1,arousal:-0.3\n\n"
             f"严格只输出一个 JSON 对象，不要输出任何其他内容。\n\n"
             f"【一段对话记录】：\n{messages_text}"
         )
@@ -597,6 +600,8 @@ async def _do_digest(min_messages: int = 0) -> dict:
         keywords = result.get("keywords", [])
         importance = float(result.get("importance", 0.5))
         unresolved = 1 if result.get("unresolved", False) else 0
+        valence = max(-1.0, min(1.0, float(result.get("valence", 0.0))))
+        arousal = max(-1.0, min(1.0, float(result.get("arousal", 0.0))))
         if isinstance(keywords, str):
             keywords = [k.strip() for k in keywords.replace("、", ",").split(",") if k.strip()]
 
@@ -618,9 +623,9 @@ async def _do_digest(min_messages: int = 0) -> dict:
 
         async with get_db() as db:
             await db.execute(
-                "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts, unresolved) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (mem_id, summary, "digest", now, None, _pack_embedding(vec), keywords_json, importance, source_start_ts, source_end_ts, unresolved)
+                "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts, unresolved, valence, arousal) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (mem_id, summary, "digest", now, None, _pack_embedding(vec), keywords_json, importance, source_start_ts, source_end_ts, unresolved, valence, arousal)
             )
             await db.commit()
 
@@ -628,7 +633,7 @@ async def _do_digest(min_messages: int = 0) -> dict:
             "id": mem_id, "content": summary, "type": "digest",
             "created_at": now, "keywords": keywords_json, "importance": importance,
             "source_start_ts": source_start_ts, "source_end_ts": source_end_ts,
-            "unresolved": unresolved,
+            "unresolved": unresolved, "valence": valence, "arousal": arousal,
         }})
         total_new += 1
 
