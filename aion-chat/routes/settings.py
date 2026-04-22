@@ -11,6 +11,7 @@ from typing import Optional
 
 import httpx
 
+import config
 from config import SETTINGS, MODELS, save_settings, get_key, load_worldbook, save_worldbook, load_chat_status, TTS_CACHE_DIR
 
 router = APIRouter()
@@ -27,6 +28,7 @@ class SettingsUpdate(BaseModel):
     gemini_free_key: Optional[str] = None
     aipro_key: Optional[str] = None
     netease_music_u: Optional[str] = None
+    default_model: Optional[str] = None
 
 @router.get("/api/settings")
 async def get_settings():
@@ -40,6 +42,7 @@ async def get_settings():
         "gemini_free_key": SETTINGS.get("gemini_free_key", ""),
         "aipro_key": SETTINGS.get("aipro_key", ""),
         "netease_music_u": SETTINGS.get("netease_music_u", ""),
+        "default_model": config.DEFAULT_MODEL,
         "gemini_key_masked": mask(SETTINGS.get("gemini_key", "")),
         "siliconflow_key_masked": mask(SETTINGS.get("siliconflow_key", "")),
         "gemini_free_key_masked": mask(SETTINGS.get("gemini_free_key", "")),
@@ -67,6 +70,9 @@ async def update_settings(body: SettingsUpdate):
                 reload_login()
             except Exception:
                 pass
+    if body.default_model is not None and body.default_model in MODELS:
+        SETTINGS["default_model"] = body.default_model
+        config.DEFAULT_MODEL = body.default_model
     save_settings(SETTINGS)
     return {"ok": True}
 

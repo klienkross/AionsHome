@@ -351,9 +351,18 @@ async def annotate_segment(book_id: str, ch_idx: int, body: AnnotateRequest):
                 yield "data: {\"type\": \"done\"}\n\n"
                 return
 
+            # 检测 provider 错误（HTTP 4xx/5xx 被 yield 为文本）
+            ai_err = _extract_ai_error(full_text)
+            if ai_err:
+                logger.error(f"AI provider 错误: {ai_err}")
+                yield f"data: {json.dumps({'type': 'error', 'message': ai_err})}\n\n"
+                yield "data: {\"type\": \"done\"}\n\n"
+                return
+
             # 解析 JSON
             result = _parse_annotation_json(full_text, start_p, end_p)
             if result is None:
+                logger.warning(f"批注 JSON 解析失败，原文前200字: {full_text[:200]}")
                 yield f"data: {json.dumps({'type': 'error', 'message': 'AI 返回格式解析失败，请重试'})}\n\n"
                 yield "data: {\"type\": \"done\"}\n\n"
                 return
@@ -431,13 +440,21 @@ async def annotate_all_segments(book_id: str, ch_idx: int, body: AnnotateAllRequ
                 try:
                     async for chunk in stream_ai(messages, model_key, meta=meta):
                         full_text += chunk
+                        yield f"data: {json.dumps({'type': 'chunk', 'segment_index': seg_idx, 'content': chunk})}\n\n"
                 except Exception as e:
                     logger.error(f"AI 批注 seg={seg_idx} 失败: {e}")
                     yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': str(e)})}\n\n"
                     continue
 
+                ai_err = _extract_ai_error(full_text)
+                if ai_err:
+                    logger.error(f"AI provider 错误 seg={seg_idx}: {ai_err}")
+                    yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': ai_err})}\n\n"
+                    continue
+
                 result = _parse_annotation_json(full_text, start_p, end_p)
                 if result is None:
+                    logger.warning(f"批注 JSON 解析失败 seg={seg_idx}，原文前200字: {full_text[:200]}")
                     yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': '格式解析失败'})}\n\n"
                     continue
 
@@ -514,6 +531,18 @@ def _build_annotate_messages(wb: dict, text: str, ch_title: str,
         {"role": "user", "content": f"这是「{ch_title}」的段落 P{start_p}-P{end_p}：\n\n{text}"},
     ]
     return messages
+
+
+_AI_ERROR_PREFIXES = ("[硅基流动错误", "[Gemini错误", "[中转站错误", "[自定义端点错误", "[错误]")
+
+
+def _extract_ai_error(text: str) -> Optional[str]:
+    """检测 AI provider 返回的错误信息（非 JSON，而是内联错误文本）"""
+    stripped = text.strip()
+    for prefix in _AI_ERROR_PREFIXES:
+        if stripped.startswith(prefix):
+            return stripped
+    return None
 
 
 def _parse_annotation_json(text: str, start_p: int, end_p: int) -> Optional[dict]:

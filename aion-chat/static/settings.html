@@ -24,6 +24,8 @@
     <input class="form-input" type="text" id="sfKeyInput" placeholder="输入硅基流动 API Key..." autocomplete="off" style="font-family:monospace">
     <label class="form-label">中转站 API Key</label>
     <input class="form-input" type="text" id="aiproKeyInput" placeholder="输入中转站 API Key..." autocomplete="off" style="font-family:monospace">
+    <label class="form-label">默认模型</label>
+    <select class="form-input" id="defaultModelSelect"></select>
     <label class="form-label">网易云 MUSIC_U Cookie（VIP 点歌）</label>
     <input class="form-input" type="text" id="neteaseMusicUInput" placeholder="浏览器 F12 → Cookie → MUSIC_U" autocomplete="off" style="font-family:monospace">
     <div class="btn-row">
@@ -37,12 +39,19 @@
 connectCommonWS();
 
 (async function init() {
-  const s = await api("GET", "/api/settings");
+  const [s, models] = await Promise.all([
+    api("GET", "/api/settings"),
+    api("GET", "/api/models")
+  ]);
   $("geminiKeyInput").value = s.gemini_key || "";
   $("geminiFreeKeyInput").value = s.gemini_free_key || "";
   $("sfKeyInput").value = s.siliconflow_key || "";
   $("aiproKeyInput").value = s.aipro_key || "";
   $("neteaseMusicUInput").value = s.netease_music_u || "";
+  const sel = $("defaultModelSelect");
+  sel.innerHTML = models.map(m =>
+    `<option value="${m.key}"${m.key === s.default_model ? ' selected' : ''}>${m.key}</option>`
+  ).join("");
 })();
 
 async function saveSettings() {
@@ -51,7 +60,8 @@ async function saveSettings() {
     gemini_free_key: $("geminiFreeKeyInput").value.trim(),
     siliconflow_key: $("sfKeyInput").value.trim(),
     aipro_key: $("aiproKeyInput").value.trim(),
-    netease_music_u: $("neteaseMusicUInput").value.trim()
+    netease_music_u: $("neteaseMusicUInput").value.trim(),
+    default_model: $("defaultModelSelect").value
   });
   showToast("✅ 已保存");
 }

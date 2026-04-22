@@ -146,7 +146,7 @@ MODELS = {
     # "自定义-claude":  {"provider": "custom", "model": "claude-sonnet-4-6", "base_url": "https://your-relay.example.com/v1", "key_name": "myrelay"},
 }
 
-DEFAULT_MODEL = "gemini-3-flash"
+DEFAULT_MODEL = SETTINGS.get("default_model") or next(iter(MODELS), "gemini-3-flash")
 
 # ── 摄像头默认配置 ───────────────────────────────
 DEFAULT_CAM_CFG = {

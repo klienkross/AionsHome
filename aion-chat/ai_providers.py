@@ -2,10 +2,15 @@
 AI 模型调用：硅基流动 / Gemini 流式 + 多模态消息构建
 """
 
-import json, base64, mimetypes
+import asyncio, json, base64, logging, mimetypes
 from pathlib import Path
 
 import httpx
+
+logger = logging.getLogger("ai_providers")
+
+MAX_RETRIES = 2
+RETRY_DELAY = 1.5
 
 from config import get_key, MODELS, UPLOADS_DIR
 
@@ -219,6 +224,21 @@ async def simple_ai_call(messages: list, model_key: str, temperature: float | No
 
 
 # ── 统一调度 ──────────────────────────────────────
+def _pick_provider(cfg, normalized, meta, temperature):
+    """根据配置返回对应的 provider async generator"""
+    p = cfg["provider"]
+    if p == "siliconflow":
+        return call_siliconflow(normalized, cfg["model"], meta, temperature)
+    elif p == "gemini":
+        return call_gemini(normalized, cfg["model"], meta, temperature)
+    elif p == "aipro":
+        return call_aipro(normalized, cfg["model"], meta, temperature)
+    elif p == "custom":
+        return call_custom(normalized, cfg["model"], cfg.get("base_url", ""),
+                           cfg.get("key_name", ""), meta, temperature)
+    return None
+
+
 async def stream_ai(messages: list, model_key: str, meta: dict | None = None, temperature: float | None = None):
     normalized = []
     for m in messages:
@@ -232,22 +252,28 @@ async def stream_ai(messages: list, model_key: str, meta: dict | None = None, te
     if not cfg:
         yield f"[错误] 未知模型: {model_key}"
         return
-    if cfg["provider"] == "siliconflow":
-        async for chunk in call_siliconflow(normalized, cfg["model"], meta, temperature):
-            yield chunk
-    elif cfg["provider"] == "gemini":
-        async for chunk in call_gemini(normalized, cfg["model"], meta, temperature):
-            yield chunk
-    elif cfg["provider"] == "aipro":
-        async for chunk in call_aipro(normalized, cfg["model"], meta, temperature):
-            yield chunk
-    elif cfg["provider"] == "custom":
-        base_url = cfg.get("base_url", "")
-        key_name = cfg.get("key_name", "")
-        if not base_url:
-            yield f"[错误] 模型 {model_key} 缺少 base_url 配置"
+    if cfg["provider"] == "custom" and not cfg.get("base_url"):
+        yield f"[错误] 模型 {model_key} 缺少 base_url 配置"
+        return
+
+    last_err = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            got_data = False
+            gen = _pick_provider(cfg, normalized, meta, temperature)
+            if gen is None:
+                yield f"[错误] 未知 provider: {cfg['provider']}"
+                return
+            async for chunk in gen:
+                got_data = True
+                yield chunk
             return
-        async for chunk in call_custom(normalized, cfg["model"], base_url, key_name, meta, temperature):
-            yield chunk
-    else:
-        yield f"[错误] 未知 provider: {cfg['provider']}"
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout,
+                httpx.RemoteProtocolError, httpx.PoolTimeout) as e:
+            last_err = e
+            if got_data or attempt >= MAX_RETRIES:
+                break
+            logger.warning(f"stream_ai 连接失败 (attempt {attempt+1}/{MAX_RETRIES+1}): {e}")
+            await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+
+    raise last_err if last_err else RuntimeError("stream_ai failed")
