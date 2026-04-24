@@ -42,7 +42,10 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:textSize="12sp"
-        android:textColor="#666666"
+        android:textColor="#7799bb"
+        android:clickable="true"
+        android:focusable="true"
+
         android:layout_marginBottom="24dp" />
 
     <!-- 户外 Tailscale -->
@@ -62,7 +65,10 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:textSize="12sp"
-        android:textColor="#666666"
+        android:textColor="#7799bb"
+        android:clickable="true"
+        android:focusable="true"
+
         android:layout_marginBottom="40dp" />
 
     <!-- 记住选择 -->
@@ -78,7 +84,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="手势返回到首页可切换地址\nHTTPS 自签证书，支持手机麦克风"
+        android:text="点击地址可修改 · 手势返回可切换\nHTTPS 自签证书，支持手机麦克风"
         android:textSize="11sp"
         android:textColor="#555555"
         android:layout_marginTop="16dp" />

@@ -1,27 +1,29 @@
-﻿package com.aion.chat;
+package com.aion.chat;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Paint;
 import android.os.Build;
 import android.os.Bundle;
+import android.text.InputType;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.TextView;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
-/**
- * 启动页 — 选择连接地址（家庭WiFi / 户外Tailscale）
- */
 public class LauncherActivity extends AppCompatActivity {
 
     private static final String PREFS       = "aion_prefs";
     private static final String KEY_URL     = "saved_url";
     private static final String KEY_AUTO    = "auto_connect";
+    private static final String KEY_HOME    = "url_home";
+    private static final String KEY_OUTDOOR = "url_outdoor";
 
-    // ★ 在这里修改你的两个地址
-    private static final String URL_HOME    = "http://192.168.xx.xxx:8080/chat";
-    private static final String URL_OUTDOOR = "http://192.168.xx.xxx:8080/chat";
+    private static final String DEFAULT_HOME    = "http://192.168.x.x:8080/chat";
+    private static final String DEFAULT_OUTDOOR = "http://192.168.x.x:8080/chat";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -29,9 +31,8 @@ public class LauncherActivity extends AppCompatActivity {
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
 
-        // 如果上次勾选了"记住选择"，直接跳转
         if (prefs.getBoolean(KEY_AUTO, false)) {
-            String savedUrl = prefs.getString(KEY_URL, URL_HOME);
+            String savedUrl = prefs.getString(KEY_URL, getHomeUrl(prefs));
             launchWebView(savedUrl);
             return;
         }
@@ -44,18 +45,53 @@ public class LauncherActivity extends AppCompatActivity {
         Button   btnOutdoor= findViewById(R.id.btnOutdoor);
         CheckBox cbRemember= findViewById(R.id.cbRemember);
 
-        tvHome.setText(URL_HOME);
-        tvOutdoor.setText(URL_OUTDOOR);
+        tvHome.setText(getHomeUrl(prefs));
+        tvOutdoor.setText(getOutdoorUrl(prefs));
+        tvHome.setPaintFlags(tvHome.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
+        tvOutdoor.setPaintFlags(tvOutdoor.getPaintFlags() | Paint.UNDERLINE_TEXT_FLAG);
+
+        tvHome.setOnClickListener(v -> showEditDialog(prefs, KEY_HOME, tvHome));
+        tvOutdoor.setOnClickListener(v -> showEditDialog(prefs, KEY_OUTDOOR, tvOutdoor));
 
         btnHome.setOnClickListener(v -> {
-            saveIfNeeded(prefs, cbRemember.isChecked(), URL_HOME);
-            launchWebView(URL_HOME);
+            String url = getHomeUrl(prefs);
+            saveIfNeeded(prefs, cbRemember.isChecked(), url);
+            launchWebView(url);
         });
 
         btnOutdoor.setOnClickListener(v -> {
-            saveIfNeeded(prefs, cbRemember.isChecked(), URL_OUTDOOR);
-            launchWebView(URL_OUTDOOR);
+            String url = getOutdoorUrl(prefs);
+            saveIfNeeded(prefs, cbRemember.isChecked(), url);
+            launchWebView(url);
         });
+    }
+
+    private String getHomeUrl(SharedPreferences prefs) {
+        return prefs.getString(KEY_HOME, DEFAULT_HOME);
+    }
+
+    private String getOutdoorUrl(SharedPreferences prefs) {
+        return prefs.getString(KEY_OUTDOOR, DEFAULT_OUTDOOR);
+    }
+
+    private void showEditDialog(SharedPreferences prefs, String key, TextView display) {
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        input.setText(display.getText());
+        input.setSelectAllOnFocus(true);
+
+        new AlertDialog.Builder(this)
+            .setTitle("修改地址")
+            .setView(input)
+            .setPositiveButton("保存", (d, w) -> {
+                String url = input.getText().toString().trim();
+                if (!url.isEmpty()) {
+                    prefs.edit().putString(key, url).apply();
+                    display.setText(url);
+                }
+            })
+            .setNegativeButton("取消", null)
+            .show();
     }
 
     private void saveIfNeeded(SharedPreferences prefs, boolean remember, String url) {
