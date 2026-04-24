@@ -722,11 +722,12 @@ async def _do_digest(min_messages: int = 0) -> dict:
                     {"role": r["role"], "content": r["content"][:300]}
                     for r in recent_rows
                 ]
+            import asyncio
             from gift import judge_and_send_gift
-            await judge_and_send_gift(
+            asyncio.create_task(judge_and_send_gift(
                 all_summaries, context_msgs, persona_block,
                 ai_name, user_name, model_key, conv_id,
-            )
+            ))
         except Exception as e:
             print(f"[digest] 礼物判断失败: {e}")
 

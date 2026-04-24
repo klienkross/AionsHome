@@ -25,7 +25,26 @@ async def judge_and_send_gift(
     """
     在记忆总结完成后调用，让 AI 判断是否需要给用户送礼。
     如果是，则生成图片并入库，通过 WebSocket 通知前端。
+    通常通过 asyncio.create_task 后台调用，因此内部捕获所有异常。
     """
+    try:
+        await _judge_and_send_gift_inner(
+            all_summaries, context_msgs, persona_block,
+            ai_name, user_name, model_key, conv_id,
+        )
+    except Exception as e:
+        print(f"[gift] 送礼流程异常: {e}")
+
+
+async def _judge_and_send_gift_inner(
+    all_summaries: list[str],
+    context_msgs: list[dict],
+    persona_block: str,
+    ai_name: str,
+    user_name: str,
+    model_key: str,
+    conv_id: str,
+):
     from ai_providers import simple_ai_call
 
     now = datetime.now()

@@ -2,6 +2,8 @@
 礼物系统 API 路由
 """
 
+import asyncio
+
 from fastapi import APIRouter
 from gift import get_pending_gifts, receive_gift, list_gifts, delete_gift
 
@@ -91,10 +93,10 @@ async def api_test():
     if user_persona:
         persona_block += f"[{user_name}的人设]\n{user_persona}\n\n"
 
-    # 调用送礼流程
+    # 后台执行送礼流程，不阻塞 HTTP 响应
     from gift import judge_and_send_gift
-    await judge_and_send_gift(
+    asyncio.create_task(judge_and_send_gift(
         all_summaries, context_msgs, persona_block,
         ai_name, user_name, model_key, conv_id,
-    )
+    ))
     return {"ok": True, "message": "测试送礼流程已触发，请等待AI判断和生图..."}
