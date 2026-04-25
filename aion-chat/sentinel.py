@@ -147,6 +147,26 @@ async def call_sentinel_text(
     return text.strip() if text else None
 
 
+# ── 对外：图片描述（VL 哨兵） ──────────────────
+async def describe_image_b64(
+    image_b64: str,
+    *,
+    timeout: int = 30,
+    max_retries: int = 1,
+) -> str | None:
+    """用视觉模型描述一张 base64 图片，返回纯文本描述。"""
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "请简要描述这张图片的内容，包括场景、人物动作和关键细节。用中文回答，2-3句话即可。"},
+            {"type": "image_url",
+             "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+        ],
+    }]
+    text = await _chat(messages, SENTINEL_VL_MODEL, timeout, max_retries, json_mode=False)
+    return text.strip() if text else None
+
+
 # ── 对外：向量 ─────────────────────────────────
 async def get_embedding(text: str) -> list[float] | None:
     """DashScope text-embedding-v4，固定 1024 维。"""

@@ -15,6 +15,32 @@ RETRY_DELAY = 1.5
 from config import get_key, MODELS, UPLOADS_DIR
 
 
+# ── 图片转文本（纯文本模型用） ──────────────────
+async def convert_images_to_text(history: list):
+    """将 history 中的图片附件替换为哨兵 VL 模型生成的文字描述，原地修改。"""
+    from sentinel import describe_image_b64
+    for m in history:
+        atts = m.get("attachments", [])
+        if not atts or m["role"] != "user":
+            continue
+        descs = []
+        for att in atts:
+            fpath = UPLOADS_DIR / Path(att).name
+            if not fpath.exists():
+                continue
+            mime = mimetypes.guess_type(str(fpath))[0] or ""
+            if not mime.startswith("image/"):
+                continue
+            b64 = base64.b64encode(fpath.read_bytes()).decode()
+            desc = await describe_image_b64(b64)
+            if desc:
+                descs.append(desc)
+        if descs:
+            desc_text = "\n".join(f"[图片描述] {d}" for d in descs)
+            m["content"] = f"{m['content']}\n{desc_text}" if m["content"] else desc_text
+            m["attachments"] = []
+
+
 # ── 多模态消息构建 ────────────────────────────────
 def build_multimodal_messages(history: list):
     """将带附件的历史记录转换为 OpenAI 兼容多模态格式"""

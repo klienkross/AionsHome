@@ -13,7 +13,7 @@ from typing import Optional, List
 from config import DEFAULT_MODEL, load_worldbook, SETTINGS
 from database import get_db
 from ws import manager
-from ai_providers import stream_ai
+from ai_providers import stream_ai, convert_images_to_text
 from memory import recall_memories, instant_digest, fetch_source_details, build_surfacing_memories, get_embedding, _pack_embedding
 from camera import cam, CAM_CHECK_CMD, perform_cam_check
 from activity import is_activity_tracking_enabled, get_activity_summary_for_prompt
@@ -279,9 +279,12 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
         conv = await cur.fetchone()
         model_key = conv["model"] if conv else DEFAULT_MODEL
 
+        _ctx_limit = body.context_limit
+        if SETTINGS.get("unlimited_context"):
+            _ctx_limit = 999999
         cur = await db.execute(
             "SELECT role, content, attachments, created_at FROM messages WHERE conv_id=? AND role IN ('user','assistant','system') ORDER BY created_at DESC LIMIT ?",
-            (conv_id, body.context_limit)
+            (conv_id, _ctx_limit)
         )
         rows = await cur.fetchall()
         history = []
@@ -448,6 +451,9 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
         history.append({"role": "assistant", "content": "收到，我会自然地参考这些记忆。"})
 
     history.extend(recent_tail)
+
+    if SETTINGS.get("image_to_text"):
+        await convert_images_to_text(history)
 
     debug_prompt = [{"role": m["role"], "content": m["content"][:500]} for m in history]
 
@@ -711,19 +717,20 @@ async def send_message(conv_id: str, body: MsgCreate):
         conv = await cur.fetchone()
         model_key = conv["model"] if conv else DEFAULT_MODEL
 
+        _ctx_limit = body.context_limit
+        if SETTINGS.get("unlimited_context"):
+            _ctx_limit = 999999
         cur = await db.execute(
             "SELECT role, content, attachments, created_at FROM messages WHERE conv_id=? AND role IN ('user','assistant','system') ORDER BY created_at DESC LIMIT ?",
-            (conv_id, body.context_limit)
+            (conv_id, _ctx_limit)
         )
         rows = await cur.fetchall()
         history = []
         for r in reversed(rows):
             d = dict(r)
-            # 过滤 system 消息：只保留点歌/查看监控相关的
             if d["role"] == "system":
                 if not any(kw in d["content"] for kw in _SYSTEM_MSG_CONTEXT_KEYWORDS):
                     continue
-                # system 消息以 [系统事件] 前缀包装为 user 角色（AI 接口不支持 system role）
                 d["role"] = "user"
                 d["content"] = f"[系统事件] {d['content']}"
                 d["attachments"] = []
@@ -731,7 +738,6 @@ async def send_message(conv_id: str, body: MsgCreate):
                 continue
             try: d["attachments"] = json.loads(d.get("attachments") or "[]") if d.get("attachments") else []
             except: d["attachments"] = []
-            # 清洗消息中可能已有的 <meta> 标签（AI 模仿产生的），再附加系统时间戳
             d["content"] = META_TAG_PATTERN.sub("", d["content"]).strip()
             if d.get("created_at"):
                 dt = datetime.fromtimestamp(d["created_at"])
@@ -945,6 +951,9 @@ async def send_message(conv_id: str, body: MsgCreate):
 
     # 最近3条对话放到最末尾，让模型聚焦于当前对话而非背景信息
     history.extend(recent_tail)
+
+    if SETTINGS.get("image_to_text"):
+        await convert_images_to_text(history)
 
     debug_prompt = [{"role": m["role"], "content": m["content"][:500]} for m in history]
 
@@ -1673,9 +1682,12 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
         conv = await cur.fetchone()
         model_key = conv["model"] if conv else DEFAULT_MODEL
 
+        _ctx_limit = context_limit
+        if SETTINGS.get("unlimited_context"):
+            _ctx_limit = 999999
         cur = await db.execute(
             "SELECT role, content, attachments, created_at FROM messages WHERE conv_id=? AND role IN ('user','assistant','system') ORDER BY created_at DESC LIMIT ?",
-            (conv_id, context_limit)
+            (conv_id, _ctx_limit)
         )
         rows = await cur.fetchall()
         history = []
@@ -1870,6 +1882,9 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
 
     # 最近3条对话放到最末尾，让模型聚焦于当前对话而非背景信息
     history.extend(recent_tail)
+
+    if SETTINGS.get("image_to_text"):
+        await convert_images_to_text(history)
 
     debug_prompt = [{"role": m["role"], "content": m["content"][:500]} for m in history]
     ai_msg_id = f"msg_{int(time.time()*1000)}"
