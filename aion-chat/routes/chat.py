@@ -411,10 +411,6 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
         normal_lines = [f"- {m['content']}" for m in surfaced if not m.get("unresolved")]
         mem_text = "\n".join(unresolved_lines + normal_lines)
         bg_block += f"\n\n[背景记忆]\n以下是你记得的近期事件和需要关注的事项，在对话中如果有关联可以自然提起：\n{mem_text}"
-    history.insert(cap_idx + inject_offset, {"role": "user", "content": bg_block})
-    history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到，我会在合适的时候自然提及。"})
-    inject_offset += 2
-
     if is_search_needed and recall_query:
         recalled = [r for r in debug_top6 if r["score"] >= 0.45 and r["id"] not in surfaced_ids][:5]
         if digest_result.get("require_detail") and recalled:
@@ -426,13 +422,32 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     debug_top6_data = [{"content": m["content"][:100], "score": m["score"],
                         "vec_sim": m.get("vec_sim"), "kw_score": m.get("kw_score"),
                         "importance": m.get("importance")} for m in debug_top6] if debug_top6 else []
+
+    # 截取最近3条用户/助手消息，放到最末尾（时间+记忆之后）
+    recent_tail = []
+    i = len(history) - 1
+    count = 0
+    while i >= 0 and count < 3:
+        if history[i]["role"] in ("user", "assistant"):
+            count += 1
+            if count == 3:
+                break
+        i -= 1
+    if count == 3:
+        recent_tail = history[i:]
+        history = history[:i]
+
+    history.append({"role": "user", "content": bg_block})
+    history.append({"role": "assistant", "content": "收到，我会在合适的时候自然提及。"})
     if recalled:
         mem_lines = "\n".join([f"- {m['content']}" for m in recalled])
         mem_block = f"[相关记忆]\n你脑海中与当前话题相关的记忆：\n{mem_lines}"
         if detail_text:
             mem_block += f"\n\n[原文细节]\n以下是相关的具体对话记录：\n{detail_text}"
-        history.insert(cap_idx + inject_offset, {"role": "user", "content": mem_block})
-        history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到，我会自然地参考这些记忆。"})
+        history.append({"role": "user", "content": mem_block})
+        history.append({"role": "assistant", "content": "收到，我会自然地参考这些记忆。"})
+
+    history.extend(recent_tail)
 
     debug_prompt = [{"role": m["role"], "content": m["content"][:500]} for m in history]
 
@@ -744,11 +759,10 @@ async def send_message(conv_id: str, body: MsgCreate):
     if prefix:
         history = prefix + history
 
-    # ── 构建注入块（顺序：prefix → 系统能力 → 当前时间 → 背景记忆 → 相关记忆 → 上下文）──
-    # 人设+系统能力 内容稳定可命中缓存，当前时间为缓存分界点，之后全是动态内容
+    # ── 构建注入块（顺序：prefix → 系统能力 → 上下文 → 当前时间+背景记忆 → 相关记忆）──
 
     cap_idx = len(prefix) if prefix else 0
-    inject_offset = 0  # 记录已注入的消息对数，用于计算后续插入位置
+    inject_offset = 0
 
     # 1. 注入系统能力提示（不含时间，内容稳定可命中缓存）
     abilities = []
@@ -760,7 +774,6 @@ async def send_message(conv_id: str, body: MsgCreate):
     abilities.append("[REMINDER:YYYY-MM-DD|内容] — 设置日程提醒（不闹铃），你在合适时机自然提起即可。")
     abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了、是否在好好工作等。日期时间用ISO格式。")
     abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
-    # 活动动态查看能力
     if is_activity_tracking_enabled():
         abilities.append(f"[查看动态:n] — 查看{user_name}过去n×10分钟的设备使用动态（n为1~12的整数，例如[查看动态:2]查看过去20分钟，[查看动态:6]查看过去1小时）。当你好奇{user_name}最近在干什么、想了解{user_name}的设备使用情况时可以使用。使用后下条消息会收到动态摘要，查看前不要编造内容。")
     # 位置相关能力
@@ -853,13 +866,26 @@ async def send_message(conv_id: str, body: MsgCreate):
     debug_top6_data = []
     debug_recalled = []
 
+    # 截取最近3条用户/助手消息，放到最末尾（时间+记忆之后）
+    recent_tail = []
+    i = len(history) - 1
+    count = 0
+    while i >= 0 and count < 3:
+        if history[i]["role"] in ("user", "assistant"):
+            count += 1
+            if count == 3:
+                break
+        i -= 1
+    if count == 3:
+        recent_tail = history[i:]
+        history = history[:i]
+
     if body.fast_mode:
         # ── 快速模式：仅注入当前时间，跳过哨兵和记忆 ──
         now_str = datetime.now().strftime("%Y年%m月%d日  %H:%M:%S")
         bg_block = f"系统当前的准确时间是 {now_str}"
-        history.insert(cap_idx + inject_offset, {"role": "user", "content": bg_block})
-        history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到。"})
-        inject_offset += 2
+        history.append({"role": "user", "content": bg_block})
+        history.append({"role": "assistant", "content": "收到。"})
     else:
         # ── 正常模式：完整 RAG 流程 ──
         digest_result = await instant_digest(actual_recent)
@@ -884,7 +910,7 @@ async def send_message(conv_id: str, body: MsgCreate):
             _do_surfacing(), _do_recall()
         )
 
-        # 注入当前时间（缓存分界点）+ 背景记忆（动态内容）
+        # 构建当前时间 + 背景记忆（动态内容）
         now_str = datetime.now().strftime("%Y年%m月%d日  %H:%M:%S")
         bg_block = f"系统当前的准确时间是 {now_str}"
         if surfaced:
@@ -892,14 +918,10 @@ async def send_message(conv_id: str, body: MsgCreate):
             normal_lines = [f"- {m['content']}" for m in surfaced if not m.get("unresolved")]
             mem_text = "\n".join(unresolved_lines + normal_lines)
             bg_block += f"\n\n[背景记忆]\n以下是你记得的近期事件和需要关注的事项，在对话中如果有关联可以自然提起：\n{mem_text}"
-        history.insert(cap_idx + inject_offset, {"role": "user", "content": bg_block})
-        history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到，我会在合适的时候自然提及。"})
-        inject_offset += 2
 
         # 4. RAG 精确召回（与背景记忆去重，使用已并行获取的结果）
         if is_search_needed and recall_query:
             recalled = [r for r in debug_top6 if r["score"] >= 0.45 and r["id"] not in surfaced_ids][:5]
-            # 如果需要追溯原文细节
             if digest_result.get("require_detail") and recalled:
                 detail_text = await fetch_source_details(recalled, recall_keywords)
 
@@ -909,14 +931,20 @@ async def send_message(conv_id: str, body: MsgCreate):
         debug_top6_data = [{"content": m["content"][:100], "score": m["score"],
                             "vec_sim": m.get("vec_sim"), "kw_score": m.get("kw_score"),
                             "importance": m.get("importance")} for m in debug_top6] if debug_top6 else []
-        # 5. 注入向量匹配到的相关记忆（在背景记忆之后，每次请求都可能不同）
+
+        # 5. 注入时间+记忆
+        history.append({"role": "user", "content": bg_block})
+        history.append({"role": "assistant", "content": "收到，我会在合适的时候自然提及。"})
         if recalled:
             mem_lines = "\n".join([f"- {m['content']}" for m in recalled])
             mem_block = f"[相关记忆]\n你脑海中与当前话题相关的记忆：\n{mem_lines}"
             if detail_text:
                 mem_block += f"\n\n[原文细节]\n以下是相关的具体对话记录：\n{detail_text}"
-            history.insert(cap_idx + inject_offset, {"role": "user", "content": mem_block})
-            history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到，我会自然地参考这些记忆。"})
+            history.append({"role": "user", "content": mem_block})
+            history.append({"role": "assistant", "content": "收到，我会自然地参考这些记忆。"})
+
+    # 最近3条对话放到最末尾，让模型聚焦于当前对话而非背景信息
+    history.extend(recent_tail)
 
     debug_prompt = [{"role": m["role"], "content": m["content"][:500]} for m in history]
 
@@ -1698,7 +1726,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     if prefix:
         history = prefix + history
 
-    # ── 构建注入块（顺序：prefix → 系统能力 → 当前时间 → 背景记忆 → 相关记忆 → 上下文）──
+    # ── 构建注入块（顺序：prefix → 系统能力 → 上下文 → 当前时间+背景记忆 → 相关记忆）──
     cap_idx = len(prefix) if prefix else 0
     inject_offset = 0
 
@@ -1762,13 +1790,26 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     debug_top6_data = []
     debug_recalled = []
 
+    # 截取最近3条用户/助手消息，放到最末尾（时间+记忆之后）
+    recent_tail = []
+    i = len(history) - 1
+    count = 0
+    while i >= 0 and count < 3:
+        if history[i]["role"] in ("user", "assistant"):
+            count += 1
+            if count == 3:
+                break
+        i -= 1
+    if count == 3:
+        recent_tail = history[i:]
+        history = history[:i]
+
     if fast_mode:
         # ── 快速模式：仅注入当前时间 ──
         now_str = datetime.now().strftime("%Y年%m月%d日  %H:%M:%S")
         bg_block = f"系统当前的准确时间是 {now_str}"
-        history.insert(cap_idx + inject_offset, {"role": "user", "content": bg_block})
-        history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到。"})
-        inject_offset += 2
+        history.append({"role": "user", "content": bg_block})
+        history.append({"role": "assistant", "content": "收到。"})
     else:
         # ── 正常模式：完整 RAG 流程 ──
         digest_result = await instant_digest(actual_recent)
@@ -1777,7 +1818,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
         topic = digest_result.get("topic", "")
         is_search_needed = digest_result.get("is_search_needed", False)
 
-        # 3. 注入当前时间（缓存分界点）+ 背景记忆（动态内容）
+        # 3. 构建当前时间 + 背景记忆（动态内容）
         surfaced, surfaced_ids = await build_surfacing_memories(topic, recall_keywords)
         now_str = datetime.now().strftime("%Y年%m月%d日  %H:%M:%S")
         bg_block = f"系统当前的准确时间是 {now_str}"
@@ -1786,16 +1827,13 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
             normal_lines = [f"- {m['content']}" for m in surfaced if not m.get("unresolved")]
             mem_text = "\n".join(unresolved_lines + normal_lines)
             bg_block += f"\n\n[背景记忆]\n以下是你记得的近期事件和需要关注的事项，在对话中如果有关联可以自然提起：\n{mem_text}"
-        history.insert(cap_idx + inject_offset, {"role": "user", "content": bg_block})
-        history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到，我会在合适的时候自然提及。"})
-        inject_offset += 2
 
         # 4. RAG 精确召回（与背景记忆去重）
         if topic:
             recall_query = f"{topic} {' '.join(recall_keywords)}"
         else:
             last_user_content = ""
-            for m in reversed(history):
+            for m in reversed(recent_tail if recent_tail else history):
                 if m["role"] == "user" and not m["content"].startswith("["):
                     last_user_content = m["content"][:200]
                     break
@@ -1818,14 +1856,20 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
         debug_top6_data = [{"content": m["content"][:100], "score": m["score"],
                             "vec_sim": m.get("vec_sim"), "kw_score": m.get("kw_score"),
                             "importance": m.get("importance")} for m in debug_top6] if debug_top6 else []
-        # 5. 注入相关记忆（在背景记忆之后）
+
+        # 5. 注入时间+记忆
+        history.append({"role": "user", "content": bg_block})
+        history.append({"role": "assistant", "content": "收到，我会在合适的时候自然提及。"})
         if recalled:
             mem_lines = "\n".join([f"- {m['content']}" for m in recalled])
             mem_block = f"[相关记忆]\n你脑海中与当前话题相关的记忆：\n{mem_lines}"
             if detail_text:
                 mem_block += f"\n\n[原文细节]\n以下是相关的具体对话记录：\n{detail_text}"
-            history.insert(cap_idx + inject_offset, {"role": "user", "content": mem_block})
-            history.insert(cap_idx + inject_offset + 1, {"role": "assistant", "content": "收到，我会自然地参考这些记忆。"})
+            history.append({"role": "user", "content": mem_block})
+            history.append({"role": "assistant", "content": "收到，我会自然地参考这些记忆。"})
+
+    # 最近3条对话放到最末尾，让模型聚焦于当前对话而非背景信息
+    history.extend(recent_tail)
 
     debug_prompt = [{"role": m["role"], "content": m["content"][:500]} for m in history]
     ai_msg_id = f"msg_{int(time.time()*1000)}"
