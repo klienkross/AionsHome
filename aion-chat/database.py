@@ -168,6 +168,49 @@ async def init_db():
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_gifts_status ON gifts(status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_gifts_created ON gifts(created_at DESC)")
+        # ── Memory V2: 原子卡片表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS memory_cards (
+                id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                type TEXT DEFAULT 'event',
+                status TEXT DEFAULT 'open',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                source_conv TEXT,
+                source_start_ts REAL,
+                source_end_ts REAL,
+                embedding BLOB,
+                keywords TEXT DEFAULT '',
+                importance REAL DEFAULT 0.5,
+                unresolved INTEGER DEFAULT 0,
+                valence REAL DEFAULT 0.0,
+                arousal REAL DEFAULT 0.0,
+                intensity_score REAL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_cards_status ON memory_cards(status)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_cards_created ON memory_cards(created_at DESC)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_cards_type ON memory_cards(type)")
+        # ── Memory V2: 卡片关联表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS memory_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_id TEXT NOT NULL,
+                to_id TEXT NOT NULL,
+                relation TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                FOREIGN KEY (from_id) REFERENCES memory_cards(id) ON DELETE CASCADE,
+                FOREIGN KEY (to_id) REFERENCES memory_cards(id) ON DELETE CASCADE
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_links_from ON memory_links(from_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_links_to ON memory_links(to_id)")
+        # Rename old memories table for reference (one-time migration)
+        try:
+            await db.execute("ALTER TABLE memories RENAME TO memories_v1")
+        except:
+            pass
         await db.commit()
 
 
