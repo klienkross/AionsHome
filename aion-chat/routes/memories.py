@@ -33,7 +33,7 @@ async def list_memories():
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             "SELECT id, content, type, created_at, source_conv, keywords, importance, source_start_ts, source_end_ts, unresolved "
-            "FROM memories ORDER BY created_at DESC"
+            "FROM memories_v1 ORDER BY created_at DESC"
         )
         rows = await cur.fetchall()
     return [dict(r) for r in rows]
@@ -46,7 +46,7 @@ async def create_memory(body: MemoryCreate):
     now = time.time()
     async with get_db() as db:
         await db.execute(
-            "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts) "
+            "INSERT INTO memories_v1 (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (mem_id, body.content, body.type, now, None, _pack_embedding(vec) if vec else None, '', 0.5, None, None)
         )
@@ -75,14 +75,14 @@ async def update_memory(mem_id: str, body: MemoryUpdate):
             fields.append("unresolved=?")
             params.append(1 if body.unresolved else 0)
         params.append(mem_id)
-        await db.execute(f"UPDATE memories SET {', '.join(fields)} WHERE id=?", params)
+        await db.execute(f"UPDATE memories_v1 SET {', '.join(fields)} WHERE id=?", params)
         await db.commit()
     return {"ok": True, "id": mem_id}
 
 @router.delete("/api/memories/{mem_id}")
 async def delete_memory(mem_id: str):
     async with get_db() as db:
-        await db.execute("DELETE FROM memories WHERE id=?", (mem_id,))
+        await db.execute("DELETE FROM memories_v1 WHERE id=?", (mem_id,))
         await db.commit()
     return {"ok": True}
 
@@ -92,12 +92,12 @@ async def toggle_unresolved(mem_id: str):
     import aiosqlite
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT unresolved FROM memories WHERE id=?", (mem_id,))
+        cur = await db.execute("SELECT unresolved FROM memories_v1 WHERE id=?", (mem_id,))
         row = await cur.fetchone()
         if not row:
             return {"ok": False, "message": "记忆不存在"}
         new_val = 0 if row["unresolved"] else 1
-        await db.execute("UPDATE memories SET unresolved=? WHERE id=?", (new_val, mem_id))
+        await db.execute("UPDATE memories_v1 SET unresolved=? WHERE id=?", (new_val, mem_id))
         await db.commit()
     return {"ok": True, "unresolved": new_val}
 
@@ -108,7 +108,7 @@ async def get_memories_by_conv(conv_id: str):
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, content, source_msg_id FROM memories WHERE source_conv=? AND source_msg_id IS NOT NULL",
+            "SELECT id, content, source_msg_id FROM memories_v1 WHERE source_conv=? AND source_msg_id IS NOT NULL",
             (conv_id,)
         )
         rows = await cur.fetchall()
@@ -153,7 +153,7 @@ async def get_memory_source(mem_id: str):
     from config import load_worldbook
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
-        cur = await db.execute("SELECT source_start_ts, source_end_ts FROM memories WHERE id=?", (mem_id,))
+        cur = await db.execute("SELECT source_start_ts, source_end_ts FROM memories_v1 WHERE id=?", (mem_id,))
         mem = await cur.fetchone()
     if not mem or not mem["source_start_ts"] or not mem["source_end_ts"]:
         return {"ok": False, "message": "该记忆没有可追溯的原文"}
@@ -181,3 +181,79 @@ async def get_memory_source(mem_id: str):
             "created_at": r["created_at"],
         })
     return {"ok": True, "messages": messages}
+
+
+# ── V2 Card-based API ──────────────────────────────
+
+from memory_cards import (
+    create_card, get_card, update_card, delete_card, list_cards,
+    update_card_status, create_link, get_all_links,
+)
+
+class CardCreate(BaseModel):
+    content: str
+    type: str = "event"
+
+class CardUpdate(BaseModel):
+    content: Optional[str] = None
+    type: Optional[str] = None
+    keywords: Optional[str] = None
+    importance: Optional[float] = None
+    unresolved: Optional[bool] = None
+
+@router.get("/api/v2/cards")
+async def list_memory_cards(status: str = None, card_type: str = None):
+    return await list_cards(status=status, card_type=card_type)
+
+@router.get("/api/v2/cards/{card_id}")
+async def get_memory_card(card_id: str):
+    card = await get_card(card_id)
+    if not card:
+        return {"ok": False, "message": "卡片不存在"}
+    card["links"] = await get_all_links(card_id)
+    return card
+
+@router.post("/api/v2/cards")
+async def create_memory_card(body: CardCreate):
+    card = await create_card(content=body.content, card_type=body.type)
+    return card
+
+@router.put("/api/v2/cards/{card_id}")
+async def update_memory_card(card_id: str, body: CardUpdate):
+    fields = {}
+    if body.content is not None:
+        fields["content"] = body.content
+    if body.type is not None:
+        fields["type"] = body.type
+    if body.keywords is not None:
+        fields["keywords"] = body.keywords
+    if body.importance is not None:
+        fields["importance"] = body.importance
+    if body.unresolved is not None:
+        fields["unresolved"] = 1 if body.unresolved else 0
+    await update_card(card_id, **fields)
+    return {"ok": True, "id": card_id}
+
+@router.delete("/api/v2/cards/{card_id}")
+async def delete_memory_card(card_id: str):
+    await delete_card(card_id)
+    return {"ok": True}
+
+@router.patch("/api/v2/cards/{card_id}/status")
+async def change_card_status(card_id: str, status: str):
+    ok = await update_card_status(card_id, status)
+    return {"ok": ok}
+
+@router.get("/api/v2/cards/{card_id}/links")
+async def get_card_links(card_id: str):
+    return await get_all_links(card_id)
+
+@router.post("/api/v2/cards/{card_id}/links")
+async def add_card_link(card_id: str, to_id: str, relation: str):
+    link = await create_link(card_id, to_id, relation)
+    return link
+
+@router.post("/api/v2/digest")
+async def trigger_digest_v2():
+    from digest_v2 import manual_digest_v2
+    return await manual_digest_v2()

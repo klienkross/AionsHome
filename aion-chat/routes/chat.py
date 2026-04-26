@@ -23,6 +23,9 @@ from tts import TTSStreamer
 
 HEART_CMD_PATTERN = re.compile(r'\[HEART:([^\]]+)\]')
 MEMORY_CMD_PATTERN = re.compile(r'\[MEMORY:([^\]]+)\]')
+RECALL_CMD_PATTERN = re.compile(r'\[RECALL:([^\]]+)\]')
+ORGANIZE_CMD_PATTERN = re.compile(r'\[ORGANIZE:([^\]]+)\]')
+MEM_EDIT_PATTERN = re.compile(r'\[MEM_EDIT:([^\]]+)\]')
 ACTIVITY_CHECK_PATTERN = re.compile(r'\[查看动态:(\d+)\]')
 VIDEO_CALL_CMD = '[视频电话]'
 THEATER_STAT_PATTERN = re.compile(r'\[剧场属性[：:]([^\s]+)\s*([+\-＋－]\d+)\]')
@@ -357,7 +360,11 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
     if SETTINGS.get("obsidian_vault_path"):
         abilities.append(f"[OBSIDIAN_READ:YYYY-MM-DD] — 查看{user_name}指定日期的Obsidian日记全文。[OBSIDIAN_RECENT:N] — 查看最近N天日记摘要（N最大14）。[OBSIDIAN_SEARCH:关键词] — 搜索日记中含某关键词的内容（最多返回10篇）。当{user_name}提到日记、某天发生的事、想回顾过去时主动使用，使用后系统会自动读取并将内容发给你，查看前不要编造内容。")
-    abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。")
+    abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。例：[MEMORY:2026年4月26日，{user_name}通过了驾照考试]")
+    abilities.append(f"[RECALL:关键词1,关键词2] — 搜索记忆库。你没有记忆库的直接访问权限，必须用此指令查询。使用后系统会返回带有卡片ID的结果列表，请等待系统返回，不要编造记忆内容。例：[RECALL:培训,专利]")
+    abilities.append(f"[ORGANIZE:关键词] — 当你发现记忆库中某个话题的记忆需要整理时使用。系统会自动合并和归类相关记忆。例：[ORGANIZE:培训]")
+    # MEM_EDIT 能力暂不暴露给 bot，代码已就绪，待 bot 可靠后启用
+    # abilities.append(f"[MEM_EDIT:卡片ID|操作|内容] — 修改记忆卡片。...")
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     schedules = await get_active_schedules()
@@ -566,23 +573,47 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                 for mem_content in memory_matches:
                     mem_content = mem_content.strip()
                     if mem_content:
-                        mem_now = time.time()
-                        mem_id = f"mem_{int(mem_now*1000)}"
-                        vec = await get_embedding(mem_content)
-                        async with get_db() as mem_db:
-                            await mem_db.execute(
-                                "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts, unresolved) "
-                                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                                (mem_id, mem_content, "重要事件", mem_now, conv_id,
-                                 _pack_embedding(vec) if vec else None, '', 0.5, None, None, 0)
-                            )
-                            await mem_db.commit()
-                        mem_data = {"id": mem_id, "content": mem_content, "type": "重要事件",
-                                    "created_at": mem_now, "keywords": "", "importance": 0.5,
+                        from memory_cards import create_card
+                        card = await create_card(
+                            content=mem_content,
+                            card_type="event",
+                            source_conv=conv_id,
+                            importance=0.5,
+                        )
+                        mem_data = {"id": card["id"], "content": mem_content, "type": card["type"],
+                                    "created_at": card["created_at"], "keywords": card["keywords"],
+                                    "importance": card["importance"],
                                     "source_start_ts": None, "source_end_ts": None}
                         await manager.broadcast({"type": "memory_added", "data": mem_data})
-                        mr_data = {'type': 'memory_record', 'msg_id': ai_msg_id, 'content': mem_content, 'mem_id': mem_id}
+                        mr_data = {'type': 'memory_record', 'msg_id': ai_msg_id, 'content': mem_content, 'mem_id': card["id"]}
                         await _q.put(mr_data)
+
+            # 检测主动检索指令 → 异步追加回复
+            recall_matches = RECALL_CMD_PATTERN.findall(full_text)
+            recall_all_kws = []
+            if recall_matches:
+                full_text = RECALL_CMD_PATTERN.sub("", full_text).strip()
+                for keywords_str in recall_matches:
+                    kws = [k.strip() for k in keywords_str.split(",") if k.strip()]
+                    if kws:
+                        recall_all_kws.append(kws)
+
+            organize_matches = ORGANIZE_CMD_PATTERN.findall(full_text)
+            if organize_matches:
+                full_text = ORGANIZE_CMD_PATTERN.sub("", full_text).strip()
+                for keywords_str in organize_matches:
+                    kws = [k.strip() for k in keywords_str.split(",") if k.strip()]
+                    from active_recall import organize_memories
+                    result = await organize_memories(kws)
+                    print(f"[ORGANIZE] {result}")
+
+            mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
+            if mem_edit_matches:
+                full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
+                from active_recall import execute_mem_edit
+                for raw in mem_edit_matches:
+                    result = await execute_mem_edit(raw)
+                    print(f"[MEM_EDIT] {result}")
 
             full_text = META_TAG_PATTERN.sub("", full_text).strip()
 
@@ -630,6 +661,9 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                     int(obsidian_recent_match.group(1)) if obsidian_recent_match else None,
                     obsidian_search_match.group(1) if obsidian_search_match else None,
                 ))
+
+            if recall_all_kws:
+                asyncio.create_task(perform_recall_check(conv_id, model_key, recall_all_kws))
 
             if activity_n > 0:
                 activity_data = {'type': 'activity_check', 'conv_id': conv_id, 'n': activity_n, 'msg_id': ai_msg_id}
@@ -798,7 +832,11 @@ async def send_message(conv_id: str, body: MsgCreate):
     abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
     if SETTINGS.get("obsidian_vault_path"):
         abilities.append(f"[OBSIDIAN_READ:YYYY-MM-DD] — 查看{user_name}指定日期的Obsidian日记全文。[OBSIDIAN_RECENT:N] — 查看最近N天日记摘要（N最大14）。[OBSIDIAN_SEARCH:关键词] — 搜索日记中含某关键词的内容（最多返回10篇）。当{user_name}提到日记、某天发生的事、想回顾过去时主动使用，使用后系统会自动读取并将内容发给你，查看前不要编造内容。")
-    abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。")
+    abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。例：[MEMORY:2026年4月26日，{user_name}通过了驾照考试]")
+    abilities.append(f"[RECALL:关键词1,关键词2] — 搜索记忆库。你没有记忆库的直接访问权限，必须用此指令查询。使用后系统会返回带有卡片ID的结果列表，请等待系统返回，不要编造记忆内容。例：[RECALL:培训,专利]")
+    abilities.append(f"[ORGANIZE:关键词] — 当你发现记忆库中某个话题的记忆需要整理时使用。系统会自动合并和归类相关记忆。例：[ORGANIZE:培训]")
+    # MEM_EDIT 能力暂不暴露给 bot，代码已就绪，待 bot 可靠后启用
+    # abilities.append(f"[MEM_EDIT:卡片ID|操作|内容] — 修改记忆卡片。...")
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     # 注入当前日程列表
@@ -1080,25 +1118,48 @@ async def send_message(conv_id: str, body: MsgCreate):
                 for mem_content in memory_matches:
                     mem_content = mem_content.strip()
                     if mem_content:
-                        mem_now = time.time()
-                        mem_id = f"mem_{int(mem_now*1000)}"
-                        vec = await get_embedding(mem_content)
-                        async with get_db() as mem_db:
-                            await mem_db.execute(
-                                "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts, unresolved) "
-                                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                                (mem_id, mem_content, "重要事件", mem_now, conv_id,
-                                 _pack_embedding(vec) if vec else None, '', 0.5, None, None, 0)
-                            )
-                            await mem_db.commit()
-                        mem_data = {"id": mem_id, "content": mem_content, "type": "重要事件",
-                                    "created_at": mem_now, "keywords": "", "importance": 0.5,
+                        from memory_cards import create_card
+                        card = await create_card(
+                            content=mem_content,
+                            card_type="event",
+                            source_conv=conv_id,
+                            importance=0.5,
+                        )
+                        mem_data = {"id": card["id"], "content": mem_content, "type": card["type"],
+                                    "created_at": card["created_at"], "keywords": card["keywords"],
+                                    "importance": card["importance"],
                                     "source_start_ts": None, "source_end_ts": None}
                         await manager.broadcast({"type": "memory_added", "data": mem_data})
-                        mr_data = {'type': 'memory_record', 'msg_id': ai_msg_id, 'content': mem_content, 'mem_id': mem_id}
+                        mr_data = {'type': 'memory_record', 'msg_id': ai_msg_id, 'content': mem_content, 'mem_id': card["id"]}
                         await _q.put(mr_data)
-                        print(f"[MEMORY] AI 主动录入记忆: {mem_content[:50]}")
+                        print(f"[MEMORY] AI 录入卡片: {mem_content[:50]}")
 
+            # 检测主动检索指令 → 异步追加回复
+            recall_matches = RECALL_CMD_PATTERN.findall(full_text)
+            recall_all_kws = []
+            if recall_matches:
+                full_text = RECALL_CMD_PATTERN.sub("", full_text).strip()
+                for keywords_str in recall_matches:
+                    kws = [k.strip() for k in keywords_str.split(",") if k.strip()]
+                    if kws:
+                        recall_all_kws.append(kws)
+
+            organize_matches = ORGANIZE_CMD_PATTERN.findall(full_text)
+            if organize_matches:
+                full_text = ORGANIZE_CMD_PATTERN.sub("", full_text).strip()
+                for keywords_str in organize_matches:
+                    kws = [k.strip() for k in keywords_str.split(",") if k.strip()]
+                    from active_recall import organize_memories
+                    result = await organize_memories(kws)
+                    print(f"[ORGANIZE] {result}")
+
+            mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
+            if mem_edit_matches:
+                full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
+                from active_recall import execute_mem_edit
+                for raw in mem_edit_matches:
+                    result = await execute_mem_edit(raw)
+                    print(f"[MEM_EDIT] {result}")
 
             # 检测剧场指令 [剧场属性：xxx ±N] / [剧场道具：xxx]
             theater_updates = []
@@ -1190,6 +1251,9 @@ async def send_message(conv_id: str, body: MsgCreate):
                     int(obsidian_recent_match.group(1)) if obsidian_recent_match else None,
                     obsidian_search_match.group(1) if obsidian_search_match else None,
                 ))
+
+            if recall_all_kws:
+                asyncio.create_task(perform_recall_check(conv_id, model_key, recall_all_kws))
 
             # [查看动态:n] 查看设备活动摘要 → 携带摘要自动追加一轮 Core 回复
             if activity_n > 0:
@@ -1465,6 +1529,139 @@ async def perform_poi_check(conv_id: str, model_key: str, categories: list[str])
             pass
     await export_conversation(conv_id)
     print(f"[POI_CHECK] 搜索完成，已自动追加回复: {searched_cats}")
+
+
+# ── [RECALL] 记忆检索 → 携带结果自动追加 Core 回复 ─────
+async def perform_recall_check(conv_id: str, model_key: str, all_keywords: list[list[str]]):
+    """AI 使用 [RECALL:kw1,kw2]：搜索记忆库 → 注入结果 → AI 再回复一轮"""
+    from active_recall import search_memory
+    all_results = []
+    for kws in all_keywords:
+        results = await search_memory(kws)
+        all_results.extend(results)
+    seen_ids = set()
+    deduped = []
+    for r in all_results:
+        if r["id"] not in seen_ids:
+            seen_ids.add(r["id"])
+            deduped.append(r)
+
+    if not deduped:
+        recall_text = "（记忆库中没有找到相关内容）"
+    else:
+        lines = []
+        for i, r in enumerate(deduped[:10], 1):
+            type_label = r.get("type", "")
+            status = r.get("status", "open")
+            card_id = r.get("id", "?")
+            kws = r.get("keywords", "")
+            lines.append(f"#{i}  ID: {card_id}")
+            lines.append(f"    类型: {type_label}  状态: {status}")
+            lines.append(f"    内容: {r['content']}")
+            lines.append(f"    关键词: {kws}")
+        recall_text = "\n".join(lines)
+
+    wb = load_worldbook()
+    user_name = wb.get("user_name", "用户")
+    ai_name = wb.get("ai_name", "AI")
+    kw_display = ", ".join(kw for kws in all_keywords for kw in kws)
+
+    prefix = []
+    if wb.get("ai_persona"):
+        prefix.append({"role": "user", "content": f"[系统设定 - AI人设]\n{wb['ai_persona']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会按照设定扮演角色。"})
+    if wb.get("user_persona"):
+        prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
+    if wb.get("system_prompt"):
+        prefix.append({"role": "user", "content": f"[系统提示]\n{wb['system_prompt']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会遵循这些规则。"})
+
+    import aiosqlite
+    async with get_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT role, content FROM messages WHERE conv_id=? AND role IN ('user','assistant','system') ORDER BY created_at DESC LIMIT 8",
+            (conv_id,)
+        )
+        rows = await cur.fetchall()
+    recent = []
+    for r in reversed(rows):
+        role = r["role"]
+        if role == "system":
+            recent.append({"role": "user", "content": f"[系统消息] {r['content']}"})
+        else:
+            recent.append({"role": role, "content": r["content"]})
+
+    recall_prompt = (
+        f"[系统：记忆检索完成] 关键词：{kw_display}，共找到{len(deduped)}条结果。\n\n"
+        f"===== 记忆卡片列表 =====\n{recall_text}\n===== 列表结束 =====\n\n"
+        f"以上是系统从记忆库中检索到的真实记录。请基于这些内容回应{user_name}，不要编造不在列表中的记忆。\n"
+        f"如需修改卡片，使用列表中的真实ID，例：[MEM_EDIT:card_xxxx|keywords|新关键词1,新关键词2]"
+    )
+    messages = prefix + recent + [{"role": "user", "content": recall_prompt}]
+
+    msg_id = f"msg_{int(time.time()*1000)}_rc"
+    rc_tts = None
+    if manager.any_tts_enabled():
+        tts_voice = manager.get_tts_voice()
+        if tts_voice:
+            rc_tts = TTSStreamer(msg_id, tts_voice, manager)
+
+    full_text = ""
+    try:
+        _temp = SETTINGS.get("temperature")
+        async for chunk in stream_ai(messages, model_key, temperature=_temp):
+            full_text += chunk
+            if rc_tts:
+                rc_tts.feed(chunk)
+    except Exception as e:
+        full_text = f"[记忆检索回复失败] {e}"
+
+    if not full_text.strip():
+        return
+
+    mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
+    if mem_edit_matches:
+        full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
+        from active_recall import execute_mem_edit
+        for raw in mem_edit_matches:
+            result = await execute_mem_edit(raw)
+            print(f"[MEM_EDIT via RECALL] {result}")
+
+    sys_now = time.time()
+    sys_msg_id = f"msg_{int(sys_now*1000)}_rc_sys"
+    sys_content = f"{ai_name}查阅了记忆库（{kw_display}）\n{recall_text}"
+    async with get_db() as db:
+        await db.execute(
+            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+            (sys_msg_id, conv_id, "system", sys_content, sys_now, "[]")
+        )
+        await db.commit()
+    sys_msg = {"id": sys_msg_id, "conv_id": conv_id, "role": "system",
+               "content": sys_content, "created_at": sys_now, "attachments": []}
+    await manager.broadcast({"type": "msg_created", "data": sys_msg})
+
+    now = time.time()
+    async with get_db() as db:
+        await db.execute(
+            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+            (msg_id, conv_id, "assistant", full_text, now, "[]")
+        )
+        await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
+        await db.commit()
+
+    ai_msg = {"id": msg_id, "conv_id": conv_id, "role": "assistant",
+              "content": full_text, "created_at": now, "attachments": []}
+    await manager.broadcast({"type": "msg_created", "data": ai_msg})
+
+    if rc_tts:
+        try:
+            await rc_tts.flush()
+        except Exception:
+            pass
+    await export_conversation(conv_id)
+    print(f"[RECALL] 检索完成，已自动追加回复: {kw_display}")
 
 
 # ── [查看动态:n] 查看设备活动摘要 → 自动追加 Core 回复 ─────
@@ -1770,7 +1967,11 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
     if SETTINGS.get("obsidian_vault_path"):
         abilities.append(f"[OBSIDIAN_READ:YYYY-MM-DD] — 查看{user_name}指定日期的Obsidian日记全文。[OBSIDIAN_RECENT:N] — 查看最近N天日记摘要（N最大14）。[OBSIDIAN_SEARCH:关键词] — 搜索日记中含某关键词的内容（最多返回10篇）。当{user_name}提到日记、某天发生的事、想回顾过去时主动使用，使用后系统会自动读取并将内容发给你，查看前不要编造内容。")
-    abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。")
+    abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。例：[MEMORY:2026年4月26日，{user_name}通过了驾照考试]")
+    abilities.append(f"[RECALL:关键词1,关键词2] — 搜索记忆库。你没有记忆库的直接访问权限，必须用此指令查询。使用后系统会返回带有卡片ID的结果列表，请等待系统返回，不要编造记忆内容。例：[RECALL:培训,专利]")
+    abilities.append(f"[ORGANIZE:关键词] — 当你发现记忆库中某个话题的记忆需要整理时使用。系统会自动合并和归类相关记忆。例：[ORGANIZE:培训]")
+    # MEM_EDIT 能力暂不暴露给 bot，代码已就绪，待 bot 可靠后启用
+    # abilities.append(f"[MEM_EDIT:卡片ID|操作|内容] — 修改记忆卡片。...")
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     schedules = await get_active_schedules()
@@ -2008,24 +2209,48 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 for mem_content in memory_matches:
                     mem_content = mem_content.strip()
                     if mem_content:
-                        mem_now = time.time()
-                        mem_id = f"mem_{int(mem_now*1000)}"
-                        vec = await get_embedding(mem_content)
-                        async with get_db() as mem_db:
-                            await mem_db.execute(
-                                "INSERT INTO memories (id, content, type, created_at, source_conv, embedding, keywords, importance, source_start_ts, source_end_ts, unresolved) "
-                                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                                (mem_id, mem_content, "重要事件", mem_now, conv_id,
-                                 _pack_embedding(vec) if vec else None, '', 0.5, None, None, 0)
-                            )
-                            await mem_db.commit()
-                        mem_data = {"id": mem_id, "content": mem_content, "type": "重要事件",
-                                    "created_at": mem_now, "keywords": "", "importance": 0.5,
+                        from memory_cards import create_card
+                        card = await create_card(
+                            content=mem_content,
+                            card_type="event",
+                            source_conv=conv_id,
+                            importance=0.5,
+                        )
+                        mem_data = {"id": card["id"], "content": mem_content, "type": card["type"],
+                                    "created_at": card["created_at"], "keywords": card["keywords"],
+                                    "importance": card["importance"],
                                     "source_start_ts": None, "source_end_ts": None}
                         await manager.broadcast({"type": "memory_added", "data": mem_data})
-                        mr_data = {'type': 'memory_record', 'msg_id': ai_msg_id, 'content': mem_content, 'mem_id': mem_id}
+                        mr_data = {'type': 'memory_record', 'msg_id': ai_msg_id, 'content': mem_content, 'mem_id': card["id"]}
                         await _q.put(mr_data)
-                        print(f"[MEMORY] AI 主动录入记忆: {mem_content[:50]}")
+                        print(f"[MEMORY] AI 录入卡片: {mem_content[:50]}")
+
+            # 检测主动检索指令 → 异步追加回复
+            recall_matches = RECALL_CMD_PATTERN.findall(full_text)
+            recall_all_kws = []
+            if recall_matches:
+                full_text = RECALL_CMD_PATTERN.sub("", full_text).strip()
+                for keywords_str in recall_matches:
+                    kws = [k.strip() for k in keywords_str.split(",") if k.strip()]
+                    if kws:
+                        recall_all_kws.append(kws)
+
+            organize_matches = ORGANIZE_CMD_PATTERN.findall(full_text)
+            if organize_matches:
+                full_text = ORGANIZE_CMD_PATTERN.sub("", full_text).strip()
+                for keywords_str in organize_matches:
+                    kws = [k.strip() for k in keywords_str.split(",") if k.strip()]
+                    from active_recall import organize_memories
+                    result = await organize_memories(kws)
+                    print(f"[ORGANIZE] {result}")
+
+            mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
+            if mem_edit_matches:
+                full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
+                from active_recall import execute_mem_edit
+                for raw in mem_edit_matches:
+                    result = await execute_mem_edit(raw)
+                    print(f"[MEM_EDIT] {result}")
 
             # 清洗 AI 回复中模仿产生的 <meta> 标签
             full_text = META_TAG_PATTERN.sub("", full_text).strip()
@@ -2078,6 +2303,9 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                     int(obsidian_recent_match.group(1)) if obsidian_recent_match else None,
                     obsidian_search_match.group(1) if obsidian_search_match else None,
                 ))
+
+            if recall_all_kws:
+                asyncio.create_task(perform_recall_check(conv_id, model_key, recall_all_kws))
 
             # [查看动态:n] 查看设备活动摘要 → 携带摘要自动追加一轮 Core 回复
             if activity_n > 0:

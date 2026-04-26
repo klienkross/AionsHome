@@ -38,7 +38,8 @@ from routes import theater as theater_routes
 from routes import ghost_forest as ghost_forest_routes
 from routes import gift as gift_routes
 from activity import pc_tracker
-from memory import auto_digest
+# from memory import auto_digest  # V1
+from digest_v2 import auto_digest_v2 as auto_digest
 
 
 # ── 自动记忆总结定时任务 ──────────────────────────

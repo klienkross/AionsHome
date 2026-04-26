@@ -86,17 +86,22 @@
   </div>
   <div class="page-content">
     <input class="mem-search" id="memSearch" type="text" placeholder="🔍 搜索记忆..." oninput="filterMemories()">
+    <div class="mem-filters" id="memFilters" style="display:flex;gap:6px;margin-bottom:8px;">
+      <button class="filter-btn active" data-filter="all" onclick="setFilter('all')" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;">全部</button>
+      <button class="filter-btn" data-filter="open" onclick="setFilter('open')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;">进行中</button>
+      <button class="filter-btn" data-filter="closed" onclick="setFilter('closed')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer;">已完结</button>
+    </div>
     <div class="mem-count" id="memCount"></div>
     <div class="mem-list" id="memList"><div class="mem-empty">暂无记忆</div></div>
     <div class="mem-add-row">
       <input type="text" id="memAddInput" placeholder="手动添加一条记忆...">
       <select id="memAddType">
-        <option value="shared_moment">共同经历</option>
-        <option value="emotion">情感时刻</option>
-        <option value="life_event">重要事件</option>
-        <option value="preference">喜好/雷区</option>
-        <option value="promise">约定承诺</option>
-        <option value="milestone">关系里程碑</option>
+        <option value="event">事件</option>
+        <option value="preference">偏好</option>
+        <option value="emotion">情感</option>
+        <option value="promise">承诺</option>
+        <option value="plan">计划</option>
+        <option value="fact">事实</option>
       </select>
       <button onclick="addMemory()">添加</button>
     </div>
@@ -125,9 +130,24 @@
 <script>
 const MEM_TYPE_LABELS = {
   shared_moment:"共同经历", emotion:"情感时刻", life_event:"重要事件",
-  preference:"喜好/雷区", promise:"约定承诺", milestone:"关系里程碑", event:"事件", digest:"总结"
+  preference:"喜好/雷区", promise:"约定承诺", milestone:"关系里程碑",
+  event:"事件", digest:"总结", plan:"计划", fact:"事实", aggregate:"聚合"
 };
+const STATUS_LABELS = { open:"进行中", closed:"已完结", merged:"已合并" };
+const STATUS_COLORS = { open:"#4caf50", closed:"#9e9e9e", merged:"#7e57c2" };
 let _allMemories = [];
+let _currentFilter = 'all';
+
+function setFilter(f) {
+  _currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    const isActive = btn.getAttribute('data-filter') === f;
+    btn.style.background = isActive ? 'var(--accent)' : 'var(--surface2)';
+    btn.style.color = isActive ? '#fff' : 'var(--text)';
+    btn.style.border = isActive ? 'none' : '1px solid var(--border)';
+  });
+  renderMemories();
+}
 
 connectCommonWS(msg => {
   if (msg.type === "memory_added") {
@@ -143,7 +163,7 @@ connectCommonWS(msg => {
 
 async function loadMemories() {
   try {
-    _allMemories = await api("GET", "/api/memories");
+    _allMemories = await api("GET", "/api/v2/cards");
     renderMemories();
   } catch(e) {
     $("memList").innerHTML = '<div class="mem-empty">加载失败</div>';
@@ -154,14 +174,22 @@ function filterMemories() { renderMemories(); }
 
 function renderMemories() {
   const query = ($("memSearch").value || "").toLowerCase();
-  const filtered = query
-    ? _allMemories.filter(m => m.content.toLowerCase().includes(query) || (MEM_TYPE_LABELS[m.type]||"").includes(query))
-    : _allMemories;
-  $("memCount").textContent = `共 ${_allMemories.length} 条记忆` + (query ? `，筛选出 ${filtered.length} 条` : "");
+  let filtered = _allMemories;
+  if (_currentFilter !== 'all') {
+    filtered = filtered.filter(m => m.status === _currentFilter);
+  }
+  if (query) {
+    filtered = filtered.filter(m => m.content.toLowerCase().includes(query) || (MEM_TYPE_LABELS[m.type]||"").includes(query));
+  }
+  $("memCount").textContent = `共 ${_allMemories.length} 条记忆` + (filtered.length !== _allMemories.length ? `，筛选出 ${filtered.length} 条` : "");
   const el = $("memList");
   if (!filtered.length) { el.innerHTML = '<div class="mem-empty">暂无记忆</div>'; return; }
   el.innerHTML = filtered.map(m => {
     const typeLabel = MEM_TYPE_LABELS[m.type] || m.type;
+    const statusColor = STATUS_COLORS[m.status] || STATUS_COLORS.open;
+    const statusLabel = STATUS_LABELS[m.status] || m.status || '';
+    const isAggregate = m.type === 'aggregate';
+    const expandBtn = isAggregate ? `<button onclick="expandCard('${escHtml(m.id)}')" title="展开" style="background:none;border:none;cursor:pointer;font-size:12px;opacity:0.7">🔗</button>` : '';
     const timeStr = m.created_at ? new Date(m.created_at * 1000).toLocaleString("zh-CN", {month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}) : "";
     const hasSource = m.source_start_ts && m.source_end_ts;
     const sourceBtn = hasSource ? `<button class="mem-source-btn" onclick="viewSource('${escHtml(m.id)}')" title="查看原文">📜</button>` : '';
@@ -171,15 +199,16 @@ function renderMemories() {
       if (kws.length) kwDisplay = `<span class="mem-kw">${kws.map(k => escHtml(k)).join(' · ')}</span>`;
     } catch(e) { if (m.keywords) kwDisplay = `<span class="mem-kw">${escHtml(m.keywords)}</span>`; }
     const impDisplay = m.importance != null ? `<span class="mem-imp" title="重要度">${Number(m.importance).toFixed(1)}</span>` : '';
-    const pinClass = m.unresolved ? 'mem-pin active' : 'mem-pin';
-    return `<div class="mem-entry${m.unresolved ? ' mem-unresolved' : ''}" data-id="${escHtml(m.id)}">
-      <div class="mem-left"><span class="mem-type">${escHtml(typeLabel)}</span>${impDisplay}</div>
+    const pinClass = m.status === 'open' ? 'mem-pin active' : 'mem-pin';
+    return `<div class="mem-entry${m.status === 'open' ? ' mem-unresolved' : ''}" data-id="${escHtml(m.id)}">
+      <div class="mem-left"><span class="mem-type">${escHtml(typeLabel)}</span><span class="mem-type" style="background:${statusColor}22;color:${statusColor}">${escHtml(statusLabel)}</span>${impDisplay}</div>
       <div style="flex:1;min-width:0">
         <div class="mem-content" id="mc_${escHtml(m.id)}">${escHtml(m.content)}</div>
         <div class="mem-meta">${kwDisplay}<span class="mem-time">${escHtml(timeStr)}</span></div>
       </div>
       <div class="mem-actions">
-        <button class="${pinClass}" onclick="toggleUnresolved('${escHtml(m.id)}')" title="标记待办">📌</button>
+        <button class="${pinClass}" onclick="toggleUnresolved('${escHtml(m.id)}')" title="切换状态">📌</button>
+        ${expandBtn}
         ${sourceBtn}
         <button onclick="editMemory('${escHtml(m.id)}')" title="编辑">✏️</button>
         <button onclick="deleteMemory('${escHtml(m.id)}')" title="删除">🗑️</button>
@@ -247,7 +276,7 @@ async function saveMemoryEdit(id) {
   if (newType) body.type = newType;
   if (imp != null && !isNaN(imp)) body.importance = Math.max(0, Math.min(1, imp));
   try {
-    await api("PUT", `/api/memories/${id}`, body);
+    await api("PUT", `/api/v2/cards/${id}`, body);
     const mem = _allMemories.find(m => m.id === id);
     if (mem) { mem.content = newContent; mem.keywords = body.keywords; if (newType) mem.type = newType; if (body.importance != null) mem.importance = body.importance; }
     document.querySelector('.sub-page').classList.remove('editing-focus');
@@ -258,17 +287,19 @@ async function saveMemoryEdit(id) {
 async function deleteMemory(id) {
   if (!confirm("确定删除这条记忆？")) return;
   try {
-    await api("DELETE", `/api/memories/${id}`);
+    await api("DELETE", `/api/v2/cards/${id}`);
     _allMemories = _allMemories.filter(m => m.id !== id);
     renderMemories();
   } catch(e) { alert("删除失败"); }
 }
 
 async function toggleUnresolved(id) {
+  const mem = _allMemories.find(m => m.id === id);
+  if (!mem) return;
+  const newStatus = mem.status === 'open' ? 'closed' : 'open';
   try {
-    const result = await api("PATCH", `/api/memories/${id}/unresolved`);
-    const mem = _allMemories.find(m => m.id === id);
-    if (mem) mem.unresolved = result.unresolved;
+    await api("PATCH", `/api/v2/cards/${id}/status?status=${newStatus}`);
+    mem.status = newStatus;
     renderMemories();
   } catch(e) { alert("切换失败"); }
 }
@@ -278,7 +309,7 @@ async function addMemory() {
   if (!content) return;
   const type = $("memAddType").value;
   try {
-    const mem = await api("POST", "/api/memories", { content, type });
+    const mem = await api("POST", "/api/v2/cards", { content, type });
     _allMemories.unshift(mem);
     $("memAddInput").value = "";
     renderMemories();
@@ -294,8 +325,8 @@ async function triggerDigest() {
   statusEl.className = "digest-status info";
   statusEl.textContent = "正在分析新消息并生成记忆摘要，请稍候...";
   try {
-    const result = await api("POST", "/api/memories/digest");
-    if (result.new_memories_count > 0) {
+    const result = await api("POST", "/api/v2/digest");
+    if (result.new_cards_count > 0) {
       statusEl.className = "digest-status success";
       statusEl.textContent = result.message;
       await loadMemories();
@@ -319,16 +350,45 @@ async function viewSource(memId) {
   const listEl = $("sourceList");
   listEl.innerHTML = '<div class="mem-empty">加载中...</div>';
   try {
-    const result = await api("GET", `/api/memories/${memId}/source`);
-    if (!result.ok || !result.messages || !result.messages.length) {
-      listEl.innerHTML = '<div class="mem-empty">' + (result.message || "没有找到原文记录") + '</div>';
-      return;
+    const card = await api("GET", `/api/v2/cards/${memId}`);
+    let html = '<h3>📜 卡片详情</h3>';
+    html += `<div class="source-msg"><span class="source-name">${escHtml(MEM_TYPE_LABELS[card.type] || card.type)}</span><div style="margin-top:4px;white-space:pre-wrap;word-break:break-word;">${escHtml(card.content)}</div></div>`;
+    if (card.links && card.links.length) {
+      html += '<h3>🔗 关联卡片</h3>';
+      for (const link of card.links) {
+        const linkedId = link.from_id === memId ? link.to_id : link.from_id;
+        try {
+          const linkedCard = await api("GET", `/api/v2/cards/${linkedId}`);
+          if (linkedCard && linkedCard.content) {
+            html += `<div class="source-msg"><span class="source-name">${escHtml(link.relation)}</span><div style="margin-top:4px">${escHtml(linkedCard.content)}</div></div>`;
+          }
+        } catch(e) {}
+      }
     }
-    listEl.innerHTML = result.messages.map(m => {
-      const timeStr = m.created_at ? new Date(m.created_at * 1000).toLocaleString("zh-CN", {month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"}) : "";
-      return `<div class="source-msg"><span class="source-name">${escHtml(m.name)}</span><span class="source-time">${escHtml(timeStr)}</span><div style="margin-top:4px;white-space:pre-wrap;word-break:break-word;">${escHtml(m.content)}</div></div>`;
-    }).join("");
+    listEl.innerHTML = html;
   } catch(e) { listEl.innerHTML = '<div class="mem-empty">加载失败</div>'; }
+}
+
+async function expandCard(cardId) {
+  try {
+    const card = await api("GET", `/api/v2/cards/${cardId}`);
+    let html = '<h3>🔗 关联卡片</h3>';
+    if (card.links && card.links.length) {
+      for (const link of card.links) {
+        const linkedId = link.from_id === cardId ? link.to_id : link.from_id;
+        try {
+          const linkedCard = await api("GET", `/api/v2/cards/${linkedId}`);
+          if (linkedCard && linkedCard.content) {
+            html += `<div class="source-msg"><span class="source-name">${escHtml(link.relation)}</span><div style="margin-top:4px">${escHtml(linkedCard.content)}</div></div>`;
+          }
+        } catch(e) {}
+      }
+    } else {
+      html += '<div class="mem-empty">没有关联卡片</div>';
+    }
+    $("sourceList").innerHTML = html;
+    $("sourceOverlay").classList.add("show");
+  } catch(e) { alert("展开失败"); }
 }
 function closeSource() { $("sourceOverlay").classList.remove("show"); }
 
