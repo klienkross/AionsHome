@@ -305,3 +305,65 @@ Raw data (timestamps + lengths) lives in `chat.db` messages table — formula ca
 ### 6.3 Branch Strategy
 
 All work on a new branch `feature/memory-v2`, merged phase by phase or as a whole after testing.
+
+---
+
+## 7. 实施后补充（2026-04-26 合并时记录）
+
+以下为实际实施中超出原计划的改进，已合入 main。
+
+### 7.1 关键词子串匹配（补充向量匹配）
+
+原设计仅依赖向量相似度做卡片匹配。实践发现 0.65 的 `ask_threshold` 过松，会把不相关的卡片硬拉到一起。改进：
+
+- `_find_matching_open_cards` 增加关键词子串重叠匹配：同 type + 关键词交集 ≥ 2 → 自动匹配
+- 聚合阶段（`rebuild_links.py`）完全放弃向量相似度兜底，只靠关键词匹配
+- 质量大幅提升（13 个高质量聚合 vs 之前 48 个含噪聚合）
+
+### 7.2 多聚合归属
+
+原设计一张卡只能属于一个聚合（`merged` 状态互斥）。实践改为：
+
+- 一张卡可属于多个聚合，用 70% 重叠阈值去重聚合组
+- `merged` 标记仍然打上（方便检查算法覆盖率），但 recall 不再过滤 merged 卡，只降权 0.3×
+- 聚合上限 `MAX_CLUSTER=12` 防止雪球效应
+
+### 7.3 AI 生成聚合摘要
+
+原设计聚合卡的 summary 用箭头拼接（`"事件A → 事件B → 事件C"`）。改为调 `call_sentinel_text` 生成自然语言摘要，失败时回退到拼接方式。
+
+### 7.4 低重要度事件自动关闭
+
+Digest 阶段新增规则：`importance ≤ 0.4` 且创建超过 24 小时的 `event` 类型卡片自动关闭，减少 open 卡片堆积。
+
+### 7.5 RECALL 改进
+
+- 返回结构化格式：包含 card ID、类型、状态、关键词，便于 AI 精确引用
+- 结果存入 system 消息保留在对话上下文中（而非仅日志输出）
+- 提示词强调必须先 `[RECALL]` 查询后才能引用记忆，禁止编造
+
+### 7.6 MEM_EDIT 框架（预留）
+
+新增 `[MEM_EDIT:操作 card_id 参数]` 执行框架，支持操作：
+- `summary <card_id> <新摘要>` — 修改卡片内容
+- `keywords <card_id> <kw1,kw2,...>` — 修改关键词
+- `close <card_id>` — 关闭卡片
+- `delete <card_id>` — 删除卡片
+- `merge <card_id1> <card_id2>` — 合并两张卡片
+
+当前暂不暴露给 bot 的系统提示词，待可靠性验证后启用。
+
+### 7.7 工具脚本
+
+| 脚本 | 用途 |
+|------|------|
+| `tools/rebuild_links.py` | 清空现有聚合，基于关键词匹配重新聚类并生成聚合卡 |
+| `tools/vec_threshold_test.py` | 向量相似度阈值诊断，辅助调整 auto/ask 阈值 |
+| `tools/test_mem_edit.py` | MEM_EDIT 命令行测试工具 |
+| `tools/_show_agg.py` | 查看现有聚合卡及其成员 |
+
+### 7.8 已知问题与后续方向
+
+- **聚合覆盖率低（~9%）**：根因是 digest 生成的关键词过于具体，难以跨卡片交叉。需从 Agent A 的 prompt 优化关键词生成策略
+- **时间/场景共现未捕获**：同一天同地点发生的事件若关键词无交集则不会聚合，需引入时间窗口或场景维度
+- **向量匹配阈值待调优**：`vec_threshold_test.py` 可辅助分析，但最优阈值因数据而异
