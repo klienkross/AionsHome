@@ -56,7 +56,7 @@ def _keyword_match_score(query_keywords: list[str], mem_keywords_json: str) -> f
 async def recall_memories(query_text: str, query_keywords: list[str] = None,
                           top_k: int = 5, threshold: float = 0.45) -> tuple[list[dict], list[dict]]:
     """
-    综合评分 = 向量相似度×0.6 + 关键词命中率×0.3 + 重要度×0.1
+    综合评分 = 关键词命中率×0.7 + 向量相似度×0.15 + 重要度×0.15
     threshold 为最终得分门槛。
     返回 (matched, debug_top6): matched 为达标结果, debug_top6 为得分最高的前6条（含未达标）
     """
@@ -81,7 +81,7 @@ async def recall_memories(query_text: str, query_keywords: list[str] = None,
         vec_sim = cosine_similarity(query_vec, mem_vec)
         kw_score = _keyword_match_score(query_keywords, row["keywords"]) if query_keywords else 0.0
         importance = float(row["importance"] or 0.5)
-        base_score = vec_sim * 0.6 + kw_score * 0.3 + importance * 0.1
+        base_score = kw_score * 0.7 + vec_sim * 0.15 + importance * 0.15
         days = max(0.0, (now_ts - float(row["created_at"])) / 86400.0)
         decay = 1.0 if row["unresolved"] else math.exp(-0.02 * days)
         status_weight = 0.3 if row["status"] in ("closed", "merged") else 1.0
@@ -263,8 +263,15 @@ async def instant_digest(recent_messages: list[dict]) -> dict:
         f"4. 仅当提起之前做过的事、过去的回忆时，is_search_needed才输出为true。若在询问日常问题，不涉及回忆过去，is_search_needed输出为false。\n"
         f"   \"is_search_needed\": Boolean.\n"
         f"      - false: 纯闲聊/语气词/无实质内容，只是在陈述或表达感情，并未进行对于具体事实的询问则输出false。\n"
-        f"      - true: 当包含询问、回忆、或需要背景信息的对话，提起“昨天”、“之前”、“你还记得……”等。\n"
-        f"   \"keywords\": 提取 2-4 个搜索关键词（过滤掉 Aion, Ithil 等高频人名）。\n"
+        f"      - true: 当包含询问、回忆、或需要背景信息的对话，提起「昨天」「之前」「你还记得……」等。\n"
+        f"   \"keywords\": 提取 2-5 个搜索关键词，分两层：\n"
+        f"      · 领域词（1个）：大类，如 阅读、技术开发、日常起居、社交、情绪、创作、游戏、医疗、饮食、学业\n"
+        f"      · 实体词（1-4个）：具体的人事物地名，每个词 2-4 字，如 中亚史、阿里云、提拉米苏、蚊子\n"
+        f"      【严禁】长句式关键词（如\"recall功能回调缺失\"），每个关键词必须是独立短词。\n"
+        f"      【严禁】人名（{user_name}, {ai_name} 等）和泛指词（提醒、建议、完成、计划、测试、观察）。\n"
+        f"      示例：聊到之前迁移阿里云 → [\"技术开发\", \"阿里云\", \"迁移\"]\n"
+        f"      示例：提起上次吃的提拉米苏 → [\"饮食\", \"提拉米苏\"]\n"
+        f"      示例：回忆上次看中亚史的笔记 → [\"阅读\", \"中亚史\", \"笔记\"]\n"
         f"   \"require_detail\": Boolean.\n"
         f"      - false: 模糊回忆/情感抒发（只需读取摘要）。\n"
         f"      - true: 当且仅当询问具体事实/细节/步骤（需要读取正文），例如：还记得我们之前…你记得上次…等。\n"

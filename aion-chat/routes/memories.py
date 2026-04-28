@@ -257,3 +257,5 @@ async def add_card_link(card_id: str, to_id: str, relation: str):
 async def trigger_digest_v2():
     from digest_v2 import manual_digest_v2
     return await manual_digest_v2()
+
+

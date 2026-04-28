@@ -515,17 +515,28 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
             processed_chains.update(c["id"] for c in chain)
             print(f"[digest_v2] Created aggregate: {agg_summary[:60]}")
 
-    # Auto-close low-importance events older than 24h
-    cutoff_24h = time.time() - 24 * 3600
+    # Auto-close stale open cards by type
+    now_ts = time.time()
+    close_rules = [
+        ("type='event' AND importance <= 0.4", 24 * 3600),
+        ("type='event' AND importance > 0.4", 3 * 86400),
+        ("type IN ('emotion','fact')", 3 * 86400),
+        ("type IN ('plan','promise')", 7 * 86400),
+        ("type='preference'", 14 * 86400),
+    ]
     async with get_db() as db:
-        cur = await db.execute(
-            "UPDATE memory_cards SET status='closed', updated_at=? "
-            "WHERE type='event' AND status='open' AND importance <= 0.4 AND created_at < ?",
-            (time.time(), cutoff_24h)
-        )
-        if cur.rowcount > 0:
+        total_closed = 0
+        for condition, max_age in close_rules:
+            cutoff = now_ts - max_age
+            cur = await db.execute(
+                f"UPDATE memory_cards SET status='closed', updated_at=? "
+                f"WHERE {condition} AND status='open' AND created_at < ?",
+                (now_ts, cutoff)
+            )
+            total_closed += cur.rowcount
+        if total_closed > 0:
             await db.commit()
-            print(f"[digest_v2] Auto-closed {cur.rowcount} low-importance events (>24h)")
+            print(f"[digest_v2] Auto-closed {total_closed} stale open cards")
 
     # AI reflection + gift
     if conv_id and total_new > 0 and all_summaries:

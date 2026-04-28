@@ -251,9 +251,28 @@ async def create_aggregate_for_chain(chain: list[dict], summary: str) -> dict:
     last_ts = max(c["created_at"] for c in chain)
     last_status = chain[-1].get("status", "open")
 
+    all_kws = []
+    max_importance = 0.0
+    for c in chain:
+        kw_raw = c.get("keywords", "[]")
+        try:
+            kws = json.loads(kw_raw) if isinstance(kw_raw, str) else (kw_raw or [])
+        except (json.JSONDecodeError, TypeError):
+            kws = []
+        all_kws.extend(kws)
+        max_importance = max(max_importance, float(c.get("importance", 0.5)))
+    seen = set()
+    merged_kws = []
+    for kw in all_kws:
+        if kw and kw not in seen:
+            seen.add(kw)
+            merged_kws.append(kw)
+
     agg = await create_card(
         content=summary,
         card_type="aggregate",
+        keywords=merged_kws[:8],
+        importance=max_importance,
         source_start_ts=first_ts,
         source_end_ts=last_ts,
     )
