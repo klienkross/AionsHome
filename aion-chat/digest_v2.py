@@ -2,6 +2,7 @@
 Memory V2 Digest Engine: 原子卡片拆分 + 情绪评价 + 对话强度
 """
 
+import asyncio
 import json
 import time
 from datetime import datetime
@@ -124,7 +125,14 @@ def _build_agent_a_prompt(messages_text: str, user_name: str, ai_name: str, pers
         f"- 每张卡片的 content 应是一个完整的陈述句，包含日期和必要上下文\n"
         f"- 使用 \"{user_name}\" 和 \"{ai_name}\" 指代双方\n"
         f"- type 必须是以下之一：event, preference, emotion, promise, plan, fact\n"
-        f"- keywords: 2-6 个核心关键词，【严禁】人名（Aion, Ithil 等）和泛指词\n"
+        f"- keywords: 3-6 个关键词，分两层：\n"
+        f"  · 领域词（1-2个）：这件事属于什么大类。例：阅读、技术开发、日常起居、社交、情绪、创作、游戏\n"
+        f"  · 实体词（2-4个）：具体的人事物地名。例：中亚史、阿里云、提拉米苏、披风鸟人\n"
+        f"  领域词放前面，实体词放后面。每个关键词必须是数组中独立的字符串。\n"
+        f"  【严禁】人名（{user_name}, {ai_name} 等）、泛指词（提醒、建议、完成、计划、测试、观察、休息、未完成、担忧、偏好）\n"
+        f"  示例：\"阅读中亚史时对战车提出疑问\" → [\"阅读\", \"中亚史\", \"战车\", \"骑兵\"]\n"
+        f"  示例：\"提醒喝咖啡不要太快\" → [\"日常起居\", \"喝咖啡\", \"胃\"]\n"
+        f"  示例：\"表达想养蜘蛛的冲动\" → [\"日常起居\", \"养蜘蛛\", \"冲动\"]\n"
         f"- importance: 0.0-1.0，评分严厉（默认 0.3，只有重大事实才给 0.8+）\n"
         f"- unresolved: 未完成的计划/承诺为 true，已发生事实为 false\n\n"
         f"输出一个 JSON 数组，每个元素格式：\n"
@@ -155,7 +163,11 @@ def _build_unified_prompt(messages_text: str, user_name: str, ai_name: str, pers
         f"- 每张卡片的 content 应是一个完整的陈述句，包含日期和必要上下文\n"
         f"- 使用 \"{user_name}\" 和 \"{ai_name}\" 指代双方\n"
         f"- type: event/preference/emotion/promise/plan/fact\n"
-        f"- keywords: 2-6 个核心关键词，禁止人名和泛指词\n"
+        f"- keywords: 3-6 个关键词，分两层：\n"
+        f"  · 领域词（1-2个）：大类，如 阅读、技术开发、日常起居、社交、情绪、创作、游戏\n"
+        f"  · 实体词（2-4个）：具体人事物地名\n"
+        f"  领域词在前，实体词在后，每个关键词是数组中独立的字符串。\n"
+        f"  禁止人名（{user_name}, {ai_name}）和泛指词（提醒、建议、完成、计划、测试、观察、休息、未完成、担忧、偏好）\n"
         f"- importance: 0.0-1.0，默认 0.3\n"
         f"- unresolved: 未完成=true，已发生=false\n"
         f"- valence: -1.0~1.0（正=正面情绪，负=负面）\n"
@@ -370,18 +382,38 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
         # Intensity (pure math)
         intensity = compute_intensity(group)
 
-        # Create cards, match relationships, dedup
-        for i, ac in enumerate(atomic_cards):
-            vec = await get_embedding(ac["content"])
+        # ── Phase 1: 并发获取所有 embedding ──
+        embed_tasks = [get_embedding(ac["content"]) for ac in atomic_cards]
+        vectors = await asyncio.gather(*embed_tasks, return_exceptions=True)
+        vectors = [v if not isinstance(v, Exception) else None for v in vectors]
 
-            # Dedup against [MEMORY:...] cards from same conversation
-            if source_conv_id:
-                existing_id = await _dedup_against_realtime(
-                    ac["content"], vec, source_conv_id, auto_threshold
-                )
-                if existing_id:
-                    print(f"[digest_v2] Skipping duplicate of {existing_id}: {ac['content'][:40]}")
+        # ── Phase 2: 并发 dedup ──
+        keep_indices = []
+        if source_conv_id:
+            async def _noop():
+                return None
+            dedup_tasks = []
+            for i, ac in enumerate(atomic_cards):
+                if vectors[i]:
+                    dedup_tasks.append(_dedup_against_realtime(
+                        ac["content"], vectors[i], source_conv_id, auto_threshold
+                    ))
+                else:
+                    dedup_tasks.append(_noop())
+            dedup_results = await asyncio.gather(*dedup_tasks, return_exceptions=True)
+            for i, result in enumerate(dedup_results):
+                if isinstance(result, Exception) or result:
+                    if not isinstance(result, Exception):
+                        print(f"[digest_v2] Skipping duplicate of {result}: {atomic_cards[i]['content'][:40]}")
                     continue
+                keep_indices.append(i)
+        else:
+            keep_indices = list(range(len(atomic_cards)))
+
+        # ── Phase 3: 建卡 + 并发 lifecycle 判断 ──
+        for i in keep_indices:
+            ac = atomic_cards[i]
+            vec = vectors[i]
 
             card = await create_card(
                 content=ac["content"],
@@ -397,7 +429,6 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
                 unresolved=ac["unresolved"],
                 embed=False,
             )
-            # Write embedding directly (we already have it)
             if vec:
                 async with get_db() as db:
                     await db.execute(
@@ -406,28 +437,33 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
                     )
                     await db.commit()
 
-            # Relationship matching + lifecycle detection
             if vec or ac.get("keywords"):
                 matches = await _find_matching_open_cards(
                     ac["content"], vec, auto_threshold, ask_threshold,
                     new_keywords=ac.get("keywords", []),
                     new_card_type=ac.get("type"),
                 )
-                for match in matches[:3]:
-                    if match["id"] == card["id"]:
-                        continue
-                    if match["auto"]:
-                        # High similarity — ask AI if this closes the old card
-                        lifecycle_prompt = _build_lifecycle_prompt(ac["content"], match["content"])
-                        try:
-                            lifecycle_raw = await call_sentinel(lifecycle_prompt)
-                            judgment = _parse_lifecycle_judgment(lifecycle_raw)
-                        except Exception:
-                            judgment = {"should_close": False, "confidence": 0.0, "relation": "follow_up"}
+                auto_matches = [m for m in matches[:3] if m["id"] != card["id"] and m["auto"]]
+                related_matches = [m for m in matches[:3] if m["id"] != card["id"] and not m["auto"]]
 
+                for m in related_matches:
+                    await create_link(m["id"], card["id"], "related")
+
+                if auto_matches:
+                    async def _judge_lifecycle(match, new_content):
+                        prompt = _build_lifecycle_prompt(new_content, match["content"])
+                        try:
+                            raw = await call_sentinel(prompt)
+                            return match, _parse_lifecycle_judgment(raw)
+                        except Exception:
+                            return match, {"should_close": False, "confidence": 0.0, "relation": "follow_up"}
+
+                    judge_tasks = [_judge_lifecycle(m, ac["content"]) for m in auto_matches]
+                    judge_results = await asyncio.gather(*judge_tasks)
+
+                    for match, judgment in judge_results:
                         relation = judgment.get("relation", "follow_up")
                         await create_link(match["id"], card["id"], relation)
-
                         if judgment["should_close"] and judgment["confidence"] >= auto_threshold:
                             await update_card_status(match["id"], "closed")
                             print(f"[digest_v2] Auto-closed {match['id'][:20]} (conf={judgment['confidence']})")
@@ -436,8 +472,6 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
                                 "old_id": match["id"], "old_content": match["content"],
                                 "new_content": ac["content"], "confidence": judgment["confidence"],
                             })
-                    else:
-                        await create_link(match["id"], card["id"], "related")
 
             await manager.broadcast({"type": "memory_added", "data": {
                 "id": card["id"], "content": card["content"], "type": card["type"],
@@ -552,7 +586,6 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
 
         # Gift judgment
         try:
-            import asyncio
             from gift import judge_and_send_gift
             asyncio.create_task(judge_and_send_gift(
                 all_summaries, context_msgs, persona_block,
