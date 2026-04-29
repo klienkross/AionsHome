@@ -71,8 +71,19 @@ async def _auto_digest_loop():
             print(f"[auto_digest] ❌ 异常: {e}")
 
 
+def _print_local_ips():
+    import psutil, socket
+    print("\n╔══ 本机 IP 地址 ══════════════════════════════╗")
+    for name, addrs in psutil.net_if_addrs().items():
+        for a in addrs:
+            if a.family == socket.AF_INET and not a.address.startswith("127."):
+                print(f"║  {name} — {a.address}")
+    print("╚══════════════════════════════════════════════╝\n")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _print_local_ips()
     await init_db()
     loop = asyncio.get_event_loop()
     cam.set_event_loop(loop)
