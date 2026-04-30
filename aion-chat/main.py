@@ -119,11 +119,16 @@ app = FastAPI(lifespan=lifespan)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+_CACHEABLE_PREFIXES = ("/uploads/", "/public/", "/screenshots/")
+
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        if request.url.path.startswith("/static/"):
+        path = request.url.path
+        if path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        elif path.startswith(_CACHEABLE_PREFIXES):
+            response.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return response
 
 app.add_middleware(NoCacheStaticMiddleware)
