@@ -592,8 +592,24 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
                     "id": comment_id, "conv_id": conv_id, "role": "assistant",
                     "content": comment_text, "created_at": comment_now, "attachments": [],
                 }})
+
         except Exception as e:
             print(f"[digest_v2] Reflection failed: {e}")
+
+        # 生成 git commit 摘要并同步到云端
+        try:
+            _summaries_text = "\n".join(f"- {s}" for s in all_summaries)
+            commit_prompt = (
+                f"用不超过30字的一句话概括以下记忆更新，用作git提交信息：\n{_summaries_text}"
+            )
+            commit_messages = [{"role": "user", "content": commit_prompt}]
+            commit_summary = await ai_call(commit_messages, model_key)
+            commit_summary = commit_summary.strip().strip('"').strip()
+            if commit_summary:
+                from sync_to_cloud import sync_to_cloud
+                await asyncio.to_thread(sync_to_cloud, commit_summary)
+        except Exception as e:
+            print(f"[digest_v2] Cloud sync failed: {e}")
 
         # Gift judgment
         try:

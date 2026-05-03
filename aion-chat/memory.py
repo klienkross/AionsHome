@@ -715,6 +715,22 @@ async def _do_digest(min_messages: int = 0) -> dict:
         except Exception as e:
             print(f"[digest] 生成感慨失败: {e}")
 
+        # 生成 git commit 摘要并同步到云端
+        try:
+            import asyncio
+            _summaries_text = "\n".join(f"- {s}" for s in all_summaries)
+            commit_prompt = (
+                f"用不超过30字的一句话概括以下记忆更新，用作git提交信息：\n{_summaries_text}"
+            )
+            commit_messages = [{"role": "user", "content": commit_prompt}]
+            commit_summary = await simple_ai_call(commit_messages, model_key)
+            commit_summary = commit_summary.strip().strip('"').strip()
+            if commit_summary:
+                from sync_to_cloud import sync_to_cloud
+                await asyncio.to_thread(sync_to_cloud, commit_summary)
+        except Exception as e:
+            print(f"[digest] Cloud sync failed: {e}")
+
     # ── 礼物判断：总结完成后让 AI 决定是否送礼 ──
     if conv_id and total_new > 0 and all_summaries:
         try:
