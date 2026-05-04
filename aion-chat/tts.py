@@ -1,10 +1,11 @@
 """
 服务端流式 TTS 模块
 - 按句子边界切分 AI 回复文本
-- 异步并行调用硅基流动 TTS 合成
+- 异步并行调用小米 MiMo TTS 合成
 - 通过 WebSocket 推送音频 URL 给前端顺序播放
 """
 
+import base64
 import re, asyncio, logging
 import httpx
 
@@ -186,33 +187,34 @@ class TTSStreamer:
         })
 
     async def _synthesize(self, text: str, seq: int, safe_id: str):
-        """调用硅基流动 TTS 合成 → 保存文件 → WS 推送"""
-        key = get_key("siliconflow")
+        """调用小米 MiMo TTS 合成 → 保存文件 → WS 推送"""
+        key = get_key("mimo")
         if not key:
-            log.warning("TTS: 无硅基流动 API Key，跳过合成 seq=%d", seq)
+            log.warning("TTS: 无 MiMo API Key，跳过合成 seq=%d", seq)
             return
 
         chunk_name = f"{safe_id}_s{seq}"
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
-                    "https://api.siliconflow.cn/v1/audio/speech",
-                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    "https://api.xiaomimimo.com/v1/chat/completions",
+                    headers={"api-key": key, "Content-Type": "application/json"},
                     json={
-                        "model": "FunAudioLLM/CosyVoice2-0.5B",
-                        "input": text,
-                        "voice": self.voice,
-                        "response_format": "mp3",
-                        "speed": 1.0,
-                        "gain": 0
+                        "model": "mimo-v2.5-tts",
+                        "messages": [{"role": "assistant", "content": text}],
+                        "audio": {"format": "wav", "voice": self.voice or "Milo"},
                     }
                 )
             if resp.status_code != 200:
-                log.warning("TTS API 错误: status=%d seq=%d", resp.status_code, seq)
+                log.warning("TTS API 错误: status=%d seq=%d body=%s", resp.status_code, seq, resp.text[:200])
                 return
 
-            cache_path = TTS_CACHE_DIR / f"{chunk_name}.mp3"
-            cache_path.write_bytes(resp.content)
+            data = resp.json()
+            audio_base64 = data["choices"][0]["message"]["audio"]["data"]
+            audio_bytes = base64.b64decode(audio_base64)
+
+            cache_path = TTS_CACHE_DIR / f"{chunk_name}.wav"
+            cache_path.write_bytes(audio_bytes)
 
             await self._notify({
                 "type": "tts_chunk",

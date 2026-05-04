@@ -2,6 +2,7 @@
 设置、世界书、模型列表、TTS 路由
 """
 
+import base64
 import json
 
 from fastapi import APIRouter
@@ -131,38 +132,36 @@ class TTSRequest(BaseModel):
 
 @router.post("/api/tts")
 async def tts_synthesize(body: TTSRequest):
-    key = get_key("siliconflow")
+    key = get_key("mimo")
     if not key:
-        return Response(content=json.dumps({"error": "未配置硅基流动 API Key"}), status_code=400, media_type="application/json")
+        return Response(content=json.dumps({"error": "未配置 MiMo API Key"}), status_code=400, media_type="application/json")
     if not body.text.strip():
         return Response(content=json.dumps({"error": "文本不能为空"}), status_code=400, media_type="application/json")
-    if not body.voice:
-        return Response(content=json.dumps({"error": "未选择语音"}), status_code=400, media_type="application/json")
+    voice = body.voice or "Milo"
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
-                "https://api.siliconflow.cn/v1/audio/speech",
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                "https://api.xiaomimimo.com/v1/chat/completions",
+                headers={"api-key": key, "Content-Type": "application/json"},
                 json={
-                    "model": "FunAudioLLM/CosyVoice2-0.5B",
-                    "input": body.text.strip(),
-                    "voice": body.voice,
-                    "response_format": "mp3",
-                    "speed": 1.0,
-                    "gain": 0
+                    "model": "mimo-v2.5-tts",
+                    "messages": [{"role": "assistant", "content": body.text.strip()}],
+                    "audio": {"format": "wav", "voice": voice},
                 }
             )
         if resp.status_code != 200:
             return Response(content=json.dumps({"error": f"TTS API 错误: {resp.status_code}"}), status_code=502, media_type="application/json")
-        audio_data = resp.content
+        data = resp.json()
+        audio_base64 = data["choices"][0]["message"]["audio"]["data"]
+        audio_bytes = base64.b64decode(audio_base64)
         # 如果提供了 msg_id，将音频缓存到服务器
         if body.msg_id:
             import re
             safe_id = re.sub(r'[^a-zA-Z0-9_\-]', '', body.msg_id)
             if safe_id:
-                cache_path = TTS_CACHE_DIR / f"{safe_id}.mp3"
-                cache_path.write_bytes(audio_data)
-        return Response(content=audio_data, media_type="audio/mpeg")
+                cache_path = TTS_CACHE_DIR / f"{safe_id}.wav"
+                cache_path.write_bytes(audio_bytes)
+        return Response(content=audio_bytes, media_type="audio/wav")
     except Exception as e:
         return Response(content=json.dumps({"error": str(e)}), status_code=500, media_type="application/json")
 
@@ -173,26 +172,25 @@ async def tts_audio(msg_id: str):
     safe_id = re.sub(r'[^a-zA-Z0-9_\-]', '', msg_id)
     if not safe_id:
         return Response(status_code=404)
-    cache_path = TTS_CACHE_DIR / f"{safe_id}.mp3"
-    if not cache_path.exists():
-        return Response(status_code=404)
-    return FileResponse(cache_path, media_type="audio/mpeg", filename=f"{safe_id}.mp3")
+    # 先尝试 .wav，再尝试 .mp3（兼容旧缓存）
+    for ext in (".wav", ".mp3"):
+        cache_path = TTS_CACHE_DIR / f"{safe_id}{ext}"
+        if cache_path.exists():
+            media = "audio/wav" if ext == ".wav" else "audio/mpeg"
+            return FileResponse(cache_path, media_type=media, filename=f"{safe_id}{ext}")
+    return Response(status_code=404)
 
 @router.get("/api/tts/voices")
 async def tts_voice_list():
-    key = get_key("siliconflow")
-    if not key:
-        return {"voices": [], "error": "未配置硅基流动 API Key"}
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                "https://api.siliconflow.cn/v1/audio/voice/list",
-                headers={"Authorization": f"Bearer {key}"}
-            )
-        if resp.status_code != 200:
-            return {"voices": [], "error": "获取音色列表失败"}
-        data = resp.json()
-        voices = data.get("result") or data.get("voices") or data.get("data") or []
-        return {"voices": voices}
-    except Exception as e:
-        return {"voices": [], "error": str(e)}
+    """返回 MiMo 预置音色列表"""
+    voices = [
+        {"uri": "Milo", "customName": "Milo (英文男)", "language": "English", "gender": "male"},
+        {"uri": "Dean", "customName": "Dean (英文男)", "language": "English", "gender": "male"},
+        {"uri": "Mia", "customName": "Mia (英文女)", "language": "English", "gender": "female"},
+        {"uri": "Chloe", "customName": "Chloe (英文女)", "language": "English", "gender": "female"},
+        {"uri": "冰糖", "customName": "冰糖 (中文女)", "language": "中文", "gender": "female"},
+        {"uri": "茉莉", "customName": "茉莉 (中文女)", "language": "中文", "gender": "female"},
+        {"uri": "苏打", "customName": "苏打 (中文男)", "language": "中文", "gender": "male"},
+        {"uri": "白桦", "customName": "白桦 (中文男)", "language": "中文", "gender": "male"},
+    ]
+    return {"voices": voices}
