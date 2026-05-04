@@ -13,7 +13,7 @@ from config import get_key, TTS_CACHE_DIR
 
 log = logging.getLogger("tts")
 
-# 需要从 TTS 文本中剥除的特殊标签
+# 需要从 TTS 文本中剥除的功能标签
 _STRIP_PATTERNS = [
     re.compile(r'\[CAM_CHECK\]'),
     re.compile(r'\[POI_SEARCH:[^\]]*\]'),
@@ -30,19 +30,38 @@ _STRIP_PATTERNS = [
     re.compile(r'<meta>[\s\S]*?</meta>'),
 ]
 
+# 语气/动作提示 — 提取后送入 MiMo user 消息做风格控制
+_STAGE_HINT_RE = re.compile(r'【([^】]*)】')
+
 # 句子结束符（用于切分）
 _SENTENCE_ENDS = set('。！？…!?')
 _COMMA_CHARS = set('，,、；;：:')
 
 def _strip_tags(text: str) -> str:
-    """去除所有特殊标签，只保留纯文本"""
+    """去除所有功能标签，只保留纯文本"""
     for p in _STRIP_PATTERNS:
         text = p.sub('', text)
     return text.strip()
 
 
+def _count_clean(text: str) -> int:
+    """计算去除所有标签后的纯文本长度（含【】）"""
+    t = _strip_tags(text)
+    t = _STAGE_HINT_RE.sub('', t)
+    return len(t.strip())
+
+
+def _extract_hints_and_clean(text: str) -> tuple[str, str]:
+    """提取【】中的语气/动作提示，返回 (style_hint, clean_text)"""
+    hints = _STAGE_HINT_RE.findall(text)
+    style = '，'.join(h.strip() for h in hints if h.strip()) if hints else ''
+    clean = _STAGE_HINT_RE.sub('', text)
+    clean = _strip_tags(clean).strip()
+    return style, clean
+
+
 def _has_unclosed_tag(text: str) -> bool:
-    """检查是否有未闭合的 [...] 或 <meta>"""
+    """检查是否有未闭合的 [...]、<meta> 或 【】"""
     # 检查 [TAG:... 没有闭合的 ]
     last_open = text.rfind('[')
     if last_open >= 0 and ']' not in text[last_open:]:
@@ -51,6 +70,10 @@ def _has_unclosed_tag(text: str) -> bool:
     meta_opens = text.count('<meta>')
     meta_closes = text.count('</meta>')
     if meta_opens > meta_closes:
+        return True
+    # 检查 【 没有闭合的 】
+    last_cn_open = text.rfind('【')
+    if last_cn_open >= 0 and '】' not in text[last_cn_open:]:
         return True
     return False
 
@@ -86,9 +109,8 @@ class TTSStreamer:
             if _has_unclosed_tag(self._buffer):
                 break
 
-            # 先清除标签，计算纯文本长度
-            clean = _strip_tags(self._buffer)
-            if len(clean) < 100:
+            # 先清除标签，计算纯文本长度（含【】）
+            if _count_clean(self._buffer) < 100:
                 break
 
             # 从第100个纯文字对应的原始位置开始找切分点
@@ -99,9 +121,7 @@ class TTSStreamer:
             segment = self._buffer[:cut_pos + 1]
             self._buffer = self._buffer[cut_pos + 1:]
 
-            cleaned = _strip_tags(segment)
-            if cleaned.strip():
-                self._dispatch(cleaned.strip())
+            self._dispatch(segment)
 
     def _find_cut_position(self) -> int | None:
         """
@@ -109,9 +129,10 @@ class TTSStreamer:
         逻辑：纯文本到达 100 字后，开始找句号；最远到 200 字，找逗号；200 字还没有就强切。
         返回原始 buffer 中的切分索引。
         """
-        clean_count = 0     # 已累积的纯文字数
-        in_bracket = False   # 在 [...] 内
-        in_meta = False      # 在 <meta>...</meta> 内
+        clean_count = 0      # 已累积的纯文字数
+        in_bracket = False    # 在 [...] 内
+        in_meta = False       # 在 <meta>...</meta> 内
+        in_stage = False      # 在 【...】 内
         best_sentence_cut = None
         best_comma_cut = None
 
@@ -120,7 +141,7 @@ class TTSStreamer:
             ch = self._buffer[i]
 
             # 跟踪标签状态
-            if ch == '[' and not in_meta:
+            if ch == '[' and not in_meta and not in_stage:
                 in_bracket = True
             elif ch == ']' and in_bracket:
                 in_bracket = False
@@ -134,8 +155,14 @@ class TTSStreamer:
                 in_meta = False
                 i += 7
                 continue
+            elif ch == '【':
+                in_stage = True
+            elif ch == '】' and in_stage:
+                in_stage = False
+                i += 1
+                continue
 
-            if in_bracket or in_meta:
+            if in_bracket or in_meta or in_stage:
                 i += 1
                 continue
 
@@ -162,18 +189,20 @@ class TTSStreamer:
         return None
 
     def _dispatch(self, text: str):
-        """发起异步合成任务"""
+        """发起异步合成任务 — 提取【】语气提示，拼接纯文本"""
+        style_hint, clean_text = _extract_hints_and_clean(text)
+        if not clean_text:
+            return
         seq = self._seq
         self._seq += 1
         safe_id = re.sub(r'[^a-zA-Z0-9_\-]', '', self.msg_id)
-        task = asyncio.create_task(self._synthesize(text, seq, safe_id))
+        task = asyncio.create_task(self._synthesize(clean_text, seq, safe_id, style_hint))
         self._tasks.append(task)
 
     async def flush(self):
         """流结束后，处理 buffer 中剩余文本并等待所有合成任务完成"""
-        remaining = _strip_tags(self._buffer).strip()
-        if remaining:
-            self._dispatch(remaining)
+        if self._buffer:
+            self._dispatch(self._buffer)
         self._buffer = ""
 
         # 等待所有合成任务完成
@@ -186,7 +215,7 @@ class TTSStreamer:
             "data": {"msg_id": self.msg_id}
         })
 
-    async def _synthesize(self, text: str, seq: int, safe_id: str):
+    async def _synthesize(self, text: str, seq: int, safe_id: str, style_hint: str = ""):
         """调用小米 MiMo TTS 合成 → 保存文件 → WS 推送"""
         key = get_key("mimo")
         if not key:
@@ -194,6 +223,11 @@ class TTSStreamer:
             return
 
         chunk_name = f"{safe_id}_s{seq}"
+        messages = []
+        if style_hint:
+            messages.append({"role": "user", "content": style_hint})
+        messages.append({"role": "assistant", "content": text})
+
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
@@ -201,7 +235,7 @@ class TTSStreamer:
                     headers={"api-key": key, "Content-Type": "application/json"},
                     json={
                         "model": "mimo-v2.5-tts",
-                        "messages": [{"role": "assistant", "content": text}],
+                        "messages": messages,
                         "audio": {"format": "wav", "voice": self.voice or "Milo"},
                     }
                 )
