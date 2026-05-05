@@ -37,6 +37,7 @@ from routes import book as book_routes
 from routes import theater as theater_routes
 from routes import ghost_forest as ghost_forest_routes
 from routes import gift as gift_routes
+from routes import webhooks as webhooks_routes
 from activity import pc_tracker
 # from memory import auto_digest  # V1
 from digest_v2 import auto_digest_v2 as auto_digest
@@ -155,6 +156,7 @@ app.include_router(book_routes.router)
 app.include_router(theater_routes.router)
 app.include_router(ghost_forest_routes.router)
 app.include_router(gift_routes.router)
+app.include_router(webhooks_routes.router)
 
 
 # 页面
