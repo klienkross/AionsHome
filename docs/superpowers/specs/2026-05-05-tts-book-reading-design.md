@@ -59,14 +59,15 @@ IDLE --[start]--> READING --[segment done + TTS flushed]--> WAITING
      - 书名 / 章节名
      - 前情提要
      - 当前段原文 (book_chapters.paragraphs / text_content 按 segment 切片)
-     - 指令: "口语化改写，【】标语气，段末加 ≤25字个人吐槽，用「吐槽：xxx」格式"
+     - 指令: "口语化改写，在【】内标注详细语气（可用舞台描述风格），段末加 ≤25字个人吐槽可自带【】语气，用「吐槽：xxx」格式"
    - 输出: 带标注的朗读稿
    - token 估算: 系统指令 ~200 + 前情 ~200 + 原文 ~800 + 输出 ~300 ≈ 1500 tokens/段
 ```
 
 **语气标记约定**:
-- `【语气词】` — 放在句首或句中，表示朗读语调情绪，如【温柔】【严肃】【轻快】【沉思】【激动】
-- `「吐槽：xxx」` — 段末吐槽，≤25字，TTS 朗读
+- `【语气描述】` — 放在句首或句中，标注朗读语调。不限于简单情绪词，支持复杂的舞台描述，如【压低声音，带着一丝狡黠】【故作镇定，但微微颤抖】【像在读一封迟到了十年的信】
+- `「吐槽：xxx」` — 段末吐槽，≤25字，TTS 朗读。吐槽内也可用【】标注语气，如「吐槽：【憋笑】这段也太中二了」
+- MiMo TTS 对丰富风格指令的响应良好，不设硬性格式约束
 
 **吐槽风格约束**（通过哨兵上下文传递）:
 - 哨兵总结包含用户最近的说话风格和关注的梗
@@ -86,6 +87,27 @@ IDLE --[start]--> READING --[segment done + TTS flushed]--> WAITING
 - 仅当前段原文 + 前情提要 + 系���指令
 - 不加载任何对话历史
 
+## Session End & Summary
+
+朗读结束（晚安退出 / 全书读完 / 用户停止）时，AI 向主对话写入一条总结消息:
+
+```
+调用 Sentinel 生成总结:
+  输入:
+    - 书名 / 本次读的章节范围
+    - 朗读期间的对话摘要（已由 ReadingSession 维护）
+    - 关键吐槽和用户反应
+  输出:
+    - 写入主对话的消息（≤300字），包含:
+      - 今天读了什么、读到哪了
+      - 1-2 句个人感想或印象深刻的地方
+      - 自然的口吻，像刚读完书在跟朋友随口聊
+```
+
+- 写入位置: `POST /api/conversations/{conv_id}/send` 或直接写 DB（`messages` 表）
+- 目的: 朗读经历不被"遗忘"，下次聊天时 bot 知道这段上下文
+- 不额外消耗朗读 token 预算，总结在退出时一次性生成
+
 ## TTS Integration
 
 复用现有 `TTSStreamer`:
@@ -100,7 +122,8 @@ IDLE --[start]--> READING --[segment done + TTS flushed]--> WAITING
 ### POST /api/books/{book_id}/read/start
 ```json
 // Request
-{ "chapter_index": 0, "voice": "冰糖" }
+{ "chapter_index": 0 }
+// voice 从当前 WS 连接的 TTS 状态读取，与聊天声线保持一致
 
 // Response (SSE stream, 复用现有 SSE 格式)
 // event: reading_start → { chapter, total_segments, summary }
