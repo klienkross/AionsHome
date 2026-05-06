@@ -236,14 +236,25 @@ def format_location_for_prompt() -> str:
     """格式化当前位置状态，供哨兵/Core prompt 使用"""
     status = load_location_status()
     if status.get("state") == "unknown" or status.get("updated_at", 0) == 0:
+        # 即使位置系统关闭，如果有围栏推送的 state 也输出
+        state = status.get("state", "unknown")
+        if state != "unknown":
+            state_label = _resolve_state_label(state)
+            return f"当前位置状态：{state_label}"
         return ""
 
     cfg = load_location_config()
+
+    # 位置系统关闭时，仍输出围栏推送的 state（但不输出坐标/地址/天气）
     if not cfg.get("enabled"):
+        state = status.get("state", "unknown")
+        if state != "unknown":
+            state_label = _resolve_state_label(state)
+            return f"当前位置状态：{state_label}"
         return ""
 
     lines = []
-    state_label = {"at_home": "在家", "outside": "外出中"}.get(status["state"], "未知")
+    state_label = _resolve_state_label(status["state"])
     lines.append(f"当前位置状态：{state_label}")
 
     if status.get("address"):
@@ -267,6 +278,20 @@ def format_location_for_prompt() -> str:
         lines.append(f"位置更新时间：{time.strftime('%H:%M:%S', time.localtime(status['updated_at']))}")
 
     return "\n".join(lines)
+
+
+def _resolve_state_label(state: str) -> str:
+    """将 state 字段转为中文标签，支持自定义 zone 名"""
+    known = {"at_home": "在家", "outside": "外出中", "unknown": "未知"}
+    if state in known:
+        return known[state]
+    if state.startswith("at_"):
+        zone = state[3:]
+        zone_labels = {
+            "office": "在公司", "gym": "在健身房", "school": "在学校",
+        }
+        return zone_labels.get(zone, f"在{zone}")
+    return state
 
 
 def format_nearby_pois_for_prompt() -> str:
