@@ -8,13 +8,13 @@ from datetime import datetime
 
 AIONS_MEMORY_PATH = Path("D:/pyworks/Aions_memory")
 DATA_DIR = Path(__file__).resolve().parent / "data"
-_GIT_PREFIX = ["-c", "credential.helper=manager"]
+_GIT_CONFIG = ["-c", "credential.helper=manager"]
 _ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 
 
 def _git(*args: str, cwd: str) -> subprocess.CompletedProcess:
     return subprocess.run(
-        _GIT_PREFIX + ["git", *args],
+        ["git", *_GIT_CONFIG, *args],
         cwd=cwd, capture_output=True, text=True, env=_ENV,
     )
 
