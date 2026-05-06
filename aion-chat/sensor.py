@@ -30,10 +30,53 @@ def _normalize_event(payload: dict) -> dict:
     }
 
 
+def _to_activity_entry(event: dict) -> dict:
+    """将传感器事件转换为 activity_log 条目"""
+    ts = event["ts"]
+    evt = event["event"]
+    data = event["data"]
+
+    if evt == "geofence":
+        action = "进入" if data.get("action") == "enter" else "离开"
+        app, title = "地理围栏", f"{action} {data.get('zone', '?')}"
+    elif evt == "screen":
+        app, title = ("亮屏" if data.get("state") == "on" else "灭屏"), ""
+    elif evt == "app":
+        app, title = (data.get("name") or data.get("package", "未知app")), "前台"
+    elif evt == "steps":
+        app, title = "步数", f"{data.get('count', 0)} 步"
+    elif evt == "charging":
+        app, title = "充电", ("开始充电" if data.get("state") == "on" else "停止充电")
+    elif evt == "battery":
+        app, title = "电量", f"{data.get('level', '?')}%"
+    elif evt == "ringer":
+        modes = {"silent": "静音", "vibrate": "振动", "normal": "正常"}
+        app, title = "响铃", modes.get(data.get("mode", ""), data.get("mode", ""))
+    else:
+        app, title = evt, str(data)
+
+    return {
+        "timestamp": ts,
+        "time": time.strftime("%H:%M:%S", time.localtime(ts)),
+        "date": time.strftime("%Y-%m-%d", time.localtime(ts)),
+        "device": "phone",
+        "app": app,
+        "title": title,
+    }
+
+
 async def handle_sensor_event(payload: dict) -> dict:
     """webhook handler 入口，由 routes/webhooks.py 调用"""
     event = _normalize_event(payload)
     event_type = event["event"]
+
+    try:
+        from activity import append_activity_log
+        entry = _to_activity_entry(event)
+        append_activity_log(entry)
+        await manager.broadcast({"type": "activity_log", "data": entry})
+    except Exception:
+        pass
 
     if event_type in HIGH_PRIORITY_EVENTS:
         return await _handle_high_priority(event)
