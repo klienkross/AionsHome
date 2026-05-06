@@ -91,6 +91,7 @@ public class AionPushService extends Service {
 
     private volatile int reconnectDelay = 3000;
     private static final int MAX_RECONNECT_DELAY = 30000;
+    private volatile double lastReceivedMsgTs = 0;  // 最后收到的 assistant 消息时间戳（Unix 秒）
     private volatile boolean shouldRun = true;
     private volatile boolean isForegroundActive = false;
 
@@ -511,6 +512,10 @@ public class AionPushService extends Service {
                     msgReceived = 0;
                     lastMessageTime = System.currentTimeMillis();
                     updateKeepAlive("在线 ✨");
+                    // 补偿检查：重连后拉取最新消息，避免断线期间错过通知
+                    if (!isForegroundActive && lastReceivedMsgTs > 0) {
+                        new Thread(() -> checkMissedMessage(), "MissedMsgCheck").start();
+                    }
                 }
 
                 @Override
@@ -589,12 +594,16 @@ public class AionPushService extends Service {
                     break;
                 }
                 case "msg_created": {
-                    if (data != null && !isForegroundActive) {
+                    if (data != null) {
                         String role = data.optString("role", "");
                         if ("assistant".equals(role)) {
-                            String c = data.optString("content", "");
-                            if (c.length() > 100) c = c.substring(0, 100) + "...";
-                            showNotif(CH_MESSAGE, "💬 Aion", c, false);
+                            double ts = data.optDouble("created_at", 0);
+                            if (ts > lastReceivedMsgTs) lastReceivedMsgTs = ts;
+                            if (!isForegroundActive) {
+                                String c = data.optString("content", "");
+                                if (c.length() > 100) c = c.substring(0, 100) + "...";
+                                showNotif(CH_MESSAGE, "💬 Aion", c, false);
+                            }
                         }
                     }
                     break;
@@ -654,6 +663,33 @@ public class AionPushService extends Service {
                 mediaPlayer.release();
             } catch (Exception ignored) {}
             mediaPlayer = null;
+        }
+    }
+
+    private void checkMissedMessage() {
+        if (serverUrl == null) return;
+        String httpBase = serverUrl
+                .replace("ws://", "http://")
+                .replace("wss://", "https://")
+                .replace("/ws", "");
+        try {
+            Request req = new Request.Builder()
+                    .url(httpBase + "/api/chat/latest-assistant-message")
+                    .get().build();
+            try (Response resp = client.newCall(req).execute()) {
+                if (!resp.isSuccessful() || resp.body() == null) return;
+                JSONObject obj = new JSONObject(resp.body().string());
+                double ts = obj.optDouble("created_at", 0);
+                String content = obj.optString("content", "");
+                if (ts > lastReceivedMsgTs && !content.isEmpty()) {
+                    Log.i(TAG, "补偿通知: 发现错过的消息 ts=" + ts);
+                    lastReceivedMsgTs = ts;
+                    String preview = content.length() > 100 ? content.substring(0, 100) + "..." : content;
+                    showNotif(CH_MESSAGE, "💬 Aion", preview, false);
+                }
+            }
+        } catch (Exception e) {
+            Log.d(TAG, "checkMissedMessage failed: " + e.getMessage());
         }
     }
 

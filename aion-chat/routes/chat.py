@@ -122,6 +122,20 @@ class MsgEditResend(BaseModel):
     client_id: str = ""
 
 # ── 对话 CRUD ─────────────────────────────────────
+@router.get("/api/chat/latest-assistant-message")
+async def latest_assistant_message():
+    """返回最近一条 assistant 消息，供 Android 端重连后补偿通知"""
+    async with get_db() as db:
+        db.row_factory = __import__('aiosqlite').Row
+        cur = await db.execute(
+            "SELECT content, created_at FROM messages WHERE role='assistant' ORDER BY created_at DESC LIMIT 1"
+        )
+        row = await cur.fetchone()
+    if not row:
+        return {"content": "", "created_at": 0}
+    return {"content": row["content"], "created_at": row["created_at"]}
+
+
 @router.get("/api/conversations")
 async def list_conversations():
     async with get_db() as db:
