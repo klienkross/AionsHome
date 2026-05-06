@@ -283,3 +283,196 @@ call_core判断依据：
 
     if call_core:
         await _call_core_sensor(monitoring_log, last_user_ts, summary, core_reason, recent_logs)
+
+
+from ai_providers import stream_ai
+from memory import recall_memories
+from config import DEFAULT_MODEL
+from tts import TTSStreamer
+
+
+async def _call_core_sensor(trigger_log: str, last_user_ts: float, summary: str = "", core_reason: str = "", cached_logs: list = None):
+    """传感器分析触发 Core 唤醒"""
+    wb = load_worldbook()
+    user_name = wb.get("user_name", "你")
+    ai_name = wb.get("ai_name", "AI")
+
+    if last_user_ts > 0:
+        elapsed = time.time() - last_user_ts
+        hours = int(elapsed // 3600)
+        minutes = int((elapsed % 3600) // 60)
+        time_ago = f"{hours}小时{minutes}分钟" if hours > 0 else f"{minutes}分钟"
+    else:
+        time_ago = "很长时间"
+
+    if cached_logs is not None:
+        all_logs = cached_logs[-24:]
+    else:
+        all_logs = read_logs_since(last_user_ts if last_user_ts > 0 else time.time() - 3600 * 6)
+        all_logs = all_logs[-24:]
+    recent_detail = "\n".join([f"[{e.get('time', '')}] {e.get('monitoringlog', '')}" for e in all_logs[-5:]])
+    if not recent_detail:
+        recent_detail = trigger_log
+
+    async with get_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 1")
+        conv = await cur.fetchone()
+        if not conv:
+            return
+        conv_id = conv["id"]
+        model_key = conv["model"] or DEFAULT_MODEL
+
+        cur = await db.execute(
+            "SELECT role, content, attachments FROM messages WHERE conv_id=? AND role IN ('user','assistant') ORDER BY created_at DESC LIMIT 20",
+            (conv_id,)
+        )
+        rows = await cur.fetchall()
+        history = []
+        for r in reversed(rows):
+            d = dict(r)
+            d["attachments"] = []
+            history.append(d)
+
+    prefix = []
+    if wb.get("ai_persona"):
+        prefix.append({"role": "user", "content": f"[系统设定 - AI人设]\n{wb['ai_persona']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会按照设定扮演角色。"})
+    if wb.get("user_persona"):
+        prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
+        prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
+
+    core_parts = [f"【{user_name}】已经{time_ago}没有和你说话了。"]
+    if core_reason:
+        core_parts.append(f"哨兵唤醒你的原因：{core_reason}")
+    if summary:
+        core_parts.append(f"这段时间{user_name}的整体状况：{summary}")
+    core_parts.append(f"最新传感器分析：{trigger_log}")
+    core_parts.append(f"最近的监控记录：\n{recent_detail}")
+
+    try:
+        from location import format_location_for_prompt
+        loc_info = format_location_for_prompt()
+        if loc_info:
+            core_parts.append(f"\n{loc_info}")
+    except Exception:
+        pass
+
+    core_prompt = "\n".join(core_parts)
+
+    recalled, _ = await recall_memories(core_prompt[:300])
+    mem_inject = []
+    if recalled:
+        mem_lines = "\n".join([f"- {m['content']}" for m in recalled])
+        mem_inject = [
+            {"role": "user", "content": f"[相关记忆]\n你脑海中与当前话题相关的记忆：\n{mem_lines}"},
+            {"role": "assistant", "content": "收到，我会自然地参考这些记忆。"},
+        ]
+
+    messages = prefix + mem_inject + history + [{"role": "user", "content": core_prompt}]
+
+    await manager.broadcast({"type": "core_alert", "data": {"source": "sensor", "reason": core_reason or trigger_log[:80]}})
+    await asyncio.sleep(5)
+
+    core_msg_id = f"msg_{int(time.time() * 1000)}_sr"
+    sensor_tts = None
+    if manager.any_tts_enabled():
+        tts_voice = manager.get_tts_voice()
+        if tts_voice:
+            sensor_tts = TTSStreamer(core_msg_id, tts_voice, manager)
+
+    full_text = ""
+    try:
+        _temp = SETTINGS.get("temperature")
+        async for chunk in stream_ai(messages, model_key, temperature=_temp):
+            full_text += chunk
+            if sensor_tts:
+                sensor_tts.feed(chunk)
+    except Exception as e:
+        full_text = f"[Core 回复失败] {e}"
+
+    if not full_text.strip():
+        return
+
+    now = time.time()
+    trigger_msg_id = f"msg_{int(now * 1000)}_st"
+    async with get_db() as db:
+        await db.execute(
+            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+            (trigger_msg_id, conv_id, "cam_trigger", core_prompt, now, "[]"),
+        )
+        sys_now = time.time()
+        sys_msg_id = f"msg_{int(sys_now * 1000)}_ss"
+        sys_content = f"📱 传感器检测到异常，拉响警报！"
+        await db.execute(
+            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+            (sys_msg_id, conv_id, "system", sys_content, sys_now, "[]"),
+        )
+        await db.commit()
+    sys_msg = {
+        "id": sys_msg_id, "conv_id": conv_id, "role": "system",
+        "content": sys_content, "created_at": sys_now, "attachments": [],
+    }
+    await manager.broadcast({"type": "msg_created", "data": sys_msg})
+
+    async with get_db() as db:
+        now2 = time.time()
+        await db.execute(
+            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+            (core_msg_id, conv_id, "assistant", full_text, now2, "[]"),
+        )
+        await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
+        await db.commit()
+
+    core_msg = {
+        "id": core_msg_id, "conv_id": conv_id, "role": "assistant",
+        "content": full_text, "created_at": now2, "attachments": [],
+    }
+    await manager.broadcast({"type": "msg_created", "data": core_msg})
+
+    if sensor_tts:
+        try:
+            await sensor_tts.flush()
+        except Exception:
+            pass
+
+    from routes.files import export_conversation
+    await export_conversation(conv_id)
+
+    core_log = {
+        "timestamp": now2,
+        "time": time.strftime("%H:%M:%S", time.localtime(now2)),
+        "date": time.strftime("%Y-%m-%d", time.localtime(now2)),
+        "monitoringlog": f"🧠 Core因传感器事件被唤醒并回复：{full_text[:80]}...",
+        "call_core": False,
+        "screenshot": "",
+        "source": "sensor",
+    }
+    append_monitor_log(core_log)
+    await manager.broadcast({"type": "monitor_log", "data": core_log})
+
+
+async def _update_location_from_geofence(event: dict):
+    """地理围栏事件更新 location_status.json 的 state 字段"""
+    from location import load_location_status, save_location_status
+
+    data = event["data"]
+    zone = data.get("zone", "unknown")
+    action = data.get("action", "enter")
+
+    status = load_location_status()
+    old_state = status.get("state", "unknown")
+
+    if action == "enter":
+        if zone == "home":
+            new_state = "at_home"
+        else:
+            new_state = f"at_{zone}"
+    else:
+        new_state = "outside"
+
+    status["state"] = new_state
+    status["state_changed_at"] = time.time()
+    save_location_status(status)
+
+    log.info("地理围栏更新位置状态: %s → %s (zone=%s, action=%s)", old_state, new_state, zone, action)
