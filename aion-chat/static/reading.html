@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/common.css">
 <style>
 /* ── 书库视图 ── */
-.library-view { display: block; }
+.library-view { display: flex; flex-direction: column; height: 100%; }
 .reader-view  { display: none; }
 
 .upload-area {
@@ -475,6 +475,24 @@
 }
 .toc-item .toc-status.has-anno { background: #66bb6a; }
 .toc-item .toc-status.no-anno { background: var(--border); }
+
+.reading-script { line-height: 1.8; font-size: 16px; padding: 16px; }
+.spit {
+  color: var(--accent);
+  font-style: italic;
+  background: var(--accent-bg-subtle, rgba(100,100,255,0.1));
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.tone-tag {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+/* ── 播放模式 ── */
+#playerMode .reading-text { font-size: 18px; line-height: 2; max-width: 600px; }
+#playerMode .tone-tag { color: #888; font-size: 0.8em; }
+#playerMode .spit { color: #7c9cff; font-style: italic; }
 </style>
 </head>
 <body>
@@ -490,9 +508,9 @@
     <div class="page-content">
       <!-- 上传区域 -->
       <div class="upload-area" id="uploadArea" onclick="$('fileInput').click()">
-        <input type="file" id="fileInput" accept=".epub" onchange="handleUpload(this.files[0])">
+        <input type="file" id="fileInput" accept=".epub,.pdf" onchange="handleUpload(this.files[0])">
         <div class="upload-icon">📖</div>
-        <div class="upload-text">点击或拖拽 EPUB 文件到此处导入</div>
+        <div class="upload-text">点击或拖拽 EPUB / PDF 文件到此处导入</div>
       </div>
       <!-- 书籍列表 -->
       <div class="book-list" id="bookList"></div>
@@ -506,6 +524,7 @@
       <button class="back-reader" onclick="closeReader()">‹</button>
       <span class="chapter-title" id="chapterTitle">-</span>
       <button class="invite-btn" id="inviteBtn" onclick="inviteRead()">📝 共读</button>
+      <button class="invite-btn" onclick="enterPlayerMode(currentBook?.book_id, currentChIdx)">🔊 朗读</button>
       <button class="topbar-icon-btn" onclick="toggleTOC()">☰</button>
     </div>
     <!-- 批注状态条 -->
@@ -584,7 +603,9 @@ let aiName = 'AI';          // AI 名字，从章节 API 获取
 let userName = '你';         // 用户名字
 
 // ── 初始化 ──
-connectCommonWS();
+connectCommonWS(msg => {
+  _handlePlayerWsMessage(msg);
+});
 loadLibrary();
 setupDragDrop();
 
@@ -619,8 +640,9 @@ async function loadLibrary() {
 // ── 上传 ────────────────────────────────────
 async function handleUpload(file) {
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith('.epub')) {
-    showToast('只支持 EPUB 格式哦');
+  const name = file.name.toLowerCase();
+  if (!name.endsWith('.epub') && !name.endsWith('.pdf')) {
+    showToast('只支持 EPUB 和 PDF 格式哦');
     return;
   }
   const area = $('uploadArea');
@@ -692,6 +714,7 @@ async function openBook(bookId) {
 // ── 关闭阅读器 ──
 function closeReader() {
   saveProgress();
+  if (_playerActive) stopPlayerMode();
   $('libraryView').style.display = 'block';
   $('readerView').style.display = 'none';
   currentBook = null;
@@ -1212,7 +1235,15 @@ async function submitAskToChat() {
 async function sendReplyMsg() {
   const input = $('replyInput');
   const text = input.value.trim();
-  if (!text || replySending || !replyConvId) return;
+  if (!text || replySending) return;
+  if (_playerActive && _playerBookId) {
+    // In reading mode, send as WS chat message
+    const convId = localStorage.getItem('active_conv_id') || '';
+    _wsSend({type: 'chat_message', book_id: _playerBookId, content: text, conv_id: convId});
+    input.value = '';
+    return;
+  }
+  if (!replyConvId) return;
   input.value = '';
   await doSendInPanel(text);
 }
@@ -1335,6 +1366,182 @@ async function doSendInPanel(msgContent, skipUserBubble) {
     $('replyInput').focus();
   }
 }
+
+// ══ 全屏播放模式 ══
+
+let _playerActive = false;
+let _playerPaused = false;
+let _playerBookId = null;
+
+function enterPlayerMode(bookId, chapterIndex) {
+  _playerBookId = bookId;
+  _playerActive = true;
+  _playerPaused = false;
+  document.getElementById('playerMode').style.display = 'flex';
+  document.getElementById('playerBookTitle').textContent = currentBook?.title || '';
+  document.getElementById('playerPauseBtn').textContent = '⏸';
+  document.getElementById('playerText').innerHTML = '<span style="opacity:0.4;">准备中...</span>';
+  document.getElementById('playerProgress').textContent = '';
+
+  // Send start via WS
+  const convId = localStorage.getItem('active_conv_id') || '';
+  _wsSend({type: 'reading_start', book_id: bookId, chapter_index: chapterIndex, conv_id: convId});
+
+  // MediaSession
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentBook?.title || '朗读中',
+      artist: 'Aion',
+    });
+    navigator.mediaSession.setActionHandler('pause', () => togglePlayerPause());
+    navigator.mediaSession.setActionHandler('play', () => togglePlayerPause());
+  }
+}
+
+function exitPlayerMode() {
+  stopPlayerMode();
+  document.getElementById('playerMode').style.display = 'none';
+}
+
+function stopPlayerMode() {
+  _wsSend({type: 'reading_stop'});
+  const audio = document.getElementById('playerAudio');
+  audio.pause();
+  audio.src = '';
+  // Don't set _playerActive=false here — let reading_done from backend handle it
+}
+
+function togglePlayerPause() {
+  if (!_playerActive) return;
+  _playerPaused = !_playerPaused;
+  const btn = document.getElementById('playerPauseBtn');
+  const audio = document.getElementById('playerAudio');
+  if (_playerPaused) {
+    btn.textContent = '▶';
+    audio.pause();
+    _wsSend({type: 'reading_pause'});
+  } else {
+    btn.textContent = '⏸';
+    audio.play().catch(() => {});
+    _wsSend({type: 'reading_resume'});
+  }
+}
+
+function _wsSend(data) {
+  if (_commonWs && _commonWs.readyState === 1) {
+    _commonWs.send(JSON.stringify(data));
+  }
+}
+
+function _handlePlayerWsMessage(msg) {
+  if (!_playerActive && msg.type !== 'reading_error') return;
+
+  switch (msg.type) {
+    case 'reading_audio': {
+      // Display text
+      const html = msg.text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/「吐槽：([^」]*)」/g, '<span class="spit">$1</span>')
+        .replace(/【([^】]*)】/g, '<span class="tone-tag">【$1】</span>');
+      document.getElementById('playerText').innerHTML = `<div class="reading-text">${html}</div>`;
+
+      // Progress
+      document.getElementById('playerProgress').textContent =
+        `第${msg.chapter_index + 1}章 · ${msg.chunk_index + 1}/${msg.total_chunks}段`;
+
+      // Play audio
+      const audio = document.getElementById('playerAudio');
+      audio.onerror = () => {
+        console.warn('Audio load failed:', msg.url);
+        _wsSend({type: 'reading_audio_ended'});  // unblock backend
+      };
+      audio.onended = () => {
+        _wsSend({type: 'reading_audio_ended'});
+      };
+      audio.src = msg.url;
+      audio.load();
+      if (!_playerPaused) {
+        audio.play().catch(() => {
+          console.warn('Audio play() rejected:', msg.url);
+          _wsSend({type: 'reading_audio_ended'});  // unblock backend
+        });
+      }
+      break;
+    }
+    case 'reading_chunk_start':
+      // Show script preview while TTS is synthesizing
+      if (msg.script) {
+        const html = msg.script
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/「吐槽：([^」]*)」/g, '<span class="spit">$1</span>')
+          .replace(/【([^】]*)】/g, '<span class="tone-tag">【$1】</span>');
+        document.getElementById('playerText').innerHTML = `<div class="reading-text">${html}</div>`;
+      }
+      document.getElementById('playerProgress').textContent =
+        `第${msg.chapter_index + 1}章 · 第${msg.chunk_index + 1}/${msg.total_chunks}段 · 合成中...`;
+      break;
+    case 'reading_chapter_start':
+      document.getElementById('playerChapterTitle').textContent = msg.chapter_title || `第${msg.chapter_index+1}章`;
+      break;
+    case 'reading_done':
+      _playerActive = false;
+      document.getElementById('playerProgress').textContent = '';
+      if (msg.summary) {
+        document.getElementById('playerText').innerHTML =
+          `<div class="reading-text" style="text-align:left;font-size:16px;opacity:0.85;">${escHtml(msg.summary)}</div>`;
+      } else {
+        const reasons = {user_stop: '已停止', book_end: '全书读完', timeout: '已自动停止'};
+        document.getElementById('playerText').innerHTML =
+          `<span style="opacity:0.6;">${reasons[msg.reason] || '朗读结束'}</span>`;
+      }
+      break;
+    case 'reading_error':
+      document.getElementById('playerText').innerHTML =
+        `<span style="color:#f66;">${msg.message || '出错了'}</span>`;
+      _playerActive = false;
+      break;
+  }
+}
 </script>
+
+<!-- ══ 全屏播放模式 ══ -->
+<div id="playerMode" style="display:none;position:fixed;inset:0;z-index:9999;
+    background:#1a1a2e;color:#eee;flex-direction:column;">
+
+  <!-- 顶栏 -->
+  <div style="padding:16px 20px;display:flex;align-items:center;gap:12px;">
+    <button onclick="exitPlayerMode()" style="background:none;border:none;color:#eee;font-size:20px;">←</button>
+    <div style="flex:1;overflow:hidden;">
+      <div id="playerBookTitle" style="font-size:14px;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+      <div id="playerChapterTitle" style="font-size:12px;opacity:0.5;"></div>
+    </div>
+  </div>
+
+  <!-- 文本展示区 -->
+  <div id="playerText" style="flex:1;overflow-y:auto;padding:24px 20px;font-size:18px;line-height:2;
+      display:flex;align-items:center;justify-content:center;text-align:center;">
+    <span style="opacity:0.4;">准备中...</span>
+  </div>
+
+  <!-- 进度 -->
+  <div id="playerProgress" style="text-align:center;font-size:12px;opacity:0.5;padding:8px;">
+  </div>
+
+  <!-- 控制栏 -->
+  <div style="padding:20px 40px 40px;display:flex;align-items:center;justify-content:center;gap:40px;">
+    <button id="playerPauseBtn" onclick="togglePlayerPause()"
+      style="width:64px;height:64px;border-radius:50%;border:2px solid #eee;background:none;color:#eee;font-size:24px;">
+      ⏸
+    </button>
+    <button onclick="stopPlayerMode()"
+      style="width:44px;height:44px;border-radius:50%;border:1px solid rgba(255,255,255,0.3);background:none;color:#aaa;font-size:16px;">
+      ⏹
+    </button>
+  </div>
+
+  <!-- Hidden audio -->
+  <audio id="playerAudio" style="display:none"></audio>
+</div>
+
 </body>
 </html>

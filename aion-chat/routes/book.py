@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from config import DATA_DIR, load_worldbook, MODELS, DEFAULT_MODEL
 from database import get_db
 from ai_providers import stream_ai
-from book import parse_epub, delete_book_files, build_annotate_text, BOOKS_DIR
+from book import parse_epub, parse_pdf, delete_book_files, build_annotate_text, BOOKS_DIR
 from sentinel import get_embedding, _pack_embedding
 
 router = APIRouter()
@@ -38,8 +38,9 @@ _annotating_locks: dict[str, asyncio.Lock] = {}  # key: "book_id:ch:seg"
 # =============================================
 @router.post("/api/books/upload")
 async def upload_book(file: UploadFile = File(...)):
-    if not file.filename or not file.filename.lower().endswith('.epub'):
-        raise HTTPException(400, "只支持 EPUB 格式")
+    fname_lower = (file.filename or "").lower()
+    if not (fname_lower.endswith('.epub') or fname_lower.endswith('.pdf')):
+        raise HTTPException(400, "只支持 EPUB 和 PDF 格式")
 
     # 保存到临时目录
     tmp_path = _TMP_DIR / file.filename
@@ -47,8 +48,11 @@ async def upload_book(file: UploadFile = File(...)):
         content = await file.read()
         tmp_path.write_bytes(content)
 
-        # 解析 EPUB
-        parsed = parse_epub(str(tmp_path))
+        # 按格式解析
+        if fname_lower.endswith('.epub'):
+            parsed = parse_epub(str(tmp_path))
+        else:
+            parsed = parse_pdf(str(tmp_path))
 
         if not parsed.chapters:
             raise HTTPException(400, "无法解析出有效章节，可能是固定版式或加密 EPUB")

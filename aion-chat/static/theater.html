@@ -460,9 +460,15 @@ function connectWS() {
     if (ttsEnabled) sendTTSState();
   };
   _ws.onmessage = e => {
-    try { handleSync(JSON.parse(e.data)); } catch(err) {}
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "ping") { if (_ws && _ws.readyState === 1) _ws.send(JSON.stringify({type:"pong"})); return; }
+      if (msg.type === "pong") return;
+      handleSync(msg);
+    } catch(err) {}
   };
   _ws.onclose = () => {
+    _ws = null;
     _wsReconnectTimer = setInterval(() => {
       if (!_ws || _ws.readyState > 1) connectWS();
     }, 3000);

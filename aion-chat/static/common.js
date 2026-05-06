@@ -48,6 +48,13 @@ function connectCommonWS(extraHandler) {
   _commonWs = new WebSocket(`${proto}//${location.host}/ws`);
   _commonWs.onmessage = e => {
     const msg = JSON.parse(e.data);
+    // 服务端心跳 ping → 回复 pong
+    if (msg.type === "ping") {
+      if (_commonWs && _commonWs.readyState === 1)
+        _commonWs.send(JSON.stringify({type: "pong"}));
+      return;
+    }
+    if (msg.type === "pong") return;
     // 闹铃弹窗 — 全局
     if (msg.type === "schedule_alarm") {
       showAlarmPopup(msg.data);
@@ -68,7 +75,7 @@ function connectCommonWS(extraHandler) {
     // 页面自定义处理
     if (extraHandler) extraHandler(msg);
   };
-  _commonWs.onclose = () => setTimeout(() => connectCommonWS(extraHandler), 2000);
+  _commonWs.onclose = () => setTimeout(() => connectCommonWS(extraHandler), 3000);
 }
 
 /* ── 闹铃弹窗 ── */

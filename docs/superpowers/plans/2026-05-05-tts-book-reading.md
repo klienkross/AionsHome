@@ -1,884 +1,791 @@
-# TTS Book Reading Feature Implementation Plan
+# TTS Book Reading v2 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在现有 Book 和 TTS 系统上构建 AI 朗读交互功能，支持逐段朗读、自动继续、用户插话和结束总结。
+**Goal:** 重写朗读功能为纯 WS 驱动的逐句合成+预取架构，删除 SSE/REST 端点，全屏播放模式 UI。
 
-**Architecture:** 新增 `reading.py` (ReadingSession 状态机) + `routes/reading.py` (SSE 控制流 + 用户消息端点)，复用现有 TTSStreamer / sentinel / ai_providers 不加改动。前端 `reading.html` 新增朗读控制栏和 TTS 播放。
+**Architecture:** 前端通过 WS 发送控制消息（start/pause/resume/stop/audio_ended），后端 ReadingSession 逐句合成 TTS 并推送音频 URL，始终预取下一句。15 分钟无交互自动停止。
 
-**Tech Stack:** Python (FastAPI + asyncio + aiosqlite), MiMo-V2.5 TTS, Server-Sent Events, vanilla JS
+**Tech Stack:** Python (FastAPI + asyncio + httpx), MiMo TTS API, WebSocket, vanilla JS + MediaSession API
 
 ---
 
 ## File Map
 
 | 文件 | 职责 | 类型 |
-|---|---|---|
-| `aion-chat/reading.py` | ReadingSession 类: 状态机、定时器、朗读稿生成、TTS调度、结束总结 | Create |
-| `aion-chat/routes/reading.py` | REST API: SSE 朗读流、用户插话、停止、状态查询 | Create |
-| `aion-chat/main.py` | 挂载 reading router | Modify |
-| `aion-chat/static/reading.html` | 朗读控制 UI、TTS 播放器、SSE 事件处理 | Modify |
-| `aion-chat/tts.py` | 不改，直接复用 TTSStreamer | — |
-| `aion-chat/sentinel.py` | 不改，复用 call_sentinel_text | — |
-| `aion-chat/ai_providers.py` | 不改，复用 stream_ai / simple_ai_call | — |
+|------|------|------|
+| `aion-chat/reading.py` | ReadingSession：chunk 管理、朗读稿生成、逐句 TTS 合成+预取、超时停止 | Rewrite |
+| `aion-chat/tts.py` | 提取 `extract_hints_and_clean` 为模块级公共函数 | Modify |
+| `aion-chat/main.py` | WS handler 转发 reading_* 消息；移除 reading router | Modify |
+| `aion-chat/routes/reading.py` | 删除 | Delete |
+| `aion-chat/static/reading.html` | 替换旧朗读控制为全屏播放模式 UI | Modify |
 
 ---
 
-### Task 1: ReadingSession 状态机核心
+### Task 1: 提取 TTS 公共函数
 
 **Files:**
-- Create: `aion-chat/reading.py`
+- Modify: `aion-chat/tts.py`
 
-- [ ] **Step 1: 创建 ReadingSession 类骨架**
+- [ ] **Step 1: 将 `_extract_hints_and_clean` 改名为公共函数**
+
+在 `aion-chat/tts.py` 第 54 行，将 `_extract_hints_and_clean` 重命名为 `extract_hints_and_clean`（去掉下划线前缀），使其成为模块公共 API：
 
 ```python
-"""Book reading session: state machine, timer, annotation pipeline, TTS orchestration."""
+def extract_hints_and_clean(text: str) -> tuple[str, str]:
+    """提取【】中的语气/动作提示，返回 (style_hint, clean_text)"""
+    hints = _STAGE_HINT_RE.findall(text)
+    style = '，'.join(h.strip() for h in hints if h.strip()) if hints else ''
+    clean = _STAGE_HINT_RE.sub('', text)
+    clean = _strip_tags(clean).strip()
+    return style, clean
+```
+
+- [ ] **Step 2: 更新 TTSStreamer 内部引用**
+
+在 `aion-chat/tts.py` 第 203 行，`_dispatch` 方法内将 `_extract_hints_and_clean` 改为 `extract_hints_and_clean`：
+
+```python
+    def _dispatch(self, text: str):
+        """发起异步合成任务 — 提取【】语气提示，拼接纯文本"""
+        style_hint, clean_text = extract_hints_and_clean(text)
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add aion-chat/tts.py
+git commit -m "refactor: 暴露 extract_hints_and_clean 为公共函数"
+```
+
+---
+
+### Task 2: 重写 ReadingSession
+
+**Files:**
+- Rewrite: `aion-chat/reading.py`
+
+- [ ] **Step 1: 写入完整的新 reading.py**
+
+```python
+"""Book reading session: WS-driven, sentence-by-sentence TTS with prefetch."""
 import asyncio
+import base64
 import json
 import logging
+import re
 import time
+
+import httpx
+
+from config import get_key, TTS_CACHE_DIR, SETTINGS
 from database import get_db
 from sentinel import call_sentinel_text
-from tts import TTSStreamer
-from ws import manager as ws_manager
+from tts import extract_hints_and_clean
 
 logger = logging.getLogger("reading")
 
-# In-memory active sessions, keyed by book_id (one session per book at a time)
 _sessions: dict[str, "ReadingSession"] = {}
+
 
 def get_session(book_id: str) -> "ReadingSession | None":
     return _sessions.get(book_id)
+
 
 def _row_dict(cursor, row):
     return {col[0]: row[i] for i, col in enumerate(cursor.description)}
 
 
+_SENTENCE_ENDS = set('。！？…!?')
+_CHUNK_MAX_CHARS = 800
+
+
+def _split_sentences(text: str) -> list[str]:
+    """将朗读稿按句号切分为句子，每句 ≤200 字。吐槽单独成句。"""
+    # 先分离吐槽
+    parts = re.split(r'(「吐槽：[^」]*」)', text)
+    sentences = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        if part.startswith('「吐槽：'):
+            sentences.append(part)
+            continue
+        # 按句号切
+        buf = ""
+        for ch in part:
+            buf += ch
+            if ch in _SENTENCE_ENDS and len(buf) >= 10:
+                sentences.append(buf.strip())
+                buf = ""
+            elif len(buf) >= 200:
+                # 强制切
+                sentences.append(buf.strip())
+                buf = ""
+        if buf.strip():
+            sentences.append(buf.strip())
+    return [s for s in sentences if s]
+
+
+def _split_chapter_into_chunks(paragraphs: list[str]) -> list[str]:
+    """按段落边界切分为 ~800 字 chunk，超长段落按句号二次切分。"""
+    chunks = []
+    current_paras = []
+    current_chars = 0
+    for p in paragraphs:
+        plen = len(p)
+        if current_chars + plen > _CHUNK_MAX_CHARS and current_paras:
+            chunks.append("\n".join(current_paras))
+            current_paras = []
+            current_chars = 0
+        if plen > _CHUNK_MAX_CHARS:
+            # 超长段落按句号切
+            buf = ""
+            for ch in p:
+                buf += ch
+                if len(buf) >= _CHUNK_MAX_CHARS and ch in _SENTENCE_ENDS:
+                    chunks.append(buf)
+                    buf = ""
+            if buf:
+                chunks.append(buf)
+        else:
+            current_paras.append(p)
+            current_chars += plen
+    if current_paras:
+        chunks.append("\n".join(current_paras))
+    return chunks
+
+
 class ReadingSession:
-    STATE_IDLE = "idle"
-    STATE_READING = "reading"
-    STATE_WAITING = "waiting"
-    STATE_CHATTING = "chatting"
+    IDLE_TIMEOUT = 900  # 15 分钟无交互自动停止
 
-    WAIT_SECONDS = 10
-    SLEEP_CHECK_1 = 3   # "睡着了？"
-    SLEEP_CHECK_2 = 6   # "还没醒？那我继续读了~"
-    SLEEP_GOODNIGHT = 9  # "晚安~" → IDLE
-
-    def __init__(self, book_id: str, chapter_index: int, conv_id: str):
+    def __init__(self, book_id: str, chapter_index: int, conv_id: str, ws):
         self.book_id = book_id
         self.chapter_index = chapter_index
-        self.segment_index = 0
         self.conv_id = conv_id
-        self.state = self.STATE_IDLE
-        self.auto_counter = 0
-        self.context_summary = ""
-        self._conversation_log: list[dict] = []  # {role, content} pairs for end summary
-
-        # SSE event queue — the SSE generator reads from this
-        self._sse_queue: asyncio.Queue = asyncio.Queue()
-
-        # User message notification — message endpoint sets this, SSE loop waits on it
-        self._user_msg_event = asyncio.Event()
-        self._pending_user_msg: str | None = None
-
-        # Stop signal
-        self._stop_event = asyncio.Event()
+        self._ws = ws
+        self._paused = False
+        self._stopped = False
+        self._last_interaction = time.time()
+        self._audio_ended = asyncio.Event()
+        self._book_title = None
+        self._context_summary = ""
+        self._chunk_index = 0
+        self._total_chunks = 0
 
         _sessions[book_id] = self
-```
 
-- [ ] **Step 2: 实现分段数据获取**
+    async def _ws_send(self, data: dict):
+        """Send message to the initiating WS client."""
+        try:
+            await self._ws.send_text(json.dumps(data, ensure_ascii=False))
+        except Exception:
+            self._stopped = True
 
-```python
-    async def _load_segment(self) -> dict | None:
-        """Load current segment from DB. Returns None if chapter/book ended."""
-        async with get_db() as db:
-            db.row_factory = _row_dict
-            # Get chapter
-            cur = await db.execute(
-                "SELECT * FROM book_chapters WHERE book_id = ? AND chapter_index = ?",
-                (self.book_id, self.chapter_index),
-            )
-            chapter = await cur.fetchone()
-            if not chapter:
-                return None  # book ended
+    async def run(self):
+        """Main reading loop."""
+        try:
+            # Load book metadata
+            async with get_db() as db:
+                db.row_factory = _row_dict
+                cur = await db.execute("SELECT title FROM books WHERE book_id = ?", (self.book_id,))
+                row = await cur.fetchone()
+                self._book_title = row["title"] if row else "未知"
 
-            segments_meta = json.loads(chapter.get("segments_meta", "[]"))
-            if self.segment_index >= len(segments_meta):
-                return None  # chapter ended
+            while not self._stopped:
+                # Load chapter
+                async with get_db() as db:
+                    db.row_factory = _row_dict
+                    cur = await db.execute(
+                        "SELECT title, paragraphs FROM book_chapters WHERE book_id = ? AND chapter_index = ?",
+                        (self.book_id, self.chapter_index),
+                    )
+                    chapter = await cur.fetchone()
 
-            meta = segments_meta[self.segment_index]
-            # Load segment text from text_content using meta offsets
-            text = chapter["text_content"]
-            start = meta["start"]
-            end = meta["end"] if meta["end"] <= len(text) else len(text)
-            segment_text = text[start:end].strip()
-            return {
-                "text": segment_text,
-                "chapter_title": chapter.get("title", ""),
-                "total_segments": len(segments_meta),
-            }
-```
+                if not chapter:
+                    await self._ws_send({"type": "reading_done", "reason": "book_end"})
+                    break
 
-- [ ] **Step 3: 实现前情提要生成**
+                chapter_title = chapter.get("title", "")
+                paragraphs = json.loads(chapter.get("paragraphs", "[]"))
+                chunks = _split_chapter_into_chunks(paragraphs)
+                self._total_chunks = len(chunks)
 
-```python
-    async def generate_context_summary(self, chapter_idx: int) -> str:
-        """Call sentinel to summarize prior chapters + conversation history."""
-        # Gather previous chapter summaries
+                await self._ws_send({
+                    "type": "reading_chapter_start",
+                    "chapter_index": self.chapter_index,
+                    "chapter_title": chapter_title,
+                })
+
+                # Generate context summary for this chapter
+                self._context_summary = await self._generate_context_summary()
+
+                # Read each chunk
+                for ci, chunk_text in enumerate(chunks):
+                    if self._stopped:
+                        break
+                    self._chunk_index = ci
+
+                    # Generate annotated reading script
+                    script = await self._generate_script(chunk_text, chapter_title)
+                    if self._stopped:
+                        break
+
+                    await self._ws_send({
+                        "type": "reading_chunk_start",
+                        "chapter_index": self.chapter_index,
+                        "chunk_index": ci,
+                        "total_chunks": self._total_chunks,
+                        "script": script,
+                    })
+
+                    # Split into sentences and read them
+                    sentences = _split_sentences(script)
+                    await self._read_sentences(sentences)
+                    if self._stopped:
+                        break
+
+                if self._stopped:
+                    break
+
+                # Chapter done → advance
+                self.chapter_index += 1
+
+            # End
+            if self._stopped:
+                reason = "timeout" if time.time() - self._last_interaction > self.IDLE_TIMEOUT else "user_stop"
+            else:
+                reason = "book_end"
+
+            await self._write_end_summary(reason)
+            await self._ws_send({"type": "reading_done", "reason": reason})
+
+        except Exception:
+            logger.exception(f"ReadingSession crashed: book={self.book_id}")
+            try:
+                await self._ws_send({"type": "reading_error", "message": "朗读会话异常终止"})
+            except Exception:
+                pass
+        finally:
+            _sessions.pop(self.book_id, None)
+
+    async def _read_sentences(self, sentences: list[str]):
+        """Read sentences with one-ahead prefetch."""
+        if not sentences:
+            return
+
+        # Start prefetching sentence 0
+        next_task = asyncio.create_task(self._tts_one(sentences[0]))
+
+        for i, sentence in enumerate(sentences):
+            if self._stopped:
+                next_task.cancel()
+                break
+
+            # Wait for current sentence's audio
+            audio_url = await next_task
+
+            # Start prefetching next sentence
+            if i + 1 < len(sentences):
+                next_task = asyncio.create_task(self._tts_one(sentences[i + 1]))
+
+            # Push audio to frontend
+            if audio_url:
+                await self._ws_send({
+                    "type": "reading_audio",
+                    "url": audio_url,
+                    "seq": i,
+                    "text": sentence,
+                    "chapter_index": self.chapter_index,
+                    "chunk_index": self._chunk_index,
+                    "total_chunks": self._total_chunks,
+                })
+
+                # Wait for frontend to signal audio ended (or timeout/stop)
+                await self._wait_audio_ended()
+            else:
+                # TTS failed for this sentence — skip it
+                logger.warning("TTS failed, skipping sentence %d", i)
+
+    async def _wait_audio_ended(self):
+        """Wait for audio_ended signal, respecting pause and idle timeout."""
+        while not self._stopped:
+            if self._paused:
+                await asyncio.sleep(0.3)
+                self._check_idle_timeout()
+                continue
+
+            self._audio_ended.clear()
+            try:
+                await asyncio.wait_for(self._audio_ended.wait(), timeout=60)
+                return
+            except asyncio.TimeoutError:
+                self._check_idle_timeout()
+
+    def _check_idle_timeout(self):
+        if time.time() - self._last_interaction > self.IDLE_TIMEOUT:
+            self._stopped = True
+
+    async def _tts_one(self, text: str) -> str | None:
+        """Synthesize one sentence. Returns audio URL or None on failure."""
+        key = get_key("mimo")
+        if not key:
+            return None
+
+        style_hint, clean_text = extract_hints_and_clean(text)
+        if not clean_text:
+            return None
+
+        voice = SETTINGS.get("tts_voice") or "冰糖"
+        safe_id = re.sub(r'[^a-zA-Z0-9_\-]', '', f"read_{self.book_id[:8]}_{int(time.time()*1000)}")
+        chunk_name = f"{safe_id}_s{hash(clean_text) % 99999}"
+
+        messages = []
+        if style_hint:
+            messages.append({"role": "user", "content": style_hint})
+        messages.append({"role": "assistant", "content": clean_text})
+
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    "https://api.xiaomimimo.com/v1/chat/completions",
+                    headers={"api-key": key, "Content-Type": "application/json"},
+                    json={
+                        "model": "mimo-v2.5-tts",
+                        "messages": messages,
+                        "audio": {"format": "wav", "voice": voice},
+                    },
+                )
+            if resp.status_code != 200:
+                logger.warning("TTS API error: status=%d", resp.status_code)
+                return None
+
+            data = resp.json()
+            audio_b64 = data["choices"][0]["message"]["audio"]["data"]
+            audio_bytes = base64.b64decode(audio_b64)
+
+            cache_path = TTS_CACHE_DIR / f"{chunk_name}.wav"
+            cache_path.write_bytes(audio_bytes)
+            return f"/api/tts/audio/{chunk_name}"
+
+        except Exception as e:
+            logger.error("TTS synthesis failed: %s", e)
+            return None
+
+    async def _generate_script(self, chunk_text: str, chapter_title: str) -> str:
+        """Generate annotated reading script for one chunk."""
+        book_title = self._book_title or "这本书"
+        system_prompt = f"""你正在为《{book_title}》做有声朗读，当前章节：{chapter_title}。
+
+前情提要：{self._context_summary}
+
+请直接输出原文，仅做以下少量添加：
+- 在需要语气变化的位置插入【】语气标注（可用舞台描述风格，如【压低声音，带着一丝狡黠】）
+- 段落末尾加一句简短的共读吐槽（≤25字），用「吐槽：xxx」格式
+- 吐槽内也可用【】标注语气
+
+注意：尽量保持原文不动。语气标注和吐槽之外，原文措辞不变。"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": chunk_text},
+        ]
+        result = await call_sentinel_text(messages)
+        if not result:
+            logger.warning("Script generation failed, using raw text")
+            return chunk_text
+        return result.strip()
+
+    async def _generate_context_summary(self) -> str:
+        """Generate context summary for current chapter."""
         async with get_db() as db:
             db.row_factory = _row_dict
             cur = await db.execute(
                 "SELECT chapter_index, summary FROM book_annotations WHERE book_id = ? AND chapter_index < ? ORDER BY chapter_index",
-                (self.book_id, chapter_idx),
+                (self.book_id, self.chapter_index),
             )
             rows = await cur.fetchall()
 
         prev_summaries = "\n".join(
             f"第{r['chapter_index']+1}章: {r['summary']}" for r in rows if r.get("summary")
         )
-        conv_summary = ""
-        if self._conversation_log:
-            recent = self._conversation_log[-20:]  # last 20 exchanges
-            conv_summary = "朗读期间的对话:\n" + "\n".join(
-                f"- {'用户' if m['role']=='user' else 'AI'}: {m['content'][:100]}" for m in recent
-            )
+        if not prev_summaries:
+            return ""
 
-        prompt = f"""你是一位认真的共读伙伴。请根据已有章节摘要和对话历史，为接下来要读的章节写一段 ≤200字 的前情提要，包含情节进展、人物状态和整体氛围。用自然的口吻，像在和朋友聊书。
+        prompt = f"""请根据以下章节摘要，写一段 ≤200字 的前情提要，包含情节进展、人物状态和整体氛围。用自然口吻。
 
 已有章节摘要：
-{prev_summaries if prev_summaries else "（这是第一章，无前情）"}
+{prev_summaries}
 
-{conv_summary if conv_summary else ""}
-
-只需输出前情提要，不要额外说明。"""
+只需输出前情提要。"""
 
         result = await call_sentinel_text(prompt)
         return result.strip() if result else ""
-```
 
-- [ ] **Step 4: 实现朗读稿生成**
+    async def _write_end_summary(self, reason: str):
+        """Write summary to messages table."""
+        if not self.conv_id:
+            return
 
-```python
-    def _make_reading_system_prompt(self) -> str:
-        book_title = self._book_title or "这本书"
-        chapter_title = self._current_chapter_title or ""
-        return f"""你正在为《{book_title}》做有声朗读，当前章节：{chapter_title}。
+        prompt = f"""用户刚结束了《{self._book_title or '书'}》的朗读（读到第{self.chapter_index+1}章，原因: {reason}）。
+请写一条 ≤200字 的总结消息，像刚读完书在跟朋友随口聊。用自然亲切的口吻。"""
 
-前情提要：{self.context_summary}
+        result = await call_sentinel_text(prompt)
+        summary = result.strip() if result else f"今天读了《{self._book_title}》到第{self.chapter_index+1}章，下次继续~"
 
-请将以下原文改写为适合口语朗读的版本：
-- 保持原文意思，适当口语化但不过度发挥
-- 在【】内标注详细语气（可用舞台描述风格，如【压低声音，带着一丝狡黠】）
-- 段落末尾加一句简短的共读吐槽（≤25字），用「吐槽：xxx」格式
-- 吐槽内也可以用【】标注语气，如「吐槽：【憋笑】这段也太中二了」
-- TTS 会直接朗读全文包括吐槽，所以吐槽要自然融入"""
-
-    async def generate_reading_script(self, segment_text: str) -> str:
-        """Generate annotated reading script for one segment."""
-        messages = [
-            {"role": "system", "content": self._make_reading_system_prompt()},
-            {"role": "user", "content": segment_text},
-        ]
-        result = await call_sentinel_text(messages)
-        if not result:
-            logger.warning(f"Reading script generation failed for {self.book_id}, using raw text")
-            return segment_text
-        return result.strip()
-```
-
-- [ ] **Step 5: 实现 TTS 合成**
-
-```python
-    async def _synthesize_and_collect(self, text: str, msg_id: str) -> list[dict]:
-        """Feed text to TTSStreamer, collect audio URLs from sse_queue."""
-        voice = ws_manager.get_tts_voice() or "冰糖"
-        sse_queue: asyncio.Queue = asyncio.Queue()
-        streamer = TTSStreamer(msg_id, voice, ws_manager, sse_queue=sse_queue)
-
-        # Feed entire script at once (already complete, no streaming needed)
-        streamer.feed(text)
-        await streamer.flush()
-        await asyncio.sleep(0)  # let pending queue callbacks settle
-
-        # Collect tts_chunk events from the queue
-        chunks = []
-        while not sse_queue.empty():
-            try:
-                event = sse_queue.get_nowait()
-                data = json.loads(event)
-                if data.get("type") == "tts_chunk":
-                    chunks.append(data["data"])
-            except Exception:
-                break
-
-        return chunks
-```
-
-- [ ] **Step 6: 实现定时器等待逻辑**
-
-```python
-    async def wait_for_input_or_timeout(self) -> str:
-        """
-        Wait for user input or timeout.
-        Returns: "timeout" | "stop" | "user_message"
-        Sets self._pending_user_msg if user sent a message.
-        """
-        self.state = self.STATE_WAITING
-        self._user_msg_event.clear()
-
-        try:
-            await asyncio.wait_for(self._user_msg_event.wait(), timeout=self.WAIT_SECONDS)
-            # User sent a message
-            if self._stop_event.is_set():
-                return "stop"
-            return "user_message"
-        except asyncio.TimeoutError:
-            # Timeout — auto-continue
-            if self._stop_event.is_set():
-                return "stop"
-            return "timeout"
-```
-
-- [ ] **Step 7: 实现休眠检查消息生成**
-
-```python
-    def _get_sleep_check_message(self, counter: int) -> str | None:
-        """Return sleep check message for given counter, or None if should continue."""
-        if counter == self.SLEEP_CHECK_1:
-            return "【轻声】嗯？睡着了吗？"
-        elif counter == self.SLEEP_CHECK_2:
-            return "【略带无奈的笑意】还没醒吗？那我先继续读了~"
-        elif counter >= self.SLEEP_GOODNIGHT:
-            return "【温柔】看来真睡着了，晚安~"
-        return None
-```
-
-- [ ] **Step 8: 实现对话处理**
-
-```python
-    async def handle_chat(self, user_msg: str) -> str:
-        """Handle user interjection during reading. Returns AI reply text."""
-        self.state = self.STATE_CHATTING
-        self.auto_counter = 0  # reset
-        self._conversation_log.append({"role": "user", "content": user_msg})
-
-        # Build lightweight context
-        messages = [
-            {"role": "system", "content": f"""你正在和用户共读《{self._book_title or '这本书'}》。
-当前章节：{self._current_chapter_title or ''}
-前情提要：{self.context_summary}
-
-你是用户的共读伙伴，用自然、亲切的口吻和用户聊书。回复简洁（≤150字），像朋友间聊天。"""},
-        ]
-        # Last 5 exchanges
-        for m in self._conversation_log[-10:]:
-            messages.append({"role": m["role"], "content": m["content"]})
-        # Add current message if not already in log
-        if not messages[-1]["content"] == user_msg:
-            messages.append({"role": "user", "content": user_msg})
-
-        reply = await call_sentinel_text(messages)
-        reply_text = reply.strip() if reply else "嗯，我在听~"
-
-        self._conversation_log.append({"role": "assistant", "content": reply_text})
-        self.state = self.STATE_WAITING
-        return reply_text
-```
-
-- [ ] **Step 9: 实现结束总结**
-
-```python
-    async def write_end_summary(self, reason: str):
-        """Write a summary message to the conversation so the bot remembers the reading."""
-        if not self._conversation_log and reason == "goodnight":
-            # No conversation at all — write a minimal note
-            summary_text = f"读《{self._book_title or '书'}》读到第{self.chapter_index+1}章，你睡着了，我先道晚安了。下次继续~"
-        else:
-            conv_text = "\n".join(
-                f"{'用户' if m['role']=='user' else 'AI'}: {m['content'][:150]}"
-                for m in self._conversation_log[-30:]
-            )
-            prompt = f"""用户刚读完《{self._book_title or '一本书'}》第{self.chapter_index+1}章后结束朗读（原因: {reason}）。
-
-朗读期间的对话记录：
-{conv_text if conv_text else "（无对话）"}
-
-请写一条 ≤300字 的总结消息，像刚读完书在跟朋友随口聊：今天读了什么、读到哪了、1-2句感想或印象深刻的地方。用自然亲切的口吻。"""
-
-            result = await call_sentinel_text(prompt)
-            summary_text = result.strip() if result else f"今天和你一起读了《{self._book_title or '书'}》第{self.chapter_index+1}章，下次继续~"
-
-        # Write to messages table
         msg_id = f"reading_summary_{self.book_id}_{int(time.time())}"
         async with get_db() as db:
             await db.execute(
-                "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
-                (msg_id, self.conv_id, "assistant", summary_text, time.time()),
+                "INSERT INTO messages (id, conv_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                (msg_id, self.conv_id, "assistant", summary, time.time()),
             )
             await db.commit()
-```
 
-- [ ] **Step 10: 实现主朗读循环**
+    # ── External API (called from WS handler) ──
 
-```python
-    async def run_loop(self):
-        """Main reading loop, called from SSE generator."""
-        self.state = self.STATE_READING
+    def on_audio_ended(self):
+        self._last_interaction = time.time()
+        self._audio_ended.set()
 
-        # Phase 0: context summary for this chapter
-        self.context_summary = await self.generate_context_summary(self.chapter_index)
+    def on_pause(self):
+        self._paused = True
+        self._last_interaction = time.time()
 
-        # Load book metadata
-        async with get_db() as db:
-            db.row_factory = _row_dict
-            cur = await db.execute("SELECT title FROM books WHERE book_id = ?", (self.book_id,))
-            row = await cur.fetchone()
-            self._book_title = row["title"] if row else None
+    def on_resume(self):
+        self._paused = False
+        self._last_interaction = time.time()
 
-        while not self._stop_event.is_set():
-            # Load segment
-            seg = await self._load_segment()
-            if seg is None:
-                # Chapter ended — check next chapter
-                await self._sse_queue.put(json.dumps({
-                    "type": "chapter_end",
-                    "data": {"chapter_index": self.chapter_index}
-                }))
-                break  # caller handles chapter transition
+    def on_stop(self):
+        self._stopped = True
+        self._audio_ended.set()  # unblock wait loop
 
-            self._current_chapter_title = seg["chapter_title"]
-            self.state = self.STATE_READING
-
-            # Generate reading script
-            script = await self.generate_reading_script(seg["text"])
-
-            # Notify frontend of segment text (for display)
-            await self._sse_queue.put(json.dumps({
-                "type": "segment",
-                "data": {
-                    "chapter_index": self.chapter_index,
-                    "segment_index": self.segment_index,
-                    "total_segments": seg["total_segments"],
-                    "text": script,
-                }
-            }))
-
-            # Synthesize TTS
-            msg_id = f"read_{self.book_id}_c{self.chapter_index}_s{self.segment_index}"
-            await self._synthesize_and_collect(script, msg_id)
-
-            # Signal TTS done
-            await self._sse_queue.put(json.dumps({
-                "type": "tts_done",
-                "data": {"msg_id": msg_id}
-            }))
-
-            # Increment segment
-            self.segment_index += 1
-
-            # Wait for user input or timeout
-            result = await self.wait_for_input_or_timeout()
-
-            if result == "stop":
-                break
-            elif result == "user_message":
-                reply = await self.handle_chat(self._pending_user_msg)
-                # Synthesize chat reply
-                chat_msg_id = f"read_chat_{self.book_id}_{int(time.time())}"
-                await self._synthesize_and_collect(reply, chat_msg_id)
-                await self._sse_queue.put(json.dumps({
-                    "type": "chat_reply",
-                    "data": {"text": reply, "msg_id": chat_msg_id}
-                }))
-                # Back to WAITING — the loop continues
-            elif result == "timeout":
-                self.auto_counter += 1
-                sleep_msg = self._get_sleep_check_message(self.auto_counter)
-                if sleep_msg:
-                    # Synthesize sleep check
-                    sleep_msg_id = f"read_sleep_{self.book_id}_{int(time.time())}"
-                    await self._synthesize_and_collect(sleep_msg, sleep_msg_id)
-                    await self._sse_queue.put(json.dumps({
-                        "type": "sleep_check",
-                        "data": {"message": sleep_msg, "counter": self.auto_counter, "msg_id": sleep_msg_id}
-                    }))
-                if self.auto_counter >= self.SLEEP_GOODNIGHT:
-                    await self.write_end_summary("goodnight")
-                    await self._sse_queue.put(json.dumps({
-                        "type": "done",
-                        "data": {"reason": "goodnight"}
-                    }))
-                    break
-                # Otherwise continue to next segment
-
-        # Cleanup
-        if self._stop_event.is_set():
-            await self.write_end_summary("user_stop")
-            await self._sse_queue.put(json.dumps({
-                "type": "done",
-                "data": {"reason": "user_stop"}
-            }))
-        else:
-            # Chapter ended normally
-            await self._sse_queue.put(json.dumps({
-                "type": "done",
-                "data": {"reason": "chapter_end"}
-            }))
-
-        _sessions.pop(self.book_id, None)
-        self.state = self.STATE_IDLE
-```
-
-- [ ] **Step 11: 实现 stop 和 enqueue 方法**
-
-```python
-    def stop(self):
-        self._stop_event.set()
-        self._user_msg_event.set()  # wake up wait loop
-
-    def enqueue_user_message(self, content: str):
-        self._pending_user_msg = content
-        self._user_msg_event.set()
-```
-
-- [ ] **Step 12: Commit**
-
-```bash
-git add aion-chat/reading.py
-git commit -m "feat: ReadingSession 状态机 — 朗读调度核心"
-
-Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
-```
-
-
----
-
-### Task 2: 朗读 REST API
-
-**Files:**
-- Create: `aion-chat/routes/reading.py`
-
-- [ ] **Step 1: 创建路由文件和 SSE 端点**
-
-```python
-"""Reading session REST API: SSE control stream, user messages, stop, status."""
-import json
-import asyncio
-import logging
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from reading import ReadingSession, get_session, _sessions
-
-router = APIRouter(prefix="/api/books", tags=["reading"])
-logger = logging.getLogger("reading.routes")
-
-
-class ReadingMessageBody(BaseModel):
-    content: str
-    conv_id: str = ""
-```
-
-- [ ] **Step 2: 实现 GET /{book_id}/read/start SSE 端点**
-
-> EventSource 只支持 GET，参数通过 query string 传递。
-
-```python
-@router.get("/{book_id}/read/start")
-async def start_reading(book_id: str, chapter_index: int = 0, conv_id: str = ""):
-    """Start reading session. Returns SSE stream that stays alive until reading ends."""
-    existing = get_session(book_id)
-    if existing:
-        raise HTTPException(400, "该书已有活跃的朗读会话，请先停止")
-
-    session = ReadingSession(book_id, chapter_index, conv_id)
-
-    async def event_stream():
-        try:
-            # Run the reading loop in a background task
-            loop_task = asyncio.create_task(session.run_loop())
-
-            # Pull events from the SSE queue and yield them
-            while not loop_task.done() or not session._sse_queue.empty():
-                try:
-                    event = await asyncio.wait_for(session._sse_queue.get(), timeout=0.5)
-                    yield f"data: {event}\n\n"
-                except asyncio.TimeoutError:
-                    continue
-
-            # Get any exception from the loop task
-            await loop_task
-
-        except asyncio.CancelledError:
-            session.stop()
-        except Exception as e:
-            logger.error(f"Reading session error: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'data': {'message': str(e)}})}\n\n"
-        finally:
-            _sessions.pop(book_id, None)
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
-    )
-```
-
-- [ ] **Step 3: 实现 POST /{book_id}/read/message**
-
-```python
-@router.post("/{book_id}/read/message")
-async def reading_message(book_id: str, body: ReadingMessageBody):
-    """User sends a message during reading."""
-    session = get_session(book_id)
-    if not session:
-        raise HTTPException(404, "没有活跃的朗读会话")
-    session.enqueue_user_message(body.content)
-    return {"status": "ok"}
-```
-
-- [ ] **Step 4: 实现 POST /{book_id}/read/stop**
-
-```python
-@router.post("/{book_id}/read/stop")
-async def stop_reading(book_id: str):
-    """Stop the active reading session."""
-    session = get_session(book_id)
-    if not session:
-        raise HTTPException(404, "没有活跃的朗读会话")
-    session.stop()
-    return {"status": "stopped"}
-```
-
-- [ ] **Step 5: 实现 GET /{book_id}/read/status**
-
-```python
-@router.get("/{book_id}/read/status")
-async def reading_status(book_id: str):
-    """Get current reading session status."""
-    session = get_session(book_id)
-    if not session:
-        return {"active": False}
-    return {
-        "active": True,
-        "book_id": session.book_id,
-        "chapter_index": session.chapter_index,
-        "segment_index": session.segment_index,
-        "state": session.state,
-        "auto_counter": session.auto_counter,
-    }
-```
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add aion-chat/routes/reading.py
-git commit -m "feat: 朗读 SSE 控制流与用户交互 API"
-
-Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
-```
-
-
----
-
-### Task 3: 挂载路由到 main.py
-
-**Files:**
-- Modify: `aion-chat/main.py`
-
-- [ ] **Step 1: 添加 import 和 router**
-
-在 `from routes import webhooks as webhooks_routes` 之后添加:
-
-```python
-from routes import reading as reading_routes
-```
-
-在 `app.include_router(webhooks_routes.router)` 之后添加:
-
-```python
-app.include_router(reading_routes.router)
+    def on_disconnect(self):
+        self._stopped = True
+        self._audio_ended.set()
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
-git add aion-chat/main.py
-git commit -m "feat: 挂载朗读路由"
-
-Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+git add aion-chat/reading.py
+git commit -m "feat: 重写 ReadingSession — WS 驱动、逐句合成+预取"
 ```
-
 
 ---
 
-### Task 4: 前端朗读控制 UI (reading.html)
+### Task 3: 修改 WS handler + 清理 router
 
 **Files:**
-- Modify: `aion-chat/static/reading.html`
+- Modify: `aion-chat/main.py`
+- Delete: `aion-chat/routes/reading.py`
 
-- [ ] **Step 1: 在 reader 视图底部添加朗读控制栏 HTML**
+- [ ] **Step 1: 在 main.py 中移除 reading router 导入和挂载**
 
-在 `#readerView` 内部底部导航之前插入:
-
-```html
-<!-- Reading control bar -->
-<div id="readingBar" style="display:none;position:fixed;bottom:60px;left:0;right:0;z-index:100;
-    background:var(--bg);border-top:1px solid var(--border);padding:12px 16px;
-    display:flex;align-items:center;gap:12px;">
-  <button id="btnReadStart" onclick="startReading()"
-    style="padding:8px 20px;border-radius:20px;border:none;background:var(--accent);color:#fff;font-size:14px;">
-    开始朗读
-  </button>
-  <button id="btnReadStop" onclick="stopReading()" disabled
-    style="padding:8px 20px;border-radius:20px;border:1px solid var(--border);background:transparent;color:var(--text);font-size:14px;">
-    停止
-  </button>
-  <span id="readingStatus" style="font-size:13px;color:var(--text-secondary);"></span>
-  <span id="readingTimer" style="font-size:12px;color:var(--text-muted);margin-left:auto;"></span>
-  <!-- Audio player for TTS -->
-  <audio id="ttsAudio" style="display:none" onended="onAudioEnded()"></audio>
-</div>
+删除这两行：
+```python
+from routes import reading as reading_routes
+```
+```python
+app.include_router(reading_routes.router)
 ```
 
-- [ ] **Step 2: 添加 JavaScript 朗读控制逻辑**
+- [ ] **Step 2: 在 main.py 顶部添加 reading 导入**
 
-在 `</body>` 之前，`<script>` 标签内（或新建 script 块）添加:
-
-```javascript
-// ── Reading Controls ──
-
-let readingActive = false;
-let readingBookId = null;
-let readingEventSource = null;
-let ttsQueue = [];  // Queue of audio URLs to play sequentially
-let ttsPlaying = false;
-
-function showReadingBar(show) {
-  const bar = document.getElementById('readingBar');
-  bar.style.display = show ? 'flex' : 'none';
-}
-
-// Called when user opens reader view
-function onReaderOpen(bookId) {
-  readingBookId = bookId;
-  showReadingBar(true);
-  checkReadingStatus();
-}
-
-async function checkReadingStatus() {
-  try {
-    const r = await fetch(`/api/books/${readingBookId}/read/status`);
-    const data = await r.json();
-    if (data.active) {
-      readingActive = true;
-      document.getElementById('btnReadStart').disabled = true;
-      document.getElementById('btnReadStop').disabled = false;
-      document.getElementById('readingStatus').textContent =
-        `朗读中 — 第${data.chapter_index+1}章 第${data.segment_index+1}段`;
-    }
-  } catch(e) {}
-}
-
-async function startReading() {
-  if (!readingBookId) return;
-  const btn = document.getElementById('btnReadStart');
-  btn.disabled = true;
-  document.getElementById('btnReadStop').disabled = false;
-  document.getElementById('readingStatus').textContent = '准备中...';
-
-  const convId = localStorage.getItem('active_conv_id') || '';
-
-  readingEventSource = new EventSource(
-    `/api/books/${readingBookId}/read/start?chapter_index=0&conv_id=${encodeURIComponent(convId)}`
-  );
-
-  readingEventSource.onmessage = (e) => {
-    try {
-      const event = JSON.parse(e.data);
-      handleReadingEvent(event);
-    } catch(err) {
-      console.error('Reading SSE parse error:', err);
-    }
-  };
-
-  readingEventSource.onerror = () => {
-    console.error('Reading SSE connection error');
-    readingActive = false;
-    document.getElementById('btnReadStart').disabled = false;
-    document.getElementById('btnReadStop').disabled = true;
-    document.getElementById('readingStatus').textContent = '连接中断';
-  };
-
-  readingActive = true;
-}
-
-function handleReadingEvent(event) {
-  const status = document.getElementById('readingStatus');
-  switch(event.type) {
-    case 'segment':
-      status.textContent = `朗读中 — 第${event.data.segment_index+1}/${event.data.total_segments}段`;
-      // Display the reading script in the content area
-      displayReadingText(event.data.text);
-      break;
-
-    case 'tts_done':
-      // Frontend plays audio from WS tts_chunk events
-      // (or from stored URLs if we use them)
-      break;
-
-    case 'sleep_check':
-      status.textContent = event.data.message;
-      break;
-
-    case 'chat_reply':
-      status.textContent = '已回复';
-      break;
-
-    case 'done':
-      status.textContent = event.data.reason === 'goodnight' ? '晚安~' :
-                           event.data.reason === 'user_stop' ? '已停止' : '本章结束';
-      onReadingEnd();
-      break;
-
-    case 'chapter_end':
-      status.textContent = '本章读完';
-      break;
-
-    case 'error':
-      console.error('Reading error:', event.data.message);
-      status.textContent = '出错了';
-      onReadingEnd();
-      break;
-  }
-}
-
-function onReadingEnd() {
-  readingActive = false;
-  if (readingEventSource) {
-    readingEventSource.close();
-    readingEventSource = null;
-  }
-  document.getElementById('btnReadStart').disabled = false;
-  document.getElementById('btnReadStop').disabled = true;
-}
-
-async function stopReading() {
-  if (!readingBookId) return;
-  await fetch(`/api/books/${readingBookId}/read/stop`, { method: 'POST' });
-  onReadingEnd();
-  document.getElementById('readingStatus').textContent = '已停止';
-}
-
-function displayReadingText(text) {
-  // Split text from 吐槽 for styling
-  let html = text
-    .replace(/「吐槽：([^」]*)」/g, '<span class="spit">吐槽：$1</span>')
-    .replace(/【([^】]*)】/g, '<span class="tone-tag">【$1】</span>');
-  // Show in the existing content area or a reading overlay
-  const container = document.getElementById('readingContent') || document.getElementById('readerContent');
-  if (container) {
-    container.innerHTML = `<div class="reading-script">${html}</div>`;
-  }
-}
-
-// ── TTS Audio Player ──
-
-// Listen for WS tts_chunk events (from common WS connection)
-// Assume common.js exposes onTtsChunk callback or we hook into ws messages
-function enqueueTtsAudio(url) {
-  ttsQueue.push(url);
-  if (!ttsPlaying) playNextTts();
-}
-
-function playNextTts() {
-  if (ttsQueue.length === 0) {
-    ttsPlaying = false;
-    return;
-  }
-  ttsPlaying = true;
-  const url = ttsQueue.shift();
-  const audio = document.getElementById('ttsAudio');
-  audio.src = url;
-  audio.play().catch(e => console.error('TTS play error:', e));
-}
-
-function onAudioEnded() {
-  playNextTts();
-}
+在已有的 import 区域添加：
+```python
+from reading import ReadingSession, get_session
 ```
 
-- [ ] **Step 3: 集成 WS tts_chunk 事件到朗读播放队列**
+- [ ] **Step 3: 在 WS handler 中添加 reading 消息处理**
 
-在现有 WS 消息处理中（`connectCommonWS` 的回调），添加对 `tts_chunk` 的处理:
+在 `websocket_endpoint` 函数的 `msg_type` 分支中，在 `elif msg_type == "register_client":` 之后添加：
 
-```javascript
-// In the WS message handler, add:
-if (msg.type === 'tts_chunk' && readingActive) {
-  enqueueTtsAudio(msg.data.url);
-}
+```python
+                elif msg_type == "reading_start":
+                    book_id = msg.get("book_id", "")
+                    if not book_id:
+                        await ws.send_text(json.dumps({"type": "reading_error", "message": "缺少 book_id"}))
+                    elif get_session(book_id):
+                        await ws.send_text(json.dumps({"type": "reading_error", "message": "该书已有活跃朗读会话"}))
+                    else:
+                        session = ReadingSession(
+                            book_id=book_id,
+                            chapter_index=msg.get("chapter_index", 0),
+                            conv_id=msg.get("conv_id", ""),
+                            ws=ws,
+                        )
+                        asyncio.create_task(session.run())
+                elif msg_type == "reading_audio_ended":
+                    # Find session for this WS
+                    for s in list(_reading_sessions_for_ws(ws)):
+                        s.on_audio_ended()
+                elif msg_type == "reading_pause":
+                    for s in list(_reading_sessions_for_ws(ws)):
+                        s.on_pause()
+                elif msg_type == "reading_resume":
+                    for s in list(_reading_sessions_for_ws(ws)):
+                        s.on_resume()
+                elif msg_type == "reading_stop":
+                    for s in list(_reading_sessions_for_ws(ws)):
+                        s.on_stop()
 ```
 
-- [ ] **Step 4: 朗读时发送消息的入口**
+- [ ] **Step 4: 添加辅助函数 `_reading_sessions_for_ws`**
 
-在现有聊天输入框（`#readerReply` 内的 input）的发送逻辑中，添加朗读模式判断:
+在 `websocket_endpoint` 函数之前添加：
 
-```javascript
-async function sendReaderMessage(content) {
-  if (readingActive) {
-    // Send via reading message endpoint
-    await fetch(`/api/books/${readingBookId}/read/message`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ content, conv_id: localStorage.getItem('active_conv_id') || '' })
-    });
-  } else {
-    // Existing send logic via /api/conversations/{conv_id}/send
-  }
-}
+```python
+def _reading_sessions_for_ws(ws):
+    """Find active reading sessions initiated by this WS connection."""
+    from reading import _sessions
+    return [s for s in _sessions.values() if s._ws is ws]
 ```
 
-- [ ] **Step 5: 添加 CSS 样式**
+- [ ] **Step 5: 在 WS disconnect 时清理 reading session**
 
-在 `<style>` 块中添加:
+在 `websocket_endpoint` 的 `finally` 块中，`manager.disconnect(ws)` 之前添加：
 
-```css
-.reading-script { line-height: 1.8; font-size: 16px; padding: 16px; }
-.spit {
-  color: var(--accent);
-  font-style: italic;
-  background: var(--accent-bg-subtle, rgba(100,100,255,0.1));
-  border-radius: 4px;
-  padding: 2px 6px;
-}
-.tone-tag {
-  color: var(--text-muted);
-  font-size: 0.85em;
-  opacity: 0.7;
-}
-#readingBar {
-  backdrop-filter: blur(10px);
-}
+```python
+        for s in list(_reading_sessions_for_ws(ws)):
+            s.on_disconnect()
 ```
 
-- [ ] **Step 6: 在进入 reader 视图时触发 showReadingBar**
+- [ ] **Step 6: 删除 routes/reading.py**
 
-在 `openReader()` 或等效函数末尾添加 `onReaderOpen(bookId)` 调用。
+```bash
+git rm aion-chat/routes/reading.py
+```
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add aion-chat/static/reading.html
-git commit -m "feat: 朗读控制 UI — 开始/停止、SSE 事件处理、TTS 播放队列"
-
-Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+git add aion-chat/main.py
+git commit -m "feat: WS handler 转发 reading 消息，移除 REST 端点"
 ```
 
+---
+
+### Task 4: 前端全屏播放模式
+
+**Files:**
+- Modify: `aion-chat/static/reading.html`
+
+- [ ] **Step 1: 删除旧的朗读控制栏 HTML**
+
+删除 `#readingBar` div（约第 532-547 行的 `<!-- Reading control bar -->` 到 `</div>`）。
+
+- [ ] **Step 2: 在 `</body>` 前添加全屏播放模式 HTML**
+
+在 `</body>` 标签之前（在现有 `<script>` 标签之前）插入：
+
+```html
+<!-- ══ 全屏播放模式 ══ -->
+<div id="playerMode" style="display:none;position:fixed;inset:0;z-index:9999;
+    background:#1a1a2e;color:#eee;flex-direction:column;">
+
+  <!-- 顶栏 -->
+  <div style="padding:16px 20px;display:flex;align-items:center;gap:12px;">
+    <button onclick="exitPlayerMode()" style="background:none;border:none;color:#eee;font-size:20px;">←</button>
+    <div style="flex:1;overflow:hidden;">
+      <div id="playerBookTitle" style="font-size:14px;opacity:0.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+      <div id="playerChapterTitle" style="font-size:12px;opacity:0.5;"></div>
+    </div>
+  </div>
+
+  <!-- 文本展示区 -->
+  <div id="playerText" style="flex:1;overflow-y:auto;padding:24px 20px;font-size:18px;line-height:2;
+      display:flex;align-items:center;justify-content:center;text-align:center;">
+    <span style="opacity:0.4;">准备中...</span>
+  </div>
+
+  <!-- 进度 -->
+  <div id="playerProgress" style="text-align:center;font-size:12px;opacity:0.5;padding:8px;">
+  </div>
+
+  <!-- 控制栏 -->
+  <div style="padding:20px 40px 40px;display:flex;align-items:center;justify-content:center;gap:40px;">
+    <button id="playerPauseBtn" onclick="togglePlayerPause()"
+      style="width:64px;height:64px;border-radius:50%;border:2px solid #eee;background:none;color:#eee;font-size:24px;">
+      ⏸
+    </button>
+    <button onclick="stopPlayerMode()"
+      style="width:44px;height:44px;border-radius:50%;border:1px solid rgba(255,255,255,0.3);background:none;color:#aaa;font-size:16px;">
+      ⏹
+    </button>
+  </div>
+
+  <!-- Hidden audio -->
+  <audio id="playerAudio" style="display:none"></audio>
+</div>
+```
+
+- [ ] **Step 3: 添加播放模式 CSS**
+
+在 `<style>` 块末尾（`</style>` 之前）添加：
+
+```css
+/* ── 播放模式 ── */
+#playerMode .reading-text { font-size: 18px; line-height: 2; max-width: 600px; }
+#playerMode .tone-tag { color: #888; font-size: 0.8em; }
+#playerMode .spit { color: #7c9cff; font-style: italic; }
+```
+
+- [ ] **Step 4: 替换旧的朗读 JS 逻辑**
+
+删除从 `let readingActive = false;`（约第 1386 行）到文件末尾 `</script></body>` 之前的所有朗读相关 JS（约第 1386-1553 行），替换为：
+
+```javascript
+// ══ 全屏播放模式 ══
+
+let _playerActive = false;
+let _playerPaused = false;
+let _playerBookId = null;
+
+function enterPlayerMode(bookId, chapterIndex) {
+  _playerBookId = bookId;
+  _playerActive = true;
+  _playerPaused = false;
+  document.getElementById('playerMode').style.display = 'flex';
+  document.getElementById('playerBookTitle').textContent = currentBookTitle || '';
+  document.getElementById('playerPauseBtn').textContent = '⏸';
+  document.getElementById('playerText').innerHTML = '<span style="opacity:0.4;">准备中...</span>';
+  document.getElementById('playerProgress').textContent = '';
+
+  // Send start via WS
+  const convId = localStorage.getItem('active_conv_id') || '';
+  _wsSend({type: 'reading_start', book_id: bookId, chapter_index: chapterIndex, conv_id: convId});
+
+  // MediaSession
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentBookTitle || '朗读中',
+      artist: 'Aion',
+    });
+    navigator.mediaSession.setActionHandler('pause', () => togglePlayerPause());
+    navigator.mediaSession.setActionHandler('play', () => togglePlayerPause());
+  }
+}
+
+function exitPlayerMode() {
+  if (_playerActive) stopPlayerMode();
+  document.getElementById('playerMode').style.display = 'none';
+}
+
+function stopPlayerMode() {
+  _playerActive = false;
+  _wsSend({type: 'reading_stop'});
+  const audio = document.getElementById('playerAudio');
+  audio.pause();
+  audio.src = '';
+}
+
+function togglePlayerPause() {
+  if (!_playerActive) return;
+  _playerPaused = !_playerPaused;
+  const btn = document.getElementById('playerPauseBtn');
+  const audio = document.getElementById('playerAudio');
+  if (_playerPaused) {
+    btn.textContent = '▶';
+    audio.pause();
+    _wsSend({type: 'reading_pause'});
+  } else {
+    btn.textContent = '⏸';
+    audio.play().catch(() => {});
+    _wsSend({type: 'reading_resume'});
+  }
+}
+
+function _wsSend(data) {
+  if (_commonWs && _commonWs.readyState === 1) {
+    _commonWs.send(JSON.stringify(data));
+  }
+}
+
+function _handlePlayerWsMessage(msg) {
+  if (!_playerActive && msg.type !== 'reading_error') return;
+
+  switch (msg.type) {
+    case 'reading_audio': {
+      // Display text
+      const html = msg.text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/「吐槽：([^」]*)」/g, '<span class="spit">$1</span>')
+        .replace(/【([^】]*)】/g, '<span class="tone-tag">【$1】</span>');
+      document.getElementById('playerText').innerHTML = `<div class="reading-text">${html}</div>`;
+
+      // Progress
+      document.getElementById('playerProgress').textContent =
+        `第${msg.chapter_index + 1}章 · ${msg.chunk_index + 1}/${msg.total_chunks}段`;
+
+      // Play audio
+      const audio = document.getElementById('playerAudio');
+      audio.src = msg.url;
+      audio.onended = () => {
+        _wsSend({type: 'reading_audio_ended'});
+      };
+      if (!_playerPaused) audio.play().catch(() => {});
+      break;
+    }
+    case 'reading_chunk_start':
+      // Optional: could show full script preview
+      break;
+    case 'reading_chapter_start':
+      document.getElementById('playerChapterTitle').textContent = msg.chapter_title || `第${msg.chapter_index+1}章`;
+      break;
+    case 'reading_done':
+      _playerActive = false;
+      const reasons = {user_stop: '已停止', book_end: '全书读完', timeout: '已自动停止'};
+      document.getElementById('playerText').innerHTML =
+        `<span style="opacity:0.6;">${reasons[msg.reason] || '朗读结束'}</span>`;
+      break;
+    case 'reading_error':
+      document.getElementById('playerText').innerHTML =
+        `<span style="color:#f66;">${msg.message || '出错了'}</span>`;
+      _playerActive = false;
+      break;
+  }
+}
+```
+
+- [ ] **Step 5: 将 WS 消息路由到播放模式处理**
+
+修改 `connectCommonWS` 调用处（约第 620 行），将 `handleWsReadingMessage` 替换为：
+
+```javascript
+connectCommonWS(msg => {
+  _handlePlayerWsMessage(msg);
+});
+```
+
+- [ ] **Step 6: 修改"开始朗读"按钮的触发方式**
+
+找到"开始朗读"按钮相关的 `startReading()` 调用（旧代码已删），改为在阅读界面的适当位置添加入口。在 reader 顶栏的共读按钮旁添加朗读按钮：
+
+将 `#readerTopbar` 内的 HTML：
+```html
+<button class="invite-btn" id="inviteBtn" onclick="inviteRead()">📝 共读</button>
+```
+后面添加：
+```html
+<button class="invite-btn" onclick="enterPlayerMode(currentBookId, currentChIdx)">🔊 朗读</button>
+```
+
+- [ ] **Step 7: 删除旧的 `showReadingBar` / `onReaderOpen` / `checkReadingStatus` 调用**
+
+搜索并删除以下残留调用（如果有）：
+- `showReadingBar(true/false)`
+- `onReaderOpen(bookId)`
+- `checkReadingStatus()`
+
+这些函数已在 Step 4 中被删除，调用处也要清理。
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add aion-chat/static/reading.html
+git commit -m "feat: 全屏播放模式 UI — WS 驱动、暂停/停止、MediaSession"
+```
 
 ---
 
@@ -886,12 +793,13 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 
 After all tasks complete, verify:
 
-- [ ] `GET /api/books/{book_id}/read/start` 返回 SSE 流
-- [ ] SSE 流中包含 `segment`、`tts_done`、`done` 事件
-- [ ] 用户发消息到 `/read/message` 能触发 `chat_reply` 事件
-- [ ] 10s 无消息自动继续下一段
-- [ ] 连续 3 次超时触发 "睡着了吗？"
-- [ ] 连续 9 次超时触发 "晚安~" 并停止
-- [ ] 停止后 messages 表中有总结记录
-- [ ] 朗读期间 TTS 音频正常播放
-- [ ] 朗读结束后 `readingBar` 恢复初始状态
+- [ ] `python -c "import ast; ast.parse(open('reading.py').read()); ast.parse(open('tts.py').read()); ast.parse(open('main.py').read())"` 通过
+- [ ] `routes/reading.py` 已删除
+- [ ] 启动服务器无报错
+- [ ] 打开 reading.html，进入某章，点"朗读"按钮进入全屏播放模式
+- [ ] WS 收到 `reading_start` 后后端开始合成，前端收到 `reading_audio` 并播放
+- [ ] 播完一句后前端发 `audio_ended`，后端推下一句（验证预取生效：几乎无延迟）
+- [ ] 点暂停/继续正常工作
+- [ ] 点停止 → 收到 `reading_done`
+- [ ] 断开 WS → session 自动清理
+- [ ] 15 分钟无交互 → 自动停止（可改短测试）

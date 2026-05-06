@@ -19,9 +19,10 @@ class _QuietCamFilter(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(_QuietCamFilter())
 from fastapi.responses import FileResponse, HTMLResponse
 
-from config import BASE_DIR, PUBLIC_DIR, UPLOADS_DIR, SCREENSHOTS_DIR, load_cam_config
+from config import BASE_DIR, PUBLIC_DIR, UPLOADS_DIR, SCREENSHOTS_DIR, load_cam_config, SETTINGS, save_settings
 from database import init_db, get_db
 from ws import manager
+from reading import ReadingSession, get_session
 from camera import cam
 from voice import voice
 from schedule import schedule_mgr
@@ -106,6 +107,8 @@ async def lifespan(app: FastAPI):
         print(f"[PCActivity] ❌ 启动异常: {e}")
     # 自动记忆总结定时任务
     digest_task = asyncio.create_task(_auto_digest_loop())
+    # WS 心跳清理
+    manager.start_heartbeat()
     yield
     digest_task.cancel()
     pc_tracker.stop()
@@ -157,6 +160,13 @@ app.include_router(theater_routes.router)
 app.include_router(ghost_forest_routes.router)
 app.include_router(gift_routes.router)
 app.include_router(webhooks_routes.router)
+
+# ── reading 辅助函数 ──────────────────────────────
+
+def _reading_sessions_for_ws(ws):
+    """Find active reading sessions initiated by this WS connection."""
+    from reading import _sessions
+    return [s for s in _sessions.values() if s._ws is ws]
 
 
 # 页面
@@ -238,12 +248,46 @@ async def websocket_endpoint(ws: WebSocket):
             text = await ws.receive_text()
             try:
                 msg = json.loads(text)
-                if msg.get("type") == "ping":
+                msg_type = msg.get("type")
+                if msg_type == "ping":
                     await ws.send_text(json.dumps({"type": "pong"}))
-                elif msg.get("type") == "tts_state":
+                elif msg_type == "pong":
+                    manager.record_pong(ws)
+                elif msg_type == "tts_state":
                     manager.set_tts_state(ws, msg.get("enabled", False), msg.get("voice", ""))
-                elif msg.get("type") == "register_client":
+                    voice = msg.get("voice", "")
+                    if voice and SETTINGS.get("tts_voice") != voice:
+                        SETTINGS["tts_voice"] = voice
+                        save_settings(SETTINGS)
+                elif msg_type == "register_client":
                     manager.register_client_id(ws, msg.get("client_id", ""))
+                elif msg_type == "reading_start":
+                    book_id = msg.get("book_id", "")
+                    logging.getLogger("ws").info("reading_start: book=%s ch=%d", book_id, msg.get("chapter_index", 0))
+                    if not book_id:
+                        await ws.send_text(json.dumps({"type": "reading_error", "message": "缺少 book_id"}))
+                    elif get_session(book_id):
+                        await ws.send_text(json.dumps({"type": "reading_error", "message": "该书已有活跃朗读会话"}))
+                    else:
+                        session = ReadingSession(
+                            book_id=book_id,
+                            chapter_index=msg.get("chapter_index", 0),
+                            conv_id=msg.get("conv_id", ""),
+                            ws=ws,
+                        )
+                        asyncio.create_task(session.run())
+                elif msg_type == "reading_audio_ended":
+                    for s in list(_reading_sessions_for_ws(ws)):
+                        s.on_audio_ended()
+                elif msg_type == "reading_pause":
+                    for s in list(_reading_sessions_for_ws(ws)):
+                        s.on_pause()
+                elif msg_type == "reading_resume":
+                    for s in list(_reading_sessions_for_ws(ws)):
+                        s.on_resume()
+                elif msg_type == "reading_stop":
+                    for s in list(_reading_sessions_for_ws(ws)):
+                        s.on_stop()
             except (json.JSONDecodeError, Exception):
                 pass
     except WebSocketDisconnect:
@@ -251,6 +295,8 @@ async def websocket_endpoint(ws: WebSocket):
     except Exception as e:
         logging.getLogger("ws").warning("WS endpoint error: %s", e)
     finally:
+        for s in list(_reading_sessions_for_ws(ws)):
+            s.on_disconnect()
         manager.disconnect(ws)
 
 

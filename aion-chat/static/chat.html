@@ -1878,8 +1878,13 @@ function connectWS() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${proto}//${location.host}/ws`);
   ws.onopen = () => { _sendTTSState(); ws.send(JSON.stringify({type:'register_client',client_id:_clientId})); };
-  ws.onmessage = e => handleSync(JSON.parse(e.data));
-  ws.onclose = () => setTimeout(connectWS, 2000);
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "ping") { if (ws && ws.readyState === 1) ws.send(JSON.stringify({type:"pong"})); return; }
+    if (msg.type === "pong") return;
+    handleSync(msg);
+  };
+  ws.onclose = () => setTimeout(connectWS, 3000);
 }
 
 function handleSync(msg) {

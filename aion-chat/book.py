@@ -1,5 +1,5 @@
 """
-EPUB 解析模块 — 书籍导入、章节拆分、段落标注、图片提取
+书籍解析模块 — EPUB/PDF 导入、章节拆分、段落标注、图片提取
 """
 
 import hashlib, json, os, re, shutil, uuid
@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 
 import ebooklib
 from ebooklib import epub
+import fitz  # pymupdf — PDF 解析
 from bs4 import BeautifulSoup, NavigableString, Tag, XMLParsedAsHTMLWarning
 import warnings
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -150,6 +151,191 @@ def parse_epub(epub_path: str) -> ParsedBook:
         ch_idx += 1
 
     return result
+
+
+def parse_pdf(pdf_path: str) -> ParsedBook:
+    """
+    解析 PDF 文件，返回与 parse_epub 相同结构的 ParsedBook。
+    - 优先使用 PDF 内置目录（TOC）划分章节
+    - 无 TOC 时按页数分组（~15 页/章）
+    - 图片提取到 data/books/{book_id}/images/
+    """
+    doc = fitz.open(pdf_path)
+    result = ParsedBook()
+    book_id = result.book_id
+
+    # ── 元数据 ──
+    meta = doc.metadata
+    result.title = (meta.get("title") or "").strip() or Path(pdf_path).stem
+    result.author = (meta.get("author") or "").strip() or "未知作者"
+
+    # ── 图片目录 ──
+    img_dir = BOOKS_DIR / book_id / "images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 提取所有嵌入图片 ──
+    img_map = {}  # xref -> saved_filename
+    for page in doc:
+        for img_info in page.get_images(full=True):
+            xref = img_info[0]
+            if xref in img_map:
+                continue
+            try:
+                base = doc.extract_image(xref)
+                if not base:
+                    continue
+                ext = base["ext"]
+                fname = f"img_{xref}.{ext}"
+                (img_dir / fname).write_bytes(base["image"])
+                img_map[xref] = fname
+            except Exception:
+                pass
+
+    # ── 提取封面 ──
+    result.cover_path = _extract_pdf_cover(doc, img_map, book_id)
+
+    # ── 章节边界 ──
+    toc = doc.get_toc(simple=False)
+    chapter_entries = _resolve_pdf_chapters(doc, toc)
+
+    # ── 逐章提取 ──
+    for ch_idx, ch in enumerate(chapter_entries):
+        paragraphs, html_content = _extract_pdf_chapter(
+            doc, ch["start_page"], ch["end_page"], img_map, book_id
+        )
+
+        text_content = '\n'.join(paragraphs)
+        if len(text_content) < 200:
+            continue
+
+        segments_meta = _compute_segments(paragraphs)
+
+        chapter = ParsedChapter(
+            index=ch_idx,
+            title=ch["title"],
+            html_content=html_content,
+            text_content=text_content,
+            paragraphs=paragraphs,
+            char_count=len(text_content),
+            segments_meta=segments_meta,
+        )
+        result.chapters.append(chapter)
+
+    doc.close()
+    return result
+
+
+def _resolve_pdf_chapters(doc: fitz.Document, toc: list) -> list:
+    """
+    解析 PDF 章节边界，返回 [{"title": ..., "start_page": 0-based, "end_page": 0-based}, ...]
+    """
+    total_pages = doc.page_count
+
+    if toc and len(toc) >= 2:
+        chapters = []
+        for entry in toc:
+            # entry is (level, title, page, dest_dict)
+            level = entry[0]
+            title = entry[1].strip() if entry[1] else ""
+            page_num = max(0, int(entry[2]) - 1)  # convert to 0-based
+            if not title:
+                continue
+            chapters.append({"title": title, "start_page": page_num})
+
+        if not chapters:
+            return _fallback_page_chapters(total_pages)
+
+        # dedup by page & compute end_page
+        seen_pages = set()
+        deduped = []
+        for ch in chapters:
+            sp = ch["start_page"]
+            if sp in seen_pages:
+                continue
+            seen_pages.add(sp)
+            deduped.append(ch)
+        deduped.sort(key=lambda x: x["start_page"])
+
+        for i, ch in enumerate(deduped):
+            if i + 1 < len(deduped):
+                ch["end_page"] = max(ch["start_page"], deduped[i + 1]["start_page"] - 1)
+            else:
+                ch["end_page"] = total_pages - 1
+
+        return deduped
+
+    return _fallback_page_chapters(total_pages)
+
+
+def _fallback_page_chapters(total_pages: int, pages_per_chapter: int = 15) -> list:
+    chapters = []
+    for start in range(0, total_pages, pages_per_chapter):
+        end = min(start + pages_per_chapter, total_pages) - 1
+        chapters.append({
+            "title": f"第 {len(chapters) + 1} 章",
+            "start_page": start,
+            "end_page": end,
+        })
+    return chapters
+
+
+def _extract_pdf_chapter(doc: fitz.Document, start_page: int, end_page: int,
+                         img_map: dict, book_id: str) -> Tuple[list, str]:
+    """提取指定页面范围的段落和 HTML"""
+    paragraphs = []
+    html_parts = []
+
+    for page_num in range(start_page, end_page + 1):
+        page = doc[page_num]
+        blocks = page.get_text("blocks")  # list of (x0, y0, x1, y1, text, block_no, block_type)
+
+        # 按 y 坐标排序（从上到下）
+        text_blocks = [b for b in blocks if b[6] == 0 and b[4].strip()]
+        text_blocks.sort(key=lambda b: (b[1], b[0]))  # y 优先，x 次之
+
+        for block in text_blocks:
+            text = _safe_text(block[4])
+            if text and len(text) > 5:
+                p_idx = len(paragraphs)
+                paragraphs.append(text)
+                html_parts.append(f'<p data-p="{p_idx}">{_html_escape(text)}</p>')
+
+        # 页面图片
+        for img_info in page.get_images(full=True):
+            xref = img_info[0]
+            fname = img_map.get(xref)
+            if fname:
+                html_parts.append(
+                    f'<div class="book-img"><img src="/api/books/{book_id}/images/{fname}" '
+                    f'alt="page {page_num+1}" loading="lazy"></div>'
+                )
+
+    html_content = '\n'.join(html_parts)
+    return paragraphs, html_content
+
+
+def _extract_pdf_cover(doc: fitz.Document, img_map: dict, book_id: str) -> Optional[str]:
+    """提取 PDF 封面：优先第一页渲染图，其次第一页嵌入图"""
+    # 方法1：渲染首页为图片
+    try:
+        cover_dir = BOOKS_DIR / book_id / "images"
+        pix = doc[0].get_pixmap(dpi=150)
+        cover_path = cover_dir / "cover.jpg"
+        pix.save(cover_path)
+        return f"/api/books/{book_id}/images/cover.jpg"
+    except Exception:
+        pass
+
+    # 方法2：首页第一张嵌入图
+    try:
+        for img_info in doc[0].get_images(full=True):
+            fname = img_map.get(img_info[0])
+            if fname:
+                return f"/api/books/{book_id}/images/{fname}"
+    except Exception:
+        pass
+
+    return None
 
 
 def _get_metadata(book_obj, field: str) -> Optional[str]:

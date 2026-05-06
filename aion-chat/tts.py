@@ -51,7 +51,7 @@ def _count_clean(text: str) -> int:
     return len(t.strip())
 
 
-def _extract_hints_and_clean(text: str) -> tuple[str, str]:
+def extract_hints_and_clean(text: str) -> tuple[str, str]:
     """提取【】中的语气/动作提示，返回 (style_hint, clean_text)"""
     hints = _STAGE_HINT_RE.findall(text)
     style = '，'.join(h.strip() for h in hints if h.strip()) if hints else ''
@@ -79,7 +79,7 @@ def _has_unclosed_tag(text: str) -> bool:
 
 
 class TTSStreamer:
-    """服务端流式 TTS：积累文本 → 按句子切分 → 异步合成 → WS/Queue 推送"""
+    """服务端流式 TTS：积累文本 → 按句子切分 → 异步合成 → WS/Queue 按序推送"""
 
     def __init__(self, msg_id: str, voice: str, ws_manager=None, *, sse_queue: asyncio.Queue | None = None):
         self.msg_id = msg_id
@@ -89,6 +89,16 @@ class TTSStreamer:
         self._buffer = ""       # 原始文本缓冲
         self._seq = 0           # 分段序号
         self._tasks: list[asyncio.Task] = []
+        # 有序推送: 合成结果按 seq 暂存，drain 协程按序推送
+        self._results: dict[int, dict | None] = {}  # seq -> payload or None (failed)
+        self._next_push_seq = 0
+        self._results_ready = asyncio.Event()
+
+    def cancel(self):
+        """取消所有未完成的合成任务"""
+        for task in self._tasks:
+            if not task.done():
+                task.cancel()
 
     async def _notify(self, payload: dict):
         """通过 WebSocket 或 SSE Queue 推送事件"""
@@ -190,7 +200,7 @@ class TTSStreamer:
 
     def _dispatch(self, text: str):
         """发起异步合成任务 — 提取【】语气提示，拼接纯文本"""
-        style_hint, clean_text = _extract_hints_and_clean(text)
+        style_hint, clean_text = extract_hints_and_clean(text)
         if not clean_text:
             return
         seq = self._seq
@@ -200,14 +210,26 @@ class TTSStreamer:
         self._tasks.append(task)
 
     async def flush(self):
-        """流结束后，处理 buffer 中剩余文本并等待所有合成任务完成"""
+        """流结束后，处理 buffer 中剩余文本，按 seq 顺序流式推送"""
         if self._buffer:
             self._dispatch(self._buffer)
         self._buffer = ""
 
-        # 等待所有合成任务完成
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+        total_seq = self._seq  # 总共 dispatch 了多少段
+
+        # 按 seq 顺序逐个推送：等到下一个 seq 就绪才推
+        while self._next_push_seq < total_seq:
+            while self._next_push_seq not in self._results:
+                # clear 之后再检查一次，防止 clear 和 set 之间的竞态
+                self._results_ready.clear()
+                if self._next_push_seq in self._results:
+                    break
+                await self._results_ready.wait()
+
+            payload = self._results.pop(self._next_push_seq)
+            if payload:
+                await self._notify(payload)
+            self._next_push_seq += 1
 
         # 通知前端该消息的 TTS 分段已全部推送完毕
         await self._notify({
@@ -216,10 +238,12 @@ class TTSStreamer:
         })
 
     async def _synthesize(self, text: str, seq: int, safe_id: str, style_hint: str = ""):
-        """调用小米 MiMo TTS 合成 → 保存文件 → WS 推送"""
+        """调用小米 MiMo TTS 合成 → 保存文件 → 存入有序结果队列"""
         key = get_key("mimo")
         if not key:
             log.warning("TTS: 无 MiMo API Key，跳过合成 seq=%d", seq)
+            self._results[seq] = None
+            self._results_ready.set()
             return
 
         chunk_name = f"{safe_id}_s{seq}"
@@ -241,6 +265,8 @@ class TTSStreamer:
                 )
             if resp.status_code != 200:
                 log.warning("TTS API 错误: status=%d seq=%d body=%s", resp.status_code, seq, resp.text[:200])
+                self._results[seq] = None
+                self._results_ready.set()
                 return
 
             data = resp.json()
@@ -250,15 +276,18 @@ class TTSStreamer:
             cache_path = TTS_CACHE_DIR / f"{chunk_name}.wav"
             cache_path.write_bytes(audio_bytes)
 
-            await self._notify({
+            self._results[seq] = {
                 "type": "tts_chunk",
                 "data": {
                     "msg_id": self.msg_id,
                     "seq": seq,
                     "url": f"/api/tts/audio/{chunk_name}"
                 }
-            })
-            log.info("TTS chunk pushed: msg=%s seq=%d len=%d", self.msg_id, seq, len(text))
+            }
+            self._results_ready.set()
+            log.info("TTS chunk ready: msg=%s seq=%d len=%d", self.msg_id, seq, len(text))
 
         except Exception as e:
             log.error("TTS 合成失败 seq=%d: %s", seq, e)
+            self._results[seq] = None
+            self._results_ready.set()
