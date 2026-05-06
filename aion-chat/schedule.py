@@ -191,7 +191,7 @@ class ScheduleManager:
         abilities.append("[MUSIC:歌曲名 歌手名] — 点歌/推荐音乐。系统自动展示播放卡片并自动播放，不要在指令外重复歌曲信息。可同时用多个。")
         abilities.append("[ALARM:YYYY-MM-DDTHH:MM|内容] — 设置闹铃，到时间系统会主动提醒用户。日期时间用ISO格式。")
         abilities.append("[REMINDER:YYYY-MM-DD|内容] — 设置日程提醒（不闹铃），你在合适时机自然提起即可。")
-        abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。")
+        abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动获取{user_name}的状态（摄像头画面优先，未开启时使用传感器/设备活动数据）。")
         abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
         ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
 
@@ -324,31 +324,15 @@ class ScheduleManager:
             await db.commit()
         await manager.broadcast({"type": "schedule_changed"})
 
-        # 检查摄像头是否开启
-        from camera import cam
-        if not cam.running:
-            # 摄像头未开启，插入系统消息并返回
-            async with get_db() as db:
-                db.row_factory = aiosqlite.Row
-                cur = await db.execute("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 1")
-                conv = await cur.fetchone()
-            if conv:
-                await _sys_msg(conv["id"], f"👁 定时监控触发失败：摄像头未开启（原计划：{content}）")
-            return
-
         # 播放提示音 + 5秒延迟，给用户反应时间
         await manager.broadcast({"type": "monitor_alert", "data": {"content": content}})
         await asyncio.sleep(5)
 
-        # 截图
-        jpg_bytes = cam.get_frame_jpeg()
+        # 尝试截图，失败则降级到传感器上下文
+        from camera import cam
+        jpg_bytes = cam.get_frame_jpeg() if cam.running else None
         if not jpg_bytes:
-            async with get_db() as db:
-                db.row_factory = aiosqlite.Row
-                cur = await db.execute("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 1")
-                conv = await cur.fetchone()
-            if conv:
-                await _sys_msg(conv["id"], f"👁 定时监控触发失败：无法获取摄像头画面（原计划：{content}）")
+            await self._fire_monitor_sensor_fallback(content, trigger_at)
             return
 
         # 保存截图到 uploads
@@ -411,7 +395,7 @@ class ScheduleManager:
         abilities.append("[MUSIC:歌曲名 歌手名] — 点歌/推荐音乐。系统自动展示播放卡片并自动播放，不要在指令外重复歌曲信息。可同时用多个。")
         abilities.append("[ALARM:YYYY-MM-DDTHH:MM|内容] — 设置闹铃，到时间系统会主动提醒用户。日期时间用ISO格式。")
         abilities.append("[REMINDER:YYYY-MM-DD|内容] — 设置日程提醒（不闹铃），你在合适时机自然提起即可。")
-        abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。")
+        abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动获取{user_name}的状态（摄像头画面优先，未开启时使用传感器/设备活动数据）。")
         abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
         ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
 
@@ -534,6 +518,140 @@ class ScheduleManager:
         if music_cards:
             music_data = {'type': 'music', 'msg_id': ai_msg_id, 'cards': music_cards, 'autoplay': True}
             await manager.broadcast({"type": "music", "data": music_data})
+
+        from routes.files import export_conversation
+        await export_conversation(conv_id)
+
+    async def _fire_monitor_sensor_fallback(self, content: str, trigger_at: str):
+        """摄像头不可用时，用传感器上下文触发定时监控"""
+        wb = load_worldbook()
+        user_name = wb.get("user_name", "你")
+        ai_name = wb.get("ai_name", "AI")
+        now_str = datetime.now().strftime("%Y年%m月%d日 %H:%M:%S")
+
+        async with get_db() as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 1")
+            conv = await cur.fetchone()
+            if not conv:
+                return
+            conv_id = conv["id"]
+            model_key = conv["model"] or DEFAULT_MODEL
+
+            cur = await db.execute(
+                "SELECT role, content, attachments FROM messages WHERE conv_id=? "
+                "AND role IN ('user','assistant') ORDER BY created_at DESC LIMIT 20",
+                (conv_id,),
+            )
+            rows = await cur.fetchall()
+            history = []
+            for r in reversed(rows):
+                d = dict(r)
+                d["attachments"] = []
+                history.append(d)
+
+        prefix = []
+        if wb.get("ai_persona"):
+            prefix.append({"role": "user", "content": f"[系统设定 - AI人设]\n{wb['ai_persona']}"})
+            prefix.append({"role": "assistant", "content": "收到，我会按照设定扮演角色。"})
+        if wb.get("user_persona"):
+            prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
+            prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
+        if prefix:
+            prefix[-1]["content"] += f"\n系统当前的准确时间是 {now_str}"
+
+        # 传感器上下文
+        sensor_context = ""
+        try:
+            from sensor import _buffer, _format_events_for_prompt
+            with __import__("sensor")._buffer_lock:
+                recent_events = list(_buffer)
+            if recent_events:
+                sensor_context = _format_events_for_prompt(recent_events)
+        except Exception:
+            pass
+
+        activity_summary_text = ""
+        try:
+            from activity import get_activity_summary_for_prompt
+            activity_summary_text = get_activity_summary_for_prompt(12)
+        except Exception:
+            pass
+
+        location_text = ""
+        try:
+            from location import format_location_for_prompt
+            location_text = format_location_for_prompt()
+        except Exception:
+            pass
+
+        trigger_prompt = (
+            f"[定时监控触发]\n"
+            f"你之前设置了在 {trigger_at.replace('T', ' ')} 查看【{user_name}】的状态。\n"
+            f"监控目的：{content}\n"
+            f"摄像头当前未开启，以下是传感器和设备活动数据：\n"
+        )
+        if location_text:
+            trigger_prompt += f"\n{location_text}\n"
+        if sensor_context:
+            trigger_prompt += f"\n最近的传感器事件：\n{sensor_context}\n"
+        if activity_summary_text:
+            trigger_prompt += f"\n{user_name}过去两小时的设备使用动态：\n{activity_summary_text}\n"
+        trigger_prompt += f"\n请根据以上信息和之前的对话上下文，自然地回应。"
+
+        recalled, _ = await recall_memories(trigger_prompt[:300])
+        mem_inject = []
+        if recalled:
+            mem_lines = "\n".join([f"- {m['content']}" for m in recalled])
+            mem_inject = [
+                {"role": "user", "content": f"[相关记忆]\n{mem_lines}"},
+                {"role": "assistant", "content": "收到，我会自然地参考这些记忆。"},
+            ]
+
+        messages = prefix + mem_inject + history + [{"role": "user", "content": trigger_prompt}]
+
+        await _sys_msg(conv_id, f"👁 定时监控触发（传感器模式）：{content}")
+
+        ai_msg_id = f"msg_{int(time.time()*1000)}_smf"
+        monitor_tts = None
+        if manager.any_tts_enabled():
+            tts_voice = manager.get_tts_voice()
+            if tts_voice:
+                monitor_tts = TTSStreamer(ai_msg_id, tts_voice, manager)
+
+        full_text = ""
+        try:
+            _temp = SETTINGS.get("temperature")
+            async for chunk in stream_ai(messages, model_key, temperature=_temp):
+                full_text += chunk
+                if monitor_tts:
+                    monitor_tts.feed(chunk)
+        except Exception as e:
+            full_text = f"[定时监控回复失败] {e}"
+
+        if not full_text.strip():
+            return
+
+        now = time.time()
+        async with get_db() as db:
+            await db.execute(
+                "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
+                (ai_msg_id, conv_id, "assistant", full_text, now, "[]"),
+            )
+            await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
+            await db.commit()
+
+        ai_msg = {
+            "id": ai_msg_id, "conv_id": conv_id, "role": "assistant",
+            "content": full_text, "created_at": now, "attachments": [],
+        }
+        await manager.broadcast({"type": "msg_created", "data": ai_msg})
+
+        if monitor_tts:
+            try:
+                await monitor_tts.flush()
+            except Exception:
+                pass
 
         from routes.files import export_conversation
         await export_conversation(conv_id)
