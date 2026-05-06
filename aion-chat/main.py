@@ -99,6 +99,9 @@ async def lifespan(app: FastAPI):
     # 日程/闹铃模块初始化
     schedule_mgr.set_event_loop(loop)
     schedule_mgr.start()
+    # 传感器模块初始化
+    import sensor
+    sensor.set_event_loop(asyncio.get_event_loop())
     # PC 活动采集
     pc_tracker.set_event_loop(loop)
     try:

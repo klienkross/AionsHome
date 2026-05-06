@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request, Header, HTTPException, Query
 from ws import manager
 from config import SETTINGS, save_settings, DATA_DIR
 from webhook_ai import handle_night_activity, _is_night, trigger_ai_reply
+from sensor import handle_sensor_event
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 log = logging.getLogger("webhooks")
@@ -22,6 +23,7 @@ WEBHOOK_LOG_PATH = DATA_DIR / "webhook_log.jsonl"
 # 未来新增 channel 只需在这注册一行即可
 _HANDLERS = {
     "phone-activity": handle_night_activity,
+    "sensor": handle_sensor_event,
 }
 
 
