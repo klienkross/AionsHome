@@ -395,8 +395,13 @@ async def process_heartbeat(lng: float, lat: float, accuracy: float = 0.0, is_gc
     else:
         distance_home = haversine(gcj_lng, gcj_lat, home_lng, home_lat)
 
+    # 围栏已接管 state 时，GPS 不覆盖
+    geofence_owns_state = old_status.get("state_changed_at", 0) > 0 and old_state not in ("unknown",)
+
     threshold = cfg.get("home_threshold", 500)
-    if home_not_set:
+    if geofence_owns_state:
+        new_state = old_state
+    elif home_not_set:
         new_state = old_state if old_state != "unknown" else "unknown"
     elif distance_home <= threshold:
         new_state = "at_home"
