@@ -67,7 +67,7 @@ async def _judge_and_send_gift_inner(
         f"如果决定送礼，需要提供：\n"
         f"1. image_prompt：根据记忆和上下文，以及节日，纪念日等，提供一段英文的生图提示词。"
         f"可以是你想送给{user_name}任何礼物。\n"
-        f"2. message：送礼时你想对{user_name}说的一段话，要完全符合你的人设性格，自然真挚。\n\n"
+        f"2. message：送礼时你想对{user_name}说的一段话，要完全符合你的人设性格，自然真挚。注意控制在100字以内。\n\n"
         f"请严格返回以下 JSON 格式（不要加 markdown 代码块）：\n"
         f'{{"givegift": true/false, "image_prompt": "...", "message": "..."}}'
     )
@@ -99,6 +99,9 @@ async def _judge_and_send_gift_inner(
     if not image_prompt or not gift_message:
         print("[gift] 缺少 image_prompt 或 message，跳过")
         return
+
+    if len(gift_message) > 120:
+        gift_message = gift_message[:120]
 
     print(f"[gift] AI 决定送礼！生图中... prompt: {image_prompt[:80]}")
 
