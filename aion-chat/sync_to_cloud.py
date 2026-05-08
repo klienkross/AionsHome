@@ -15,7 +15,7 @@ _ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 def _git(*args: str, cwd: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", *_GIT_CONFIG, *args],
-        cwd=cwd, capture_output=True, text=True, env=_ENV,
+        cwd=cwd, capture_output=True, text=True, encoding="utf-8", env=_ENV,
     )
 
 
