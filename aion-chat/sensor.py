@@ -14,6 +14,10 @@ _buffer_lock = threading.Lock()
 _window_timer: threading.Timer | None = None
 _event_loop: asyncio.AbstractEventLoop | None = None
 
+GEOFENCE_DEBOUNCE_SECONDS = 60
+_geofence_timers: dict[str, threading.Timer] = {}
+_geofence_pending: dict[str, dict] = {}
+
 
 def set_event_loop(loop: asyncio.AbstractEventLoop):
     global _event_loop
@@ -78,7 +82,11 @@ async def handle_sensor_event(payload: dict) -> dict:
     except Exception:
         pass
 
-    if event_type in HIGH_PRIORITY_EVENTS:
+    if event_type == "geofence":
+        zone = event["data"].get("zone", "unknown")
+        _debounce_geofence(zone, event)
+        return {"debounced": True, "zone": zone, "wait_seconds": GEOFENCE_DEBOUNCE_SECONDS}
+    elif event_type in HIGH_PRIORITY_EVENTS:
         return await _handle_high_priority(event)
     else:
         _buffer_event(event)
@@ -127,6 +135,45 @@ def _on_window_expire():
         return
     if _event_loop:
         asyncio.run_coroutine_threadsafe(_analyze_events(events, source="window"), _event_loop)
+
+
+def _debounce_geofence(zone: str, event: dict):
+    """对同一 zone 的围栏事件做 60 秒去抖，只处理最后一次"""
+    if zone in _geofence_timers:
+        _geofence_timers[zone].cancel()
+    _geofence_pending[zone] = event
+    timer = threading.Timer(GEOFENCE_DEBOUNCE_SECONDS, _fire_geofence, args=[zone])
+    timer.daemon = True
+    timer.start()
+    _geofence_timers[zone] = timer
+    log.info("地理围栏去抖：zone=%s action=%s，%ds 后生效", zone, event["data"].get("action"), GEOFENCE_DEBOUNCE_SECONDS)
+
+
+def _fire_geofence(zone: str):
+    """去抖窗口结束，检查状态是否真的变了再触发分析"""
+    event = _geofence_pending.pop(zone, None)
+    _geofence_timers.pop(zone, None)
+    if not event or not _event_loop:
+        return
+
+    data = event["data"]
+    action = data.get("action", "enter")
+    new_state = "at_home" if zone == "home" and action == "enter" else (
+        f"at_{zone}" if action == "enter" else "outside"
+    )
+
+    try:
+        from location import load_location_status
+        current_state = load_location_status().get("state", "unknown")
+    except Exception:
+        current_state = "unknown"
+
+    if new_state == current_state:
+        log.info("地理围栏去抖结束：zone=%s 状态未变（%s），跳过分析", zone, current_state)
+        return
+
+    log.info("地理围栏去抖结束：zone=%s 状态变更 %s → %s，触发分析", zone, current_state, new_state)
+    asyncio.run_coroutine_threadsafe(_handle_high_priority(event), _event_loop)
 
 
 async def _handle_high_priority(event: dict) -> dict:
