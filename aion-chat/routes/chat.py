@@ -30,6 +30,7 @@ ACTIVITY_CHECK_PATTERN = re.compile(r'\[查看动态:(\d+)\]')
 VIDEO_CALL_CMD = '[视频电话]'
 THEATER_STAT_PATTERN = re.compile(r'\[剧场属性[：:]([^\s]+)\s*([+\-＋－]\d+)\]')
 THEATER_ITEM_PATTERN = re.compile(r'\[剧场道具[：:]([^\]]+)\]')
+THINK_CMD_PATTERN = re.compile(r'\[THINK:([^\]]+)\]')
 
 # 允许进入上下文的 system 消息关键词（点歌、查看监控、查看动态）
 _SYSTEM_MSG_CONTEXT_KEYWORDS = ('查看了监控', '搜索了', '点歌', '点了一首', '推荐了', '查看了动态')
@@ -1167,6 +1168,11 @@ async def send_message(conv_id: str, body: MsgCreate):
                     result = await organize_memories(kws)
                     print(f"[ORGANIZE] {result}")
 
+            # 检测 [THINK:xxx] 背景思考指令
+            think_matches = THINK_CMD_PATTERN.findall(full_text)
+            if think_matches:
+                full_text = THINK_CMD_PATTERN.sub("", full_text).strip()
+
             mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
             if mem_edit_matches:
                 full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
@@ -1275,6 +1281,13 @@ async def send_message(conv_id: str, body: MsgCreate):
                 await _q.put(activity_data)
                 await manager.broadcast({"type": "activity_check", "data": activity_data})
                 asyncio.create_task(perform_activity_check(conv_id, model_key, activity_n))
+
+
+            if think_matches:
+                for think_instr in think_matches:
+                    think_instr = think_instr.strip()
+                    if think_instr:
+                        asyncio.create_task(perform_background_think(conv_id, think_instr, ai_msg_id))
 
             # [视频电话] 延迟 10 秒后定向推送到最后发消息的客户端
             if video_call_triggered:
@@ -1880,6 +1893,86 @@ async def perform_obsidian_check(
             pass
     await export_conversation(conv_id)
     print(f"[OBSIDIAN] 日记读取完成，已自动追加回复")
+
+
+async def perform_background_think(conv_id: str, instruction: str, msg_id: str):
+    """后台静默执行思考任务，结果存入 background_thoughts 表。"""
+    from sentinel import call_sentinel_text
+    from obsidian import read_recent, read_diary, search_diary
+    from activity import get_activity_summary_for_prompt
+
+    wb = load_worldbook()
+    user_name = wb.get("user_name", "用户")
+
+    # 根据指令关键词决定拉取哪些数据
+    instr_lower = instruction.lower()
+    data_parts = []
+
+    # 日记
+    if any(k in instr_lower for k in ("日记", "diary", "obsidian", "记录")):
+        try:
+            diary = await read_recent(3)
+            data_parts.append(f"【最近3天日记摘要】\n{diary}")
+        except Exception:
+            pass
+
+    # 活动
+    if any(k in instr_lower for k in ("活动", "动态", "activity", "使用", "设备")):
+        try:
+            activity = get_activity_summary_for_prompt(6)
+            if activity:
+                data_parts.append(f"【最近1小时活动】\n{activity}")
+        except Exception:
+            pass
+
+    # 记忆
+    if any(k in instr_lower for k in ("记忆", "memory", "回忆", "回顾")):
+        try:
+            from memory import recall_memories
+            recalled, _ = await recall_memories(instruction[:200])
+            if recalled:
+                mem_lines = "\n".join(f"- {m['content']}" for m in recalled[:10])
+                data_parts.append(f"【相关记忆】\n{mem_lines}")
+        except Exception:
+            pass
+
+    # 没命中任何关键词 → 默认拉日记
+    if not data_parts:
+        try:
+            diary = await read_recent(3)
+            data_parts.append(f"【最近3天日记摘要】\n{diary}")
+        except Exception:
+            pass
+
+    data_block = "\n\n".join(data_parts) if data_parts else "（无可用数据）"
+
+    prompt = (
+        f"你是{user_name}的AI伴侣的后台思考引擎。\n"
+        f"请根据以下指令和数据，进行分析思考，输出简洁的思考结论（200字以内）。\n"
+        f"不要输出寒暄或格式标记，只输出思考结果。\n\n"
+        f"【思考指令】{instruction}\n\n"
+        f"【可用数据】\n{data_block}"
+    )
+
+    try:
+        result = await call_sentinel_text(prompt, timeout=30)
+    except Exception as e:
+        print(f"[THINK] 思考执行失败: {e}")
+        return
+
+    if not result or not result.strip():
+        return
+
+    # 存入 background_thoughts 表
+    thought_id = f"think_{int(time.time()*1000)}"
+    now = time.time()
+    async with get_db() as db:
+        await db.execute(
+            "INSERT INTO background_thoughts (id, conv_id, msg_id, instruction, result, created_at, used) VALUES (?,?,?,?,?,?,0)",
+            (thought_id, conv_id, msg_id, instruction, result.strip(), now),
+        )
+        await db.commit()
+    print(f"[THINK] 思考完成: {instruction[:30]}... → {result.strip()[:50]}...")
 
 
 # ── 重新生成 AI 回复 ──────────────────────────────
