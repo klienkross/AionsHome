@@ -72,6 +72,23 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_schedules_status ON schedules(status, trigger_at)")
+        try:
+            await db.execute("ALTER TABLE schedules ADD COLUMN repeat TEXT DEFAULT NULL")
+        except:
+            pass
+        # ── 背景思考表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS background_thoughts (
+                id TEXT PRIMARY KEY,
+                conv_id TEXT,
+                msg_id TEXT,
+                instruction TEXT NOT NULL,
+                result TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                used INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_bg_thoughts_used ON background_thoughts(used, created_at DESC)")
         # ── 心语表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS heart_whispers (
