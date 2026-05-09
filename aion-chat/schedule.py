@@ -27,6 +27,7 @@ REMINDER_CMD = re.compile(r"\[REMINDER:(.+?)\|(.+?)\]")
 MONITOR_CMD = re.compile(r"\[Monitor:(.+?)\|(.+?)\]")
 SCHEDULE_DEL_CMD = re.compile(r"\[SCHEDULE_DEL:(.+?)\]")
 SCHEDULE_LIST_CMD = re.compile(r"\[SCHEDULE_LIST\]")
+THINK_SCHEDULE_CMD = re.compile(r"\[THINK_SCHEDULE:(\d{1,2}:\d{2})\|(\w+)\|(.+?)\]")
 
 
 def _parse_dt(raw: str) -> str | None:
@@ -119,10 +120,17 @@ class ScheduleManager:
                 (now_iso,),
             )
             due_monitors = [dict(r) for r in await cur.fetchall()]
+            cur = await db.execute(
+                "SELECT * FROM schedules WHERE status='active' AND type='think' AND trigger_at <= ?",
+                (now_iso,),
+            )
+            due_thinks = [dict(r) for r in await cur.fetchall()]
         for item in due_alarms:
             await self._fire_alarm(item)
         for item in due_monitors:
             await self._fire_monitor(item)
+        for item in due_thinks:
+            await self._fire_think(item)
 
     # ── 触发闹铃 ─────────────────────────────────
     async def _fire_alarm(self, item: dict):
@@ -656,6 +664,49 @@ class ScheduleManager:
         from routes.files import export_conversation
         await export_conversation(conv_id)
 
+    async def _fire_think(self, item: dict):
+        sid = item["id"]
+        content = item["content"]
+        trigger_at = item["trigger_at"]
+        repeat = item.get("repeat")
+        log.info("firing think %s: %s @%s", sid, content, trigger_at)
+
+        if repeat == "daily":
+            try:
+                from datetime import timedelta
+                dt = datetime.strptime(trigger_at, "%Y-%m-%d %H:%M")
+                next_dt = dt + timedelta(days=1)
+                next_trigger = next_dt.strftime("%Y-%m-%d %H:%M")
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute(
+                        "UPDATE schedules SET trigger_at=? WHERE id=?",
+                        (next_trigger, sid),
+                    )
+                    await db.commit()
+            except Exception as e:
+                log.error("think repeat reschedule failed: %s", e)
+                async with aiosqlite.connect(DB_PATH) as db:
+                    await db.execute("UPDATE schedules SET status='triggered' WHERE id=?", (sid,))
+                    await db.commit()
+        else:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("UPDATE schedules SET status='triggered' WHERE id=?", (sid,))
+                await db.commit()
+
+        await manager.broadcast({"type": "schedule_changed"})
+
+        # 获取最新对话的 conv_id
+        async with get_db() as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute("SELECT id FROM conversations ORDER BY updated_at DESC LIMIT 1")
+            conv = await cur.fetchone()
+            if not conv:
+                return
+            conv_id = conv["id"]
+
+        from routes.chat import perform_background_think
+        await perform_background_think(conv_id, content, msg_id=None)
+
 
 # ── 指令解析（在 AI 回复完成后调用） ──────────────
 async def process_schedule_commands(full_text: str, conv_id: str = None) -> str:
@@ -723,12 +774,32 @@ async def process_schedule_commands(full_text: str, conv_id: str = None) -> str:
                 info = await _get_schedule_info(sid)
                 await _del_schedule(sid)
                 if conv_id and info:
-                    type_labels = {"alarm": "闹铃", "reminder": "日程", "monitor": "定时监控"}
+                    type_labels = {"alarm": "闹铃", "reminder": "日程", "monitor": "定时监控", "think": "定时思考"}
                     label = type_labels.get(info["type"], "日程")
                     await _sys_msg(conv_id, f"{ai_name} 取消了 {info['trigger_at'].replace('T', ' ')} 的{label}：{info['content']}")
         except Exception as e:
             log.error("SCHEDULE_DEL processing error: %s", e)
     text = SCHEDULE_DEL_CMD.sub("", text)
+
+    # [THINK_SCHEDULE:HH:MM|repeat|content]
+    for match in THINK_SCHEDULE_CMD.finditer(full_text):
+        try:
+            raw_time, repeat_type, content = match.group(1), match.group(2), match.group(3)
+            now_dt = datetime.now()
+            hour, minute = map(int, raw_time.split(":"))
+            trigger_dt = now_dt.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if trigger_dt <= now_dt:
+                from datetime import timedelta
+                trigger_dt = trigger_dt + timedelta(days=1)
+            dt = trigger_dt.strftime("%Y-%m-%d %H:%M")
+            if content.strip():
+                await _add_schedule("think", dt, content.strip(), repeat=repeat_type if repeat_type != "once" else None)
+                if conv_id:
+                    repeat_label = "（每天）" if repeat_type == "daily" else ""
+                    await _sys_msg(conv_id, f"{ai_name} 设置了 {raw_time} 的定时思考{repeat_label}：{content.strip()}")
+        except Exception as e:
+            log.error("THINK_SCHEDULE processing error: %s", e)
+    text = THINK_SCHEDULE_CMD.sub("", text)
 
     # [SCHEDULE_LIST] → 不需要实际操作，仅 strip
     text = SCHEDULE_LIST_CMD.sub("", text)
@@ -760,14 +831,14 @@ async def _get_schedule_info(sid: str) -> dict | None:
         return dict(row) if row else None
 
 
-async def _add_schedule(stype: str, trigger_at: str, content: str):
+async def _add_schedule(stype: str, trigger_at: str, content: str, repeat: str = None):
     sid = f"sch_{int(time.time()*1000)}"
     now = time.time()
     trigger_at = trigger_at.replace("T", " ")
     async with get_db() as db:
         await db.execute(
-            "INSERT INTO schedules (id, type, trigger_at, content, created_at, status) VALUES (?,?,?,?,?,?)",
-            (sid, stype, trigger_at, content, now, "active"),
+            "INSERT INTO schedules (id, type, trigger_at, content, created_at, status, repeat) VALUES (?,?,?,?,?,?,?)",
+            (sid, stype, trigger_at, content, now, "active", repeat),
         )
         await db.commit()
     await manager.broadcast({"type": "schedule_changed"})
@@ -785,7 +856,7 @@ async def get_active_schedules() -> list[dict]:
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, type, trigger_at, content FROM schedules WHERE status='active' ORDER BY trigger_at",
+            "SELECT id, type, trigger_at, content, repeat FROM schedules WHERE status='active' ORDER BY trigger_at",
         )
         return [dict(r) for r in await cur.fetchall()]
 
@@ -794,11 +865,12 @@ def build_schedule_prompt(schedules: list[dict]) -> str:
     """构建注入 prompt 的日程列表文本"""
     if not schedules:
         return "暂无日程"
-    type_map = {"alarm": ("🔔", "闹铃"), "reminder": ("📋", "日程"), "monitor": ("👁", "监督")}
+    type_map = {"alarm": ("🔔", "闹铃"), "reminder": ("📋", "日程"), "monitor": ("👁", "监督"), "think": ("🧠", "定时思考")}
     lines = []
     for s in schedules:
         icon, label = type_map.get(s["type"], ("📋", "日程"))
-        lines.append(f"- {icon} {label} #{s['id']}: {s['trigger_at'].replace('T', ' ')} — {s['content']}")
+        repeat_info = f" [每天]" if s.get("repeat") == "daily" else ""
+        lines.append(f"- {icon} {label} #{s['id']}: {s['trigger_at'].replace('T', ' ')} — {s['content']}{repeat_info}")
     return "\n".join(lines)
 
 

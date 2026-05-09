@@ -851,6 +851,7 @@ async def send_message(conv_id: str, body: MsgCreate):
     abilities.append(f"[RECALL:关键词1,关键词2] — 搜索记忆库。你没有记忆库的直接访问权限，必须用此指令查询。使用后系统会返回带有卡片ID的结果列表，请等待系统返回，不要编造记忆内容。例：[RECALL:培训,专利]")
     abilities.append(f"[ORGANIZE:关键词] — 当你发现记忆库中某个话题的记忆需要整理时使用。系统会自动合并和归类相关记忆。例：[ORGANIZE:培训]")
     abilities.append(f"[THINK:想法] — 当你想在后台默默思考一件事时使用（如回顾日记趋势、整理近期规律、分析{user_name}的状态变化）。结果不会发送给{user_name}，但你之后可以自然引用。例：[THINK:看看最近一周的日记，有没有什么值得关心的事]")
+    abilities.append("[THINK_SCHEDULE:HH:MM|daily|内容] — 设置每天定时思考。例：[THINK_SCHEDULE:22:00|daily|回顾今天的日记]")
     # MEM_EDIT 能力暂不暴露给 bot，代码已就绪，待 bot 可靠后启用
     # abilities.append(f"[MEM_EDIT:卡片ID|操作|内容] — 修改记忆卡片。...")
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
