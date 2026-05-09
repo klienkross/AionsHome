@@ -850,6 +850,7 @@ async def send_message(conv_id: str, body: MsgCreate):
     abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。例：[MEMORY:2026年4月26日，{user_name}通过了驾照考试]")
     abilities.append(f"[RECALL:关键词1,关键词2] — 搜索记忆库。你没有记忆库的直接访问权限，必须用此指令查询。使用后系统会返回带有卡片ID的结果列表，请等待系统返回，不要编造记忆内容。例：[RECALL:培训,专利]")
     abilities.append(f"[ORGANIZE:关键词] — 当你发现记忆库中某个话题的记忆需要整理时使用。系统会自动合并和归类相关记忆。例：[ORGANIZE:培训]")
+    abilities.append(f"[THINK:想法] — 当你想在后台默默思考一件事时使用（如回顾日记趋势、整理近期规律、分析{user_name}的状态变化）。结果不会发送给{user_name}，但你之后可以自然引用。例：[THINK:看看最近一周的日记，有没有什么值得关心的事]")
     # MEM_EDIT 能力暂不暴露给 bot，代码已就绪，待 bot 可靠后启用
     # abilities.append(f"[MEM_EDIT:卡片ID|操作|内容] — 修改记忆卡片。...")
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
@@ -1000,6 +1001,27 @@ async def send_message(conv_id: str, body: MsgCreate):
                 mem_block += f"\n\n[原文细节]\n以下是相关的具体对话记录：\n{detail_text}"
             history.append({"role": "user", "content": mem_block})
             history.append({"role": "assistant", "content": "收到，我会自然地参考这些记忆。"})
+
+    # 6. 注入未使用的背景思考结果
+    async with get_db() as db:
+        db.row_factory = __import__('aiosqlite').Row
+        cur = await db.execute(
+            "SELECT id, instruction, result FROM background_thoughts WHERE used=0 ORDER BY created_at DESC LIMIT 3"
+        )
+        thoughts = [dict(r) for r in await cur.fetchall()]
+    if thoughts:
+        thought_lines = "\n".join(f"- 关于「{t['instruction'][:30]}」: {t['result']}" for t in thoughts)
+        thought_block = f"[背景思考]\n你之前在后台思考过以下内容，可以在合适时机自然提起：\n{thought_lines}"
+        history.append({"role": "user", "content": thought_block})
+        history.append({"role": "assistant", "content": "收到，我会在合适时机自然提及。"})
+        # 标记为已使用
+        thought_ids = [t["id"] for t in thoughts]
+        async with get_db() as db:
+            await db.execute(
+                f"UPDATE background_thoughts SET used=1 WHERE id IN ({','.join('?' * len(thought_ids))})",
+                thought_ids,
+            )
+            await db.commit()
 
     # 最近3条对话放到最末尾，让模型聚焦于当前对话而非背景信息
     history.extend(recent_tail)
