@@ -102,6 +102,9 @@ async def lifespan(app: FastAPI):
     # 传感器模块初始化
     import sensor
     sensor.set_event_loop(loop)
+    # ntfy.sh 公网中转桥接
+    import ntfy_bridge
+    ntfy_bridge.start(loop)
     # PC 活动采集
     pc_tracker.set_event_loop(loop)
     try:
@@ -114,6 +117,7 @@ async def lifespan(app: FastAPI):
     manager.start_heartbeat()
     yield
     digest_task.cancel()
+    ntfy_bridge.stop()
     pc_tracker.stop()
     schedule_mgr.stop()
     voice.stop()

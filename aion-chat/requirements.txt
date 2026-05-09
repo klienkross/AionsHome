@@ -16,3 +16,4 @@ lxml
 websockets
 pywin32
 psutil
+aiohttp

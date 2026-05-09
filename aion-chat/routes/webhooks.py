@@ -79,6 +79,12 @@ async def receive_webhook(
     }
 
 
+@router.get("/ntfy-status")
+async def ntfy_status():
+    from ntfy_bridge import get_status
+    return get_status()
+
+
 @router.get("/night-status")
 async def night_status():
     return {
