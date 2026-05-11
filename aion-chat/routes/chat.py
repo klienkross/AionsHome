@@ -686,7 +686,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     # CLI 模型专属：告知图片存储目录，使其能保存图片并返回路径
     _provider = MODELS.get(model_key, {}).get("provider", "")
-    if _provider in ("gemini_cli", "codex_cli"):
+    if _provider in ("gemini_cli", "codex_cli", "claude_cli"):
         _uploads_path = str(UPLOADS_DIR.resolve()).replace(chr(92), "/")
         ability_block += f"\n\n【文件存储】当需要下载或保存图片/文件时，请保存到此目录：{_uploads_path}/ ，保存后在回复中给出完整路径即可，系统会自动识别并展示图片。"
     schedules = await get_active_schedules()
@@ -1206,7 +1206,7 @@ async def send_message(conv_id: str, body: MsgCreate):
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     # CLI 模型专属：告知图片存储目录
     _provider = MODELS.get(model_key, {}).get("provider", "")
-    if _provider in ("gemini_cli", "codex_cli"):
+    if _provider in ("gemini_cli", "codex_cli", "claude_cli"):
         _uploads_path = str(UPLOADS_DIR.resolve()).replace(chr(92), "/")
         ability_block += f"\n\n【文件存储】当需要下载或保存图片/文件时，请保存到此目录：{_uploads_path}/ ，保存后在回复中给出完整路径即可，系统会自动识别并展示图片。"
     # 注入当前日程列表
@@ -2586,7 +2586,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     # CLI 模型专属：告知图片存储目录
     _provider = MODELS.get(model_key, {}).get("provider", "")
-    if _provider in ("gemini_cli", "codex_cli"):
+    if _provider in ("gemini_cli", "codex_cli", "claude_cli"):
         _uploads_path = str(UPLOADS_DIR.resolve()).replace(chr(92), "/")
         ability_block += f"\n\n【文件存储】当需要下载或保存图片/文件时，请保存到此目录：{_uploads_path}/ ，保存后在回复中给出完整路径即可，系统会自动识别并展示图片。"
     schedules = await get_active_schedules()

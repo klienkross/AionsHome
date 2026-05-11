@@ -65,6 +65,8 @@ def get_key(provider: str) -> str:
         return SETTINGS.get("siliconflow_key", "")
     if provider == "dashscope":
         return SETTINGS.get("dashscope_key", "")
+    if provider == "mimo":
+        return SETTINGS.get("mimo_key", "")
     # 自定义端点：provider 传入 key_name，从 custom_keys 映射中取
     return SETTINGS.get("custom_keys", {}).get(provider, "")
 
@@ -151,9 +153,10 @@ MODELS = {
     "CLI-3.1pro":       {"provider": "gemini_cli", "model": "gemini-3.1-pro-preview"},
     "CLI-2.5flash":     {"provider": "gemini_cli", "model": "gemini-2.5-flash"},
     "Codex":            {"provider": "codex_cli",  "model": ""},
+    "CLI-Claude":       {"provider": "claude_cli", "model": ""},
 
     # 自定义第三方 OpenAI 兼容端点示例（删掉注释#即可启用，填好 base_url 与 key_name）
-    # "自定义-claude":  {"provider": "custom", "model": "claude-sonnet-4-6", "base_url": "https://your-relay.example.com/v1", "key_name": "myrelay"},
+    "ds":  {"provider": "custom", "model": "deepseek-v4-pro", "base_url": "https://api.deepseek.com/v1", "key_name": "ds_key"},
 }
 
 DEFAULT_MODEL = SETTINGS.get("default_model") or next(iter(MODELS), "gemini-3-flash")

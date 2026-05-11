@@ -850,6 +850,110 @@ async def call_codex_cli(messages: list, model: str, meta: dict | None = None,
         yield f"[CodexCLI错误] {e}"
 
 
+# ── Claude CLI ───────────────────────────────────
+async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
+                          temperature: float | None = None, max_tokens: int | None = None):
+    """通过 claude CLI 子进程流式获取响应（stream-json 模式）"""
+    prompt = _build_cli_prompt(messages)
+
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        yield "[ClaudeCLI错误] 未找到 claude CLI，请先运行 npm install -g @anthropic-ai/claude-code"
+        return
+
+    cmd = [claude_bin, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
+    if model:
+        cmd.extend(["--model", model])
+    if max_tokens:
+        cmd.extend(["--max-turns", "3"])
+    cmd.extend(["-p", prompt])
+
+    try:
+        env = {**os.environ, "NO_COLOR": "1"}
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+
+        line_buf = ""
+        async for chunk in proc.stdout:
+            text = chunk.decode("utf-8", errors="replace")
+            if not text:
+                continue
+            line_buf += text
+            while "\n" in line_buf:
+                line, line_buf = line_buf.split("\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                etype = event.get("type", "")
+
+                if etype == "assistant":
+                    subtype = event.get("subtype", "")
+                    if subtype == "text":
+                        content = event.get("content", "")
+                        if content:
+                            yield content
+
+                elif etype == "tool_use":
+                    tool_name = event.get("tool_name", event.get("name", ""))
+                    tool_input = event.get("input", {})
+                    label = _CLI_TOOL_LABELS.get(tool_name, f"🔧 {tool_name}")
+                    detail = ""
+                    if "command" in tool_input:
+                        cmd_str = tool_input["command"]
+                        detail = f"：{cmd_str[:60]}{'…' if len(cmd_str) > 60 else ''}"
+                    elif "file_path" in tool_input:
+                        detail = f"：{tool_input['file_path']}"
+                    elif "pattern" in tool_input:
+                        detail = f"：{tool_input['pattern']}"
+                    yield f"{CLI_STATUS_PREFIX}{label}{detail}…"
+
+                elif etype == "tool_result":
+                    tool_name = event.get("tool_name", event.get("name", ""))
+                    label = _CLI_TOOL_LABELS.get(tool_name, f"🔧 {tool_name}")
+                    is_error = event.get("is_error", False)
+                    if is_error:
+                        yield f"{CLI_STATUS_PREFIX}❌ {label} 失败"
+                    else:
+                        yield f"{CLI_STATUS_PREFIX}✅ {label} 完成"
+
+                elif etype == "result":
+                    usage = event.get("usage", {})
+                    if meta is not None and usage:
+                        meta["prompt_tokens"] = usage.get("input_tokens", 0)
+                        meta["completion_tokens"] = usage.get("output_tokens", 0)
+                        meta["total_tokens"] = meta.get("prompt_tokens", 0) + meta.get("completion_tokens", 0)
+                        meta["raw"] = usage
+                    result_text = event.get("result", "")
+                    if result_text:
+                        yield result_text
+
+                elif etype == "error":
+                    err_msg = event.get("message", "") or event.get("error", "")
+                    if err_msg:
+                        yield f"\n[ClaudeCLI错误] {err_msg[:500]}"
+
+        await proc.wait()
+        if proc.returncode and proc.returncode != 0:
+            stderr_out = await proc.stderr.read()
+            err = stderr_out.decode("utf-8", errors="replace").strip()
+            if err:
+                yield f"\n[ClaudeCLI错误 code={proc.returncode}] {err[:500]}"
+
+    except FileNotFoundError:
+        yield "[ClaudeCLI错误] 无法启动 claude CLI 进程"
+    except Exception as e:
+        yield f"[ClaudeCLI错误] {e}"
+
+
 # ── 非流式调用（收集流式输出） ────────────────────
 async def simple_ai_call(messages: list, model_key: str, temperature: float | None = None) -> str:
     """收集 stream_ai 的全部 chunk，返回完整文本（自动过滤 CLI_STATUS 状态行）"""
@@ -878,6 +982,8 @@ def _pick_provider(cfg, normalized, meta, temperature, max_tokens=None):
         return call_gemini_cli(normalized, cfg["model"], meta, temperature, max_tokens)
     elif p == "codex_cli":
         return call_codex_cli(normalized, cfg["model"], meta, temperature, max_tokens)
+    elif p == "claude_cli":
+        return call_claude_cli(normalized, cfg["model"], meta, temperature, max_tokens)
     return None
 
 
