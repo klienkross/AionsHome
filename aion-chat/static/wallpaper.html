@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aion Wallpaper</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100vw; height: 100vh; overflow: hidden; background: #000; cursor: none; user-select: none; }
+
+/* ── 媒体层 ── */
+.media-layer {
+  position: absolute; inset: 0;
+  opacity: 0;
+  transition: opacity 1.5s ease;
+  z-index: 1;
+}
+.media-layer.active { opacity: 1; }
+.media-layer img, .media-layer video {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ── AI 气泡 ── */
+#bubbleContainer {
+  position: absolute;
+  z-index: 10;
+  max-width: 360px;
+  pointer-events: none;
+  transition: top 0.5s ease, left 0.5s ease, right 0.5s ease, bottom 0.5s ease;
+}
+.chat-bubble {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: #2c2c2c;
+  padding: 14px 18px;
+  border-radius: 18px 18px 4px 18px;
+  margin-bottom: 8px;
+  font-size: 15px;
+  line-height: 1.6;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+  animation: bubbleIn 0.5s ease forwards;
+  word-break: break-word;
+}
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translateY(-12px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.chat-bubble.fade-out {
+  animation: bubbleOut 1s ease forwards;
+}
+@keyframes bubbleOut {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.95); }
+}
+
+/* ── 设置面板 ── */
+#settingsPanel {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  z-index: 100;
+  background: rgba(20, 20, 20, 0.92);
+  backdrop-filter: blur(20px);
+  color: #e0e0e0;
+  padding: 20px 28px;
+  transform: translateY(100%);
+  transition: transform 0.35s ease;
+  max-height: 70vh;
+  overflow-y: auto;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+#settingsPanel.show { transform: translateY(0); }
+#settingsPanel h3 { font-size: 16px; margin-bottom: 12px; color: #fff; }
+#settingsPanel label { font-size: 13px; color: #aaa; }
+#settingsPanel input[type="range"],
+#settingsPanel input[type="number"] {
+  accent-color: #ff8359;
+}
+
+.settings-row {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 14px;
+}
+.settings-row label { min-width: 80px; }
+.settings-row input[type="number"] {
+  width: 70px; padding: 4px 8px;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  color: #fff; border-radius: 6px; font-size: 14px;
+}
+.settings-row span { font-size: 13px; color: #888; }
+
+.file-list {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-top: 10px; max-height: 40vh; overflow-y: auto;
+}
+.file-item {
+  position: relative;
+  width: 120px; height: 80px;
+  border-radius: 8px; overflow: hidden;
+  cursor: pointer; border: 2px solid transparent;
+  flex-shrink: 0;
+}
+.file-item.active { border-color: #ff8359; }
+.file-item.disabled { opacity: 0.35; }
+.file-item img, .file-item video {
+  width: 100%; height: 100%; object-fit: cover;
+}
+.file-item .file-name {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,0.65);
+  font-size: 10px; padding: 2px 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: #ddd;
+}
+.file-item .file-badge {
+  position: absolute; top: 4px; right: 4px;
+  background: rgba(0,0,0,0.6); color: #ff8359;
+  font-size: 9px; padding: 1px 5px; border-radius: 4px;
+}
+
+.btn {
+  padding: 6px 16px; border: none; border-radius: 6px;
+  font-size: 13px; cursor: pointer;
+  background: #ff8359; color: #fff;
+  transition: background 0.2s;
+}
+.btn:hover { background: #ff6f3f; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn-outline {
+  background: transparent; border: 1px solid rgba(255,255,255,0.3);
+  color: #ddd;
+}
+.btn-outline:hover { background: rgba(255,255,255,0.1); }
+.btn-danger { background: #cf222e; }
+.btn-danger:hover { background: #b01c26; }
+
+/* ── 锚点编辑模式 ── */
+#anchorEditor {
+  display: none;
+  position: absolute; inset: 0; z-index: 50;
+  cursor: crosshair;
+}
+#anchorEditor.show { display: block; }
+#anchorMarker {
+  position: absolute;
+  width: 20px; height: 20px;
+  border: 3px solid #ff8359;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 0 12px rgba(255, 131, 89, 0.6);
+}
+#anchorHint {
+  position: absolute; bottom: 60px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.7); color: #fff;
+  padding: 10px 24px; border-radius: 8px;
+  font-size: 14px;
+}
+
+/* ── 触发区域 ── */
+#triggerZone {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  height: 10px; z-index: 90;
+}
+
+
+
+/* ── cursor restore ── */
+body:hover, body.panel-open { cursor: default; }
+
+/* ── 上传区 ── */
+.upload-area {
+  margin-top: 10px;
+  display: flex; gap: 8px; align-items: center;
+}
+</style>
+</head>
+<body>
+
+<!-- 双缓冲媒体层 -->
+<div class="media-layer active" id="layerA"></div>
+<div class="media-layer" id="layerB"></div>
+
+<!-- AI 聊天气泡 -->
+<div id="bubbleContainer"></div>
+
+
+
+<!-- 锚点编辑层 -->
+<div id="anchorEditor">
+  <div id="anchorMarker"></div>
+  <div id="anchorHint">点击画面设置气泡锚点位置 · 按 ESC 或右键退出</div>
+</div>
+
+<!-- 底部触发区 -->
+<div id="triggerZone"></div>
+
+<!-- 设置面板 -->
+<div id="settingsPanel">
+  <h3>壁纸设置</h3>
+  <div class="settings-row">
+    <label>轮换间隔</label>
+    <input type="number" id="intervalInput" min="5" max="3600" value="30">
+    <span>秒（视频将播放完再切换）</span>
+  </div>
+  <div class="settings-row">
+    <label>气泡时长</label>
+    <input type="number" id="bubbleDuration" min="3" max="60" value="12">
+    <span>秒后自动消失</span>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+    <button class="btn btn-sm btn-outline" onclick="toggleAllFiles(true)">全部启用</button>
+    <button class="btn btn-sm btn-outline" onclick="toggleAllFiles(false)">全部禁用</button>
+    <button class="btn btn-sm" onclick="enterAnchorEdit()">编辑当前锚点</button>
+    <button class="btn btn-sm btn-outline" onclick="hidePanel()">关闭面板</button>
+  </div>
+  <div class="file-list" id="fileList"></div>
+  <div class="upload-area">
+    <input type="file" id="uploadInput" accept="image/*,video/*" multiple style="display:none">
+    <button class="btn btn-sm" onclick="document.getElementById('uploadInput').click()">上传壁纸</button>
+    <span style="font-size:12px;color:#666;">支持图片和视频</span>
+  </div>
+</div>
+
+<script>
+// ── 状态 ──
+let allFiles = [];         // [{name, type}]
+let config = { interval: 30, bubble_duration: 12, files: {} };
+let playlist = [];         // 启用的文件列表
+let currentIndex = -1;
+let timer = null;
+let activeLayer = 'A';
+const layers = { A: document.getElementById('layerA'), B: document.getElementById('layerB') };
+
+// ── 初始化 ──
+async function init() {
+  const [filesRes, cfgRes] = await Promise.all([
+    fetch('/api/wallpaper/files').then(r => r.json()),
+    fetch('/api/wallpaper/config').then(r => r.json())
+  ]);
+  allFiles = filesRes.files || [];
+  if (cfgRes.config) config = { ...config, ...cfgRes.config };
+  document.getElementById('intervalInput').value = config.interval || 30;
+  document.getElementById('bubbleDuration').value = config.bubble_duration || 12;
+  buildPlaylist();
+  renderFileList();
+  if (playlist.length > 0) {
+    currentIndex = 0;
+    showMedia(playlist[0], 'A', true);
+    startTimer();
+  }
+  connectWS();
+}
+
+function buildPlaylist() {
+  playlist = allFiles.filter(f => {
+    const fc = config.files[f.name];
+    return !fc || fc.enabled !== false;
+  });
+}
+
+// ── 媒体显示 ──
+let _switchId = 0;
+let _lastSwitchTime = 0;
+function showMedia(file, layerId, immediate) {
+  const thisSwitch = ++_switchId;
+  const layer = layers[layerId];;
+  const otherLayerId = layerId === 'A' ? 'B' : 'A';
+  const otherLayer = layers[otherLayerId];
+
+  // 确保新层在旧层上方（无论 DOM 顺序）
+  layer.style.zIndex = '3';
+  otherLayer.style.zIndex = '2';
+  layer.innerHTML = '';
+  let activated = false;
+
+  function activate() {
+    if (activated) return; // 防止重复调用
+    if (thisSwitch !== _switchId) return;
+    activated = true;
+    if (immediate) {
+      layer.style.transition = 'none';
+      layer.classList.add('active');
+      layer.offsetHeight;
+      layer.style.transition = '';
+      otherLayer.classList.remove('active');
+      otherLayer.innerHTML = '';
+    } else {
+      // 新层淡入，旧层保持显示，等淡入完成后再隐藏旧层
+      layer.classList.add('active');
+      setTimeout(() => {
+        otherLayer.classList.remove('active');
+        otherLayer.innerHTML = '';
+      }, 1600);
+    }
+    activeLayer = layerId;
+    updateBubbleAnchor();
+  }
+
+  if (file.type === 'video') {
+    const v = document.createElement('video');
+    v.src = `/public/wallpaper/${encodeURIComponent(file.name)}`;
+    v.muted = true; v.loop = false; v.playsInline = true;
+    v.addEventListener('ended', () => nextMedia());
+    layer.appendChild(v);
+    v.load();
+    // 轮询检测视频就绪（readyState >= 2 表示有帧数据）
+    let pollCount = 0;
+    const pollVideo = setInterval(() => {
+      pollCount++;
+      if (thisSwitch !== _switchId) { clearInterval(pollVideo); return; }
+      if (v.readyState >= 2 || pollCount > 60) { // 最多等3秒
+        clearInterval(pollVideo);
+        activate();
+        v.play().catch(()=>{});
+      }
+    }, 50);
+  } else {
+    const img = document.createElement('img');
+    layer.appendChild(img);
+    img.src = `/public/wallpaper/${encodeURIComponent(file.name)}`;
+    // 轮询检测图片就绪
+    let pollCount = 0;
+    const pollImg = setInterval(() => {
+      pollCount++;
+      if (thisSwitch !== _switchId) { clearInterval(pollImg); return; }
+      if ((img.complete && img.naturalWidth > 0) || pollCount > 40) { // 最多等2秒
+        clearInterval(pollImg);
+        activate();
+      }
+    }, 50);
+  }
+}
+
+function nextMedia() {
+  if (playlist.length === 0) return;
+  // 冷却保护：距上次切换不足 600ms 则忽略
+  const now = Date.now();
+  if (now - _lastSwitchTime < 600) return;
+  _lastSwitchTime = now;
+  currentIndex = (currentIndex + 1) % playlist.length;
+  const nextLayerId = activeLayer === 'A' ? 'B' : 'A';
+  showMedia(playlist[currentIndex], nextLayerId, false);
+  resetTimer();
+}
+
+function prevMedia() {
+  if (playlist.length === 0) return;
+  const now = Date.now();
+  if (now - _lastSwitchTime < 600) return;
+  _lastSwitchTime = now;
+  currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
+  const nextLayerId = activeLayer === 'A' ? 'B' : 'A';
+  showMedia(playlist[currentIndex], nextLayerId, false);
+  resetTimer();
+}
+
+// ── 定时器 ──
+function startTimer() {
+  stopTimer();
+  const sec = (config.interval || 30) * 1000;
+  timer = setInterval(() => {
+    // 如果当前是视频，不自动切换（等 ended 事件）
+    const cur = playlist[currentIndex];
+    if (cur && cur.type === 'video') return;
+    nextMedia();
+  }, sec);
+}
+function stopTimer() { if (timer) { clearInterval(timer); timer = null; } }
+function resetTimer() { startTimer(); }
+
+// ── 气泡锚点 ──
+function updateBubbleAnchor() {
+  const bc = document.getElementById('bubbleContainer');
+  if (playlist.length === 0) return;
+  const file = playlist[currentIndex];
+  const fc = config.files[file.name];
+  const x = fc?.bubble_anchor?.x ?? 95;
+  const y = fc?.bubble_anchor?.y ?? 5;
+  // 用百分比定位
+  bc.style.left = '';
+  bc.style.right = '';
+  bc.style.top = '';
+  bc.style.bottom = '';
+  if (x > 50) {
+    bc.style.right = (100 - x) + '%';
+  } else {
+    bc.style.left = x + '%';
+  }
+  bc.style.top = y + '%';
+}
+
+// ── AI 气泡 ──
+const MAX_BUBBLES = 5;
+const bubbles = [];
+
+function showBubble(text) {
+  const container = document.getElementById('bubbleContainer');
+  const duration = (config.bubble_duration || 12) * 1000;
+
+  // 清洗文本
+  text = cleanAIText(text);
+  if (!text.trim()) return;
+
+  // 拆分多气泡（按 \n\n）
+  const parts = text.split(/\n\n+/).filter(s => s.trim());
+  for (const part of parts) {
+    _addOneBubble(part.trim(), container, duration);
+  }
+}
+
+function _addOneBubble(text, container, duration) {
+  // 限制数量
+  while (bubbles.length >= MAX_BUBBLES) {
+    const old = bubbles.shift();
+    old.el.remove();
+  }
+
+  const el = document.createElement('div');
+  el.className = 'chat-bubble';
+  el.textContent = text;
+  container.appendChild(el);
+
+  const entry = { el, timer: null };
+  entry.timer = setTimeout(() => {
+    el.classList.add('fade-out');
+    setTimeout(() => {
+      el.remove();
+      const idx = bubbles.indexOf(entry);
+      if (idx >= 0) bubbles.splice(idx, 1);
+    }, 1000);
+  }, duration);
+  bubbles.push(entry);
+}
+
+function cleanAIText(text) {
+  // 去除方括号指令
+  text = text.replace(/\[(?:MUSIC|ALARM|REMINDER|Monitor|TOY|PET|查看动态|视频电话|POI_SEARCH|CAM_CHECK)[^\]]*\]/gi, '');
+  // 去除 markdown 格式
+  text = text.replace(/\*\*(.+?)\*\*/g, '$1');
+  text = text.replace(/\*(.+?)\*/g, '$1');
+  text = text.replace(/^#{1,6}\s*/gm, '');
+  text = text.replace(/`([^`]+)`/g, '$1');
+  text = text.replace(/```[\s\S]*?```/g, '');
+  // 去除多余空行
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+
+// ── WebSocket ──
+let ws = null;
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onopen = () => console.log('[WP] WS connected');
+  ws.onmessage = e => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'msg_created' && msg.data?.role === 'assistant') {
+        showBubble(msg.data.content);
+      }
+    } catch {}
+  };
+  ws.onclose = () => setTimeout(connectWS, 3000);
+  ws.onerror = () => ws.close();
+}
+
+// ── 键盘 ──
+document.addEventListener('keydown', e => {
+  if (document.getElementById('anchorEditor').classList.contains('show')) {
+    if (e.key === 'Escape') exitAnchorEdit();
+    return;
+  }
+  if (document.getElementById('settingsPanel').classList.contains('show')) {
+    if (e.key === 'Escape') hidePanel();
+    return;
+  }
+  if (e.key === 'ArrowRight') nextMedia();
+  else if (e.key === 'ArrowLeft') prevMedia();
+  else if (e.key === 'Escape') {
+    // ESC 退出全屏
+    if (document.fullscreenElement) document.exitFullscreen();
+  }
+  else if (e.key === 'f' || e.key === 'F') {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+    else document.exitFullscreen();
+  }
+});
+
+// ── 设置面板触发 ──
+document.getElementById('triggerZone').addEventListener('mouseenter', showPanel);
+// 双击也能打开
+document.addEventListener('dblclick', () => {
+  const panel = document.getElementById('settingsPanel');
+  if (!panel.classList.contains('show')) showPanel();
+});
+
+function showPanel() {
+  document.getElementById('settingsPanel').classList.add('show');
+  document.body.classList.add('panel-open');
+  renderFileList();
+}
+function hidePanel() {
+  document.getElementById('settingsPanel').classList.remove('show');
+  document.body.classList.remove('panel-open');
+  saveConfig();
+}
+
+// ── 文件列表渲染 ──
+function renderFileList() {
+  const container = document.getElementById('fileList');
+  container.innerHTML = '';
+  for (const f of allFiles) {
+    const fc = config.files[f.name] || {};
+    const enabled = fc.enabled !== false;
+    const isCurrent = playlist[currentIndex]?.name === f.name;
+    const div = document.createElement('div');
+    div.className = 'file-item' + (isCurrent ? ' active' : '') + (!enabled ? ' disabled' : '');
+    div.title = f.name;
+
+    if (f.type === 'video') {
+      const v = document.createElement('video');
+      v.src = `/public/wallpaper/${encodeURIComponent(f.name)}`;
+      v.muted = true; v.preload = 'metadata';
+      div.appendChild(v);
+    } else {
+      const img = document.createElement('img');
+      img.src = `/public/wallpaper/${encodeURIComponent(f.name)}`;
+      img.loading = 'lazy';
+      div.appendChild(img);
+    }
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'file-name';
+    nameEl.textContent = f.name;
+    div.appendChild(nameEl);
+
+    const badge = document.createElement('div');
+    badge.className = 'file-badge';
+    badge.textContent = f.type === 'video' ? '▶' : '🖼';
+    div.appendChild(badge);
+
+    // 点击切换启用/禁用
+    div.addEventListener('click', () => {
+      if (!config.files[f.name]) config.files[f.name] = {};
+      config.files[f.name].enabled = !enabled;
+      buildPlaylist();
+      // 修正 currentIndex
+      if (playlist.length > 0 && currentIndex >= playlist.length) currentIndex = 0;
+      renderFileList();
+      saveConfig();
+    });
+
+    // 右键跳转到该壁纸
+    div.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      if (!enabled) return;
+      const idx = playlist.findIndex(p => p.name === f.name);
+      if (idx >= 0) {
+        currentIndex = idx;
+        const nextLayerId = activeLayer === 'A' ? 'B' : 'A';
+        showMedia(playlist[currentIndex], nextLayerId, false);
+        resetTimer();
+        renderFileList();
+      }
+    });
+
+    container.appendChild(div);
+  }
+}
+
+// ── 启用/禁用全部 ──
+function toggleAllFiles(enable) {
+  for (const f of allFiles) {
+    if (!config.files[f.name]) config.files[f.name] = {};
+    config.files[f.name].enabled = enable;
+  }
+  buildPlaylist();
+  if (playlist.length > 0 && currentIndex >= playlist.length) currentIndex = 0;
+  renderFileList();
+  saveConfig();
+}
+
+// ── 锚点编辑 ──
+function enterAnchorEdit() {
+  hidePanel();
+  const editor = document.getElementById('anchorEditor');
+  const marker = document.getElementById('anchorMarker');
+  editor.classList.add('show');
+
+  // 显示当前锚点位置
+  if (playlist.length > 0) {
+    const file = playlist[currentIndex];
+    const fc = config.files[file.name];
+    const x = fc?.bubble_anchor?.x ?? 95;
+    const y = fc?.bubble_anchor?.y ?? 5;
+    marker.style.left = x + '%';
+    marker.style.top = y + '%';
+  }
+
+  editor.onclick = e => {
+    const rect = editor.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width * 100);
+    const y = ((e.clientY - rect.top) / rect.height * 100);
+    marker.style.left = x + '%';
+    marker.style.top = y + '%';
+
+    // 保存锚点
+    if (playlist.length > 0) {
+      const file = playlist[currentIndex];
+      if (!config.files[file.name]) config.files[file.name] = {};
+      config.files[file.name].bubble_anchor = { x: Math.round(x), y: Math.round(y) };
+      updateBubbleAnchor();
+      saveConfig();
+    }
+  };
+
+  editor.oncontextmenu = e => { e.preventDefault(); exitAnchorEdit(); };
+}
+function exitAnchorEdit() {
+  document.getElementById('anchorEditor').classList.remove('show');
+}
+
+// ── 配置保存 ──
+let _saveTimer = null;
+function saveConfig() {
+  config.interval = parseInt(document.getElementById('intervalInput').value) || 30;
+  config.bubble_duration = parseInt(document.getElementById('bubbleDuration').value) || 12;
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(async () => {
+    await fetch('/api/wallpaper/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    resetTimer();
+  }, 500);
+}
+
+document.getElementById('intervalInput').addEventListener('change', saveConfig);
+document.getElementById('bubbleDuration').addEventListener('change', saveConfig);
+
+// ── 上传 ──
+document.getElementById('uploadInput').addEventListener('change', async e => {
+  const files = e.target.files;
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/api/wallpaper/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.ok) {
+      allFiles.push({ name: data.name, type: data.type });
+      buildPlaylist();
+    }
+  }
+  renderFileList();
+  e.target.value = '';
+});
+
+// ── 启动 ──
+init();
+</script>
+</body>
+</html>

@@ -56,7 +56,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 /* ── 聊天区 ── */
 .chat-area { flex:1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 
-.chat-header { padding: 10px 16px; border-bottom: 1px solid rgba(74,63,55,0.6); background: rgba(42,34,30,0.85); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); display: flex; align-items: center; gap: 10px; min-height: 48px; position: absolute; top: 0; left: 0; right: 0; z-index: 8; box-shadow: 0 1px 8px rgba(0,0,0,0.2); }
+.chat-header { padding: 10px 16px; padding-top: calc(10px + env(safe-area-inset-top)); border-bottom: 1px solid rgba(74,63,55,0.6); background: rgba(42,34,30,0.85); backdrop-filter: blur(20px) saturate(1.6); -webkit-backdrop-filter: blur(20px) saturate(1.6); display: flex; align-items: center; gap: 10px; min-height: 48px; position: absolute; top: 0; left: 0; right: 0; z-index: 8; box-shadow: 0 1px 8px rgba(0,0,0,0.2); }
 .chat-header .menu-btn { display: none; background: none; border: none; color: var(--text); font-size: 22px; cursor: pointer; padding: 4px; }
 .chat-header .title { flex:1; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; color: var(--text); }
 .chat-header select { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; outline: none; }
@@ -201,7 +201,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
   .sidebar.open { left:0; }
   .chat-header .menu-btn { display:block; }
   .msg-bubble { font-size: 14px; padding: 9px 12px; }
-  .messages { padding: 10px; padding-top: 56px; gap: 4px; }
+  .messages { padding: 10px; padding-top: calc(56px + env(safe-area-inset-top)); gap: 4px; }
   .msg-avatar { width:24px; height:24px; }
 }
 </style>

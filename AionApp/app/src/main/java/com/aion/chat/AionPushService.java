@@ -106,6 +106,11 @@ public class AionPushService extends Service {
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
 
+    // ── ESP32-CAM 桥接 ──
+    private volatile boolean esp32BridgeActive = false;
+    private volatile String esp32CaptureUrl = "";
+    private Thread esp32BridgeThread;
+
     // ── 定位上报 ──
     private static final long LOCATION_INTERVAL = 10 * 60_000;          // 统一 10 分钟（服务端做智能过滤，非每次都调 API）
     private static final long LOCATION_INTERVAL_DISABLED = 10 * 60_000; // 功能未启用/静默时段时低频轮询开关状态
@@ -222,6 +227,7 @@ public class AionPushService extends Service {
         if (heartbeatThread != null) heartbeatThread.interrupt();
         if (locationThread != null) locationThread.interrupt();
         if (activityThread != null) activityThread.interrupt();
+        stopEsp32Bridge();
         unregisterScreenReceiver();
         if (webSocket != null) try { webSocket.cancel(); } catch (Exception ignored) {}
         if (client != null) client.dispatcher().executorService().shutdown();
@@ -608,10 +614,106 @@ public class AionPushService extends Service {
                     }
                     break;
                 }
+                case "esp32_bridge": {
+                    if (data != null) {
+                        boolean active = data.optBoolean("active", false);
+                        if (active) {
+                            String captureUrl = data.optString("url", "");
+                            if (!captureUrl.isEmpty()) {
+                                startEsp32Bridge(captureUrl);
+                            }
+                        } else {
+                            stopEsp32Bridge();
+                        }
+                    }
+                    break;
+                }
             }
         } catch (Exception e) {
             Log.w(TAG, "parse error: " + e.getMessage());
         }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  ESP32-CAM 桥接（手机从 ESP32 拉帧 → 上传服务器）
+    // ══════════════════════════════════════════════════════════
+
+    private void startEsp32Bridge(String captureUrl) {
+        stopEsp32Bridge();
+        esp32CaptureUrl = captureUrl;
+        esp32BridgeActive = true;
+        esp32BridgeThread = new Thread(() -> {
+            Log.i(TAG, "📷 ESP32 bridge started: " + captureUrl);
+            int failCount = 0;
+            while (esp32BridgeActive && shouldRun) {
+                try {
+                    // 从 ESP32 拉一帧 JPEG
+                    Request req = new Request.Builder()
+                            .url(esp32CaptureUrl)
+                            .get()
+                            .build();
+                    byte[] jpgBytes;
+                    try (Response resp = client.newCall(req).execute()) {
+                        if (!resp.isSuccessful() || resp.body() == null) {
+                            failCount++;
+                            if (failCount % 10 == 0) {
+                                Log.w(TAG, "📷 ESP32 fetch failed " + failCount + " times");
+                            }
+                            Thread.sleep(Math.min(5000, 1000 + failCount * 500L));
+                            continue;
+                        }
+                        jpgBytes = resp.body().bytes();
+                    }
+                    if (jpgBytes.length < 100) {
+                        failCount++;
+                        Thread.sleep(1000);
+                        continue;
+                    }
+
+                    // 上传到服务器
+                    String httpBase = serverUrl
+                            .replace("ws://", "http://")
+                            .replace("wss://", "https://")
+                            .replace("/ws", "");
+                    RequestBody body = RequestBody.create(jpgBytes,
+                            MediaType.get("image/jpeg"));
+                    Request upload = new Request.Builder()
+                            .url(httpBase + "/api/cam/esp32/frame")
+                            .post(body)
+                            .build();
+                    try (Response uploadResp = client.newCall(upload).execute()) {
+                        if (uploadResp.isSuccessful()) {
+                            failCount = 0;
+                        } else {
+                            failCount++;
+                        }
+                    }
+                    // 正常 ~1fps
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    break;
+                } catch (Exception e) {
+                    failCount++;
+                    if (failCount % 10 == 0) {
+                        Log.e(TAG, "📷 ESP32 bridge error: " + e.getMessage());
+                    }
+                    try { Thread.sleep(Math.min(5000, 1000 + failCount * 500L)); }
+                    catch (InterruptedException ie) { break; }
+                }
+            }
+            Log.i(TAG, "📷 ESP32 bridge stopped");
+        }, "Esp32Bridge");
+        esp32BridgeThread.setDaemon(true);
+        esp32BridgeThread.start();
+    }
+
+    private void stopEsp32Bridge() {
+        esp32BridgeActive = false;
+        if (esp32BridgeThread != null && esp32BridgeThread.isAlive()) {
+            esp32BridgeThread.interrupt();
+            try { esp32BridgeThread.join(3000); } catch (InterruptedException ignored) {}
+        }
+        esp32BridgeThread = null;
     }
 
     // ══════════════════════════════════════════════════════════

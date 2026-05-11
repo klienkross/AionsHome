@@ -17,9 +17,12 @@ class _QuietCamFilter(logging.Filter):
         return not any(p in msg for p in self._noisy)
 
 logging.getLogger("uvicorn.access").addFilter(_QuietCamFilter())
+
+# 静默 Windows asyncio ProactorEventLoop 连接重置的噪音日志
+logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 from fastapi.responses import FileResponse, HTMLResponse
 
-from config import BASE_DIR, PUBLIC_DIR, UPLOADS_DIR, SCREENSHOTS_DIR, load_cam_config, SETTINGS, save_settings
+from config import BASE_DIR, PUBLIC_DIR, UPLOADS_DIR, CODEX_UPLOADS_DIR, SCREENSHOTS_DIR, load_cam_config, SETTINGS, save_settings
 from database import init_db, get_db
 from ws import manager
 from reading import ReadingSession, get_session
@@ -39,28 +42,43 @@ from routes import theater as theater_routes
 from routes import ghost_forest as ghost_forest_routes
 from routes import gift as gift_routes
 from routes import webhooks as webhooks_routes
+from routes import fund as fund_routes
+from routes import wallpaper as wallpaper_routes
+from routes import playground as playground_routes
+from routes import chatroom as chatroom_routes
 from activity import pc_tracker
 # from memory import auto_digest  # V1
 from digest_v2 import auto_digest_v2 as auto_digest
+from chatroom import _connor_1v1_auto_digest_loop
+from fund import fund_scheduler
 
 
 # ── 自动记忆总结定时任务 ──────────────────────────
 async def _auto_digest_loop():
-    """每 30 分钟检查一次，若用户已 30 分钟未发消息则自动总结"""
+    """每 30 分钟检查一次，若用户已 30 分钟未发消息（私聊+群聊）则自动总结"""
     import aiosqlite, time as _time
     while True:
         await asyncio.sleep(30 * 60)  # 30 分钟
         try:
-            # 检查最后一条用户消息的时间
+            # 检查最后一条用户消息的时间（私聊 + 群聊取最新的）
+            latest_ts = 0
             async with get_db() as db:
                 db.row_factory = aiosqlite.Row
                 cur = await db.execute(
                     "SELECT created_at FROM messages WHERE role='user' ORDER BY created_at DESC LIMIT 1"
                 )
                 row = await cur.fetchone()
-            if not row:
+                if row:
+                    latest_ts = max(latest_ts, row["created_at"])
+                cur = await db.execute(
+                    "SELECT created_at FROM chatroom_messages WHERE sender='user' ORDER BY created_at DESC LIMIT 1"
+                )
+                row = await cur.fetchone()
+                if row:
+                    latest_ts = max(latest_ts, row["created_at"])
+            if latest_ts == 0:
                 continue
-            elapsed = _time.time() - row["created_at"]
+            elapsed = _time.time() - latest_ts
             if elapsed < 30 * 60:
                 print(f"[auto_digest] 用户 {elapsed/60:.0f} 分钟前仍在对话，跳过")
                 continue
@@ -91,7 +109,10 @@ async def lifespan(app: FastAPI):
     cam.set_event_loop(loop)
     cam_cfg = load_cam_config()
     if cam_cfg.get("monitor_enabled"):
-        cam.open_camera(cam_cfg["camera_index"])
+        if cam_cfg.get("active_source") == "esp32":
+            cam.open_esp32()
+        else:
+            cam.open_camera(cam_cfg["camera_index"])
         cam.start_monitoring()
     # 语音模块初始化
     voice.set_event_loop(loop)
@@ -111,13 +132,19 @@ async def lifespan(app: FastAPI):
         pc_tracker.start()
     except Exception as e:
         print(f"[PCActivity] ❌ 启动异常: {e}")
+    # 基金监控定时任务
+    fund_scheduler.set_event_loop(loop)
+    fund_scheduler.start()
     # 自动记忆总结定时任务
     digest_task = asyncio.create_task(_auto_digest_loop())
     # WS 心跳清理
     manager.start_heartbeat()
+    cr_digest_task = asyncio.create_task(_connor_1v1_auto_digest_loop())
     yield
+    cr_digest_task.cancel()
     digest_task.cancel()
     ntfy_bridge.stop()
+    fund_scheduler.stop()
     pc_tracker.stop()
     schedule_mgr.stop()
     voice.stop()
@@ -129,11 +156,19 @@ app = FastAPI(lifespan=lifespan)
 # 全局禁用静态文件缓存
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
+from starlette.responses import Response
+
+_LOCAL_PREFIXES = ("127.", "192.168.", "::1", "localhost")
 
 _CACHEABLE_PREFIXES = ("/uploads/", "/public/", "/screenshots/")
 
 class NoCacheStaticMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        # 壁纸大文件只允许本地 IP 访问，远程设备不需要也避免占带宽
+        if request.url.path.startswith("/public/wallpaper/"):
+            client_ip = request.client.host if request.client else ""
+            if not any(client_ip.startswith(p) for p in _LOCAL_PREFIXES):
+                return Response("wallpaper only available on local network", status_code=403)
         response = await call_next(request)
         path = request.url.path
         if path.startswith("/static/"):
@@ -147,8 +182,10 @@ app.add_middleware(NoCacheStaticMiddleware)
 # 静态文件
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
+app.mount("/cr-uploads", StaticFiles(directory=str(CODEX_UPLOADS_DIR)), name="cr-uploads")
 app.mount("/public", StaticFiles(directory=str(PUBLIC_DIR)), name="public")
 app.mount("/screenshots", StaticFiles(directory=str(SCREENSHOTS_DIR)), name="screenshots")
+app.mount("/aion-pet", StaticFiles(directory=str(BASE_DIR.parent / "AionPet")), name="aion-pet")
 
 # 路由
 app.include_router(chat.router)
@@ -167,6 +204,10 @@ app.include_router(theater_routes.router)
 app.include_router(ghost_forest_routes.router)
 app.include_router(gift_routes.router)
 app.include_router(webhooks_routes.router)
+app.include_router(fund_routes.router)
+app.include_router(wallpaper_routes.router)
+app.include_router(playground_routes.router)
+app.include_router(chatroom_routes.router)
 
 # ── reading 辅助函数 ──────────────────────────────
 
@@ -237,6 +278,26 @@ async def ghost_forest_page():
 async def gift_page():
     return FileResponse(BASE_DIR / "static" / "gift.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
+@app.get("/fund")
+async def fund_page():
+    return FileResponse(BASE_DIR / "static" / "fund.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+@app.get("/wallpaper")
+async def wallpaper_page():
+    return FileResponse(BASE_DIR / "static" / "wallpaper.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+@app.get("/playground")
+async def playground_page():
+    return FileResponse(BASE_DIR / "static" / "playground.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+@app.get("/chatroom")
+async def chatroom_page():
+    return FileResponse(BASE_DIR / "static" / "chatroom.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+@app.get("/pet")
+async def pet_page():
+    return FileResponse(BASE_DIR / "static" / "pet.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
 # PWA：Service Worker 必须从根路径提供，作用域才能覆盖所有页面
 @app.get("/sw.js")
 async def service_worker():
@@ -295,6 +356,8 @@ async def websocket_endpoint(ws: WebSocket):
                 elif msg_type == "reading_stop":
                     for s in list(_reading_sessions_for_ws(ws)):
                         s.on_stop()
+                elif msg_type == "pet_state":
+                    manager.set_pet_state(ws, msg.get("enabled", False))
             except (json.JSONDecodeError, Exception):
                 pass
     except WebSocketDisconnect:

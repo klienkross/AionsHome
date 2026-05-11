@@ -767,7 +767,7 @@ async def _notify_sentinel(old_state: str, new_state: str, status: dict, event_d
 async def _call_core_location(event_desc: str, status: dict, core_reason: str, cached_logs: list = None):
     """唤醒 Core 通知位置变化"""
     from camera import read_logs_since, append_monitor_log, async_get_last_user_msg_time
-    from ai_providers import stream_ai
+    from ai_providers import stream_ai, CLI_STATUS_PREFIX
     from tts import TTSStreamer
     from memory import recall_memories
 
@@ -855,6 +855,8 @@ async def _call_core_location(event_desc: str, status: dict, core_reason: str, c
     try:
         _temp = SETTINGS.get("temperature")
         async for chunk in stream_ai(messages, model_key, temperature=_temp):
+            if chunk.startswith(CLI_STATUS_PREFIX):
+                continue
             full_text += chunk
             if loc_tts:
                 loc_tts.feed(chunk)

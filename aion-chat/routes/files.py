@@ -119,15 +119,17 @@ def parse_chat_file(content: str):
 # ── 上传 ──────────────────────────────────────────
 @router.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
-    if file.content_type not in ALLOWED_TYPES:
+    # 浏览器可能附带 codec 参数，如 audio/webm;codecs=opus，取分号前部分比较
+    base_type = (file.content_type or "").split(";")[0].strip()
+    if base_type not in ALLOWED_TYPES:
         return {"error": f"不支持的文件类型: {file.content_type}"}
-    ext = mimetypes.guess_extension(file.content_type) or ".bin"
+    ext = mimetypes.guess_extension(base_type) or ".bin"
     if ext == '.jpe': ext = '.jpg'
     fname = f"{int(time.time()*1000)}{ext}"
     fpath = UPLOADS_DIR / fname
     content = await file.read()
-    if len(content) > 20 * 1024 * 1024:
-        return {"error": "文件太大，最大 20MB"}
+    if len(content) > 100 * 1024 * 1024:
+        return {"error": "文件太大，最大 100MB"}
     fpath.write_bytes(content)
     url = f"/uploads/{fname}"
     return {"url": url, "type": file.content_type, "name": file.filename}

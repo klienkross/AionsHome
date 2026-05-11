@@ -26,8 +26,16 @@ public class AudioBridge {
     private AudioRecord recorder;
     private volatile boolean recording = false;
 
+    // 视频录制桥接 — 录制时同步推送音频帧
+    private volatile VideoBridge videoBridge;
+
     public AudioBridge(WebView webView) {
         this.webView = webView;
+    }
+
+    /** 设置视频录制桥接，录制时自动推送 PCM 帧 */
+    public void setVideoBridge(VideoBridge vb) {
+        this.videoBridge = vb;
     }
 
     @JavascriptInterface
@@ -59,13 +67,20 @@ public class AudioBridge {
             while (recording) {
                 int read = recorder.read(buf, 0, buf.length);
                 if (read > 0) {
+                    // 推送给 VideoBridge（视频录制时）
+                    VideoBridge vb = videoBridge;
+                    if (vb != null && vb.isRecording()) {
+                        vb.onAudioFrame(buf, read);
+                    }
+
                     String b64 = Base64.encodeToString(buf, 0, read, Base64.NO_WRAP);
                     // 推送到前端 JS（必须在 UI 线程执行）
                     webView.post(() -> {
                         if (recording) {
                             webView.evaluateJavascript(
                                     "typeof remoteVoice!=='undefined'&&remoteVoice._onNativeChunk('" + b64 + "');" +
-                                    "typeof videoCall!=='undefined'&&videoCall._onNativeChunk&&videoCall._onNativeChunk('" + b64 + "')",
+                                    "typeof videoCall!=='undefined'&&videoCall._onNativeChunk&&videoCall._onNativeChunk('" + b64 + "');" +
+                                    "typeof _voiceNativeOnChunk==='function'&&_voiceNativeOnChunk('" + b64 + "')",
                                     null);
                         }
                     });

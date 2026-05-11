@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>奥罗斯财团 - Aion</title>
+<link rel="stylesheet" href="/static/common.css">
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#ff8359">
+<style>
+/* ── 功能开关 ── */
+.fund-toggle {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; margin-bottom: 12px;
+}
+.fund-toggle .label { font-size: 14px; font-weight: 600; color: var(--text); }
+.fund-toggle .status { font-size: 12px; color: var(--text3); margin-left: 8px; }
+.switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .slider {
+  position: absolute; inset: 0; background: #ccc; border-radius: 24px;
+  cursor: pointer; transition: 0.3s;
+}
+.switch .slider::before {
+  content: ''; position: absolute; left: 2px; top: 2px;
+  width: 20px; height: 20px; background: #fff; border-radius: 50%;
+  transition: 0.3s;
+}
+.switch input:checked + .slider { background: var(--accent); }
+.switch input:checked + .slider::before { transform: translateX(20px); }
+
+/* ── 操作按钮组 ── */
+.action-row {
+  display: flex; gap: 8px; margin-bottom: 14px;
+}
+.action-btn {
+  flex: 1; padding: 10px 0; border: none; border-radius: 10px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  transition: opacity 0.2s;
+}
+.action-btn:active { opacity: 0.7; }
+.action-btn.primary { background: var(--accent); color: #fff; }
+.action-btn.secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.action-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ── 持仓列表 ── */
+.section-title {
+  font-size: 13px; font-weight: 600; color: var(--text2);
+  margin: 16px 0 8px; display: flex; align-items: center; gap: 6px;
+}
+.holding-list {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg); overflow: hidden;
+}
+.holding-item {
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+  position: relative;
+}
+.holding-item:last-child { border-bottom: none; }
+.holding-header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.holding-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.holding-code { font-size: 11px; color: var(--text3); margin-left: 6px; }
+.holding-actions {
+  display: flex; gap: 4px;
+}
+.holding-actions button {
+  background: none; border: none; font-size: 14px; cursor: pointer;
+  padding: 2px 4px; opacity: 0.5;
+}
+.holding-actions button:hover { opacity: 1; }
+.holding-details {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px;
+  margin-top: 8px; font-size: 12px; color: var(--text2);
+}
+.holding-details .val { color: var(--text); font-weight: 500; }
+.profit-pos { color: #e53935; }
+.profit-neg { color: #43a047; }
+.alert-tag {
+  display: inline-block; font-size: 10px; padding: 2px 6px;
+  border-radius: 4px; margin-top: 4px;
+  background: #fff3e0; color: #e65100;
+}
+
+.holding-empty {
+  padding: 24px; text-align: center; color: var(--text3); font-size: 14px;
+}
+
+/* ── 添加持仓表单 ── */
+.add-form {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); padding: 14px; margin-top: 12px;
+  display: none;
+}
+.add-form.show { display: block; }
+.add-form .form-row {
+  display: flex; gap: 8px; margin-bottom: 8px;
+}
+.add-form input {
+  flex: 1; background: var(--surface2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 13px; outline: none;
+  min-width: 0;
+}
+.add-form .form-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+}
+.add-form .form-actions button {
+  padding: 8px 16px; border: none; border-radius: 8px;
+  font-size: 13px; cursor: pointer;
+}
+.add-form .btn-save { background: var(--accent); color: #fff; }
+.add-form .btn-cancel { background: var(--surface2); color: var(--text); }
+
+/* ── 投资倾向 ── */
+.tendency-section {
+  margin-top: 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); padding: 14px;
+}
+.tendency-section textarea {
+  width: 100%; min-height: 60px; background: var(--surface2);
+  color: var(--text); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 13px; outline: none; resize: vertical;
+  font-family: inherit;
+}
+.tendency-section .save-row {
+  display: flex; justify-content: flex-end; margin-top: 8px;
+}
+.tendency-section .save-row button {
+  padding: 6px 14px; border: none; border-radius: 8px;
+  background: var(--accent); color: #fff; font-size: 12px; cursor: pointer;
+}
+
+/* ── 市场数据卡片 ── */
+.market-card {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); padding: 14px; margin-top: 12px;
+  display: none;
+}
+.market-card.show { display: block; }
+.market-card .fetch-time {
+  font-size: 11px; color: var(--text3); margin-bottom: 8px;
+}
+.market-card .index-row {
+  font-size: 13px; color: var(--text);
+  padding: 6px 0; border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.market-card .fund-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 0; font-size: 13px;
+}
+.market-card .fund-row + .fund-row { border-top: 1px solid var(--border); }
+
+/* ── 编辑弹窗 ── */
+.edit-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+  display: none; align-items: center; justify-content: center; z-index: 100;
+}
+.edit-overlay.show { display: flex; }
+.edit-panel {
+  background: var(--surface); border-radius: 14px; padding: 20px;
+  width: 90%; max-width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+.edit-panel h3 { font-size: 16px; margin-bottom: 14px; color: var(--text); }
+.edit-panel .form-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.edit-panel input {
+  flex: 1; background: var(--surface2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 13px; outline: none; min-width: 0;
+}
+.edit-panel .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.edit-panel .form-actions button { padding: 8px 16px; border: none; border-radius: 8px; font-size: 13px; cursor: pointer; }
+.edit-panel .btn-save { background: var(--accent); color: #fff; }
+.edit-panel .btn-cancel { background: var(--surface2); color: var(--text); }
+
+/* ── Loading 遮罩 ── */
+.loading-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.3);
+  display: none; align-items: center; justify-content: center; z-index: 200;
+}
+.loading-mask.show { display: flex; }
+.loading-spinner {
+  background: var(--surface); border-radius: 14px; padding: 24px 32px;
+  text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
+.loading-spinner .dots { font-size: 20px; }
+.loading-spinner .text { font-size: 13px; color: var(--text2); margin-top: 8px; }
+@keyframes blink { 0%,80%,100%{opacity:0} 40%{opacity:1} }
+.loading-spinner .dots span {
+  animation: blink 1.4s infinite both;
+  display: inline-block;
+}
+.loading-spinner .dots span:nth-child(2) { animation-delay: 0.2s; }
+.loading-spinner .dots span:nth-child(3) { animation-delay: 0.4s; }
+</style>
+</head>
+<body>
+<div class="sub-page">
+  <div class="top-bar">
+    <button class="back-btn" onclick="location.href='/'">⬅</button>
+    <h2>💰 奥罗斯财团</h2>
+  </div>
+  <div class="page-content">
+
+    <!-- 功能开关 -->
+    <div class="fund-toggle">
+      <div>
+        <span class="label">基金监控</span>
+        <span class="status" id="toggleStatus">每日 14:45 自动分析</span>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="enableToggle" checked onchange="toggleEnabled()">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- 操作按钮 -->
+    <div class="action-row">
+      <button class="action-btn primary" id="btnAnalyze" onclick="doAnalyze()">📊 立即分析</button>
+      <button class="action-btn secondary" id="btnFetch" onclick="doFetch()">🔄 刷新数据</button>
+      <button class="action-btn secondary" onclick="toggleAddForm()">➕ 添加</button>
+    </div>
+
+    <!-- 市场数据速览 -->
+    <div class="market-card" id="marketCard">
+      <div class="fetch-time" id="fetchTime"></div>
+      <div class="index-row" id="indexRow"></div>
+      <div id="marketFunds"></div>
+    </div>
+
+    <!-- 持仓列表 -->
+    <div class="section-title" style="cursor:pointer;user-select:none" onclick="toggleHoldings()">
+      <span>📋 我的持仓</span>
+      <span id="holdingToggleIcon" style="font-size:12px;margin-left:4px;transition:transform 0.2s">▼</span>
+      <span id="holdingCount" style="font-size:11px;color:var(--text3);margin-left:auto"></span>
+    </div>
+    <div id="holdingWrap">
+      <div class="holding-list" id="holdingList">
+        <div class="holding-empty">暂无持仓，点击「添加」录入基金</div>
+      </div>
+    </div>
+
+    <!-- 添加持仓表单 -->
+    <div class="add-form" id="addForm">
+      <div class="section-title" style="margin-top:0">添加持仓</div>
+      <div class="form-row">
+        <input id="addCode" placeholder="基金代码（如 110011）">
+        <input id="addName" placeholder="基金名称">
+      </div>
+      <div class="form-row">
+        <input id="addShares" type="number" step="0.01" placeholder="持仓份额">
+        <input id="addCost" type="number" step="0.0001" placeholder="平均买入净值">
+      </div>
+      <div class="form-row">
+        <input id="addTotal" type="number" step="0.01" placeholder="买入总成本（元）">
+      </div>
+      <div class="form-row" style="align-items:center">
+        <label style="font-size:12px;color:var(--text2);white-space:nowrap;flex-shrink:0">跌幅预警%</label>
+        <input id="addWarnDown" type="number" step="0.1" value="-3">
+        <label style="font-size:12px;color:var(--text2);white-space:nowrap;flex-shrink:0">涨幅预警%</label>
+        <input id="addWarnUp" type="number" step="0.1" value="15">
+      </div>
+      <div class="form-actions">
+        <button class="btn-cancel" onclick="toggleAddForm()">取消</button>
+        <button class="btn-save" onclick="addHolding()">保存</button>
+      </div>
+    </div>
+
+    <!-- 投资倾向 -->
+    <div class="tendency-section">
+      <div class="section-title" style="margin-top:0">📝 我的投资计划与倾向</div>
+      <textarea id="tendencyText" placeholder="例如：最近计划买入黄金ETF，在等一个合适的回调坑位..."></textarea>
+      <div class="save-row">
+        <button onclick="saveTendency()">保存</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- 编辑弹窗 -->
+<div class="edit-overlay" id="editOverlay">
+  <div class="edit-panel">
+    <h3>编辑持仓</h3>
+    <input type="hidden" id="editId">
+    <div class="form-row">
+      <input id="editName" placeholder="基金名称">
+    </div>
+    <div class="form-row">
+      <input id="editShares" type="number" step="0.01" placeholder="持仓份额">
+      <input id="editAvgCost" type="number" step="0.0001" placeholder="平均成本">
+    </div>
+    <div class="form-row">
+      <input id="editTotal" type="number" step="0.01" placeholder="总成本（元）">
+    </div>
+    <div class="form-row">
+      <input id="editWarnDown" type="number" step="0.1" placeholder="跌幅预警%">
+      <input id="editWarnUp" type="number" step="0.1" placeholder="涨幅预警%">
+    </div>
+    <div class="form-actions">
+      <button class="btn-cancel" onclick="closeEdit()">取消</button>
+      <button class="btn-save" onclick="saveEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Loading -->
+<div class="loading-mask" id="loadingMask">
+  <div class="loading-spinner">
+    <div class="dots"><span>●</span><span>●</span><span>●</span></div>
+    <div class="text" id="loadingText">正在拉取数据...</div>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+connectCommonWS();
+
+let holdings = [];
+let marketData = null;
+
+(async function init() {
+  await loadConfig();
+  await loadHoldings();
+  await loadCache();
+})();
+
+/* ── 加载缓存数据 ── */
+async function loadCache() {
+  try {
+    const data = await api("GET", "/api/fund/cache");
+    if (data && data.fetch_time) {
+      marketData = data;
+      renderMarketCard();
+      renderHoldings();
+    }
+  } catch(e) { console.error(e); }
+}
+
+/* ── 配置 ── */
+async function loadConfig() {
+  try {
+    const cfg = await api("GET", "/api/fund/config");
+    $("enableToggle").checked = cfg.enabled !== false;
+    $("tendencyText").value = cfg.tendency || "";
+    updateToggleStatus(cfg.enabled !== false, cfg.is_trading_day);
+  } catch(e) { console.error(e); }
+}
+
+function updateToggleStatus(enabled, isTradingDay) {
+  const s = $("toggleStatus");
+  if (!enabled) {
+    s.textContent = "功能已关闭";
+  } else if (isTradingDay) {
+    s.textContent = "每日 14:45 自动分析（今日交易日）";
+  } else {
+    s.textContent = "每日 14:45 自动分析（今日非交易日）";
+  }
+}
+
+async function toggleEnabled() {
+  const enabled = $("enableToggle").checked;
+  try {
+    const cfg = await api("POST", "/api/fund/config", { enabled });
+    updateToggleStatus(enabled, cfg.is_trading_day);
+    showToast(enabled ? "✅ 已开启" : "已关闭");
+  } catch(e) { console.error(e); }
+}
+
+async function saveTendency() {
+  const tendency = $("tendencyText").value.trim();
+  try {
+    await api("POST", "/api/fund/config", { tendency });
+    showToast("✅ 已保存");
+  } catch(e) { alert("保存失败"); }
+}
+
+/* ── 持仓 ── */
+let holdingsCollapsed = false;
+
+function toggleHoldings() {
+  holdingsCollapsed = !holdingsCollapsed;
+  $("holdingWrap").style.display = holdingsCollapsed ? "none" : "";
+  $("holdingToggleIcon").style.transform = holdingsCollapsed ? "rotate(-90deg)" : "";
+}
+
+async function loadHoldings() {
+  try {
+    holdings = await api("GET", "/api/fund/holdings");
+    renderHoldings();
+  } catch(e) { console.error(e); }
+}
+
+function renderHoldings() {
+  const el = $("holdingList");
+  const countEl = $("holdingCount");
+  if (countEl) countEl.textContent = holdings?.length ? `${holdings.length}只` : "";
+  if (!holdings || !holdings.length) {
+    el.innerHTML = '<div class="holding-empty">暂无持仓，点击「添加」录入基金</div>';
+    return;
+  }
+  el.innerHTML = holdings.map(h => {
+    const profit = marketData?.funds?.find(f => f.fund_code === h.fund_code);
+    let profitHtml = '';
+    if (profit && profit.profit !== null) {
+      const cls = profit.profit >= 0 ? 'profit-pos' : 'profit-neg';
+      const sign = profit.profit >= 0 ? '+' : '';
+      profitHtml = `
+        <div class="holding-details">
+          <div>最新净值：<span class="val">${profit.latest_nav?.toFixed(4) ?? '-'}</span></div>
+          <div>今日涨跌：<span class="val ${cls}">${profit.day_change_pct !== null ? (profit.day_change_pct >= 0 ? '+' : '') + profit.day_change_pct + '%' : '-'}</span></div>
+          <div>当前市值：<span class="val">${profit.market_value?.toFixed(2) ?? '-'}元</span></div>
+          <div>浮盈亏：<span class="val ${cls}">${sign}${profit.profit?.toFixed(2) ?? '-'}元 (${sign}${profit.profit_pct?.toFixed(2) ?? '-'}%)</span></div>
+        </div>
+        ${profit.alert ? `<div class="alert-tag">⚠️ ${escHtml(profit.alert)}</div>` : ''}
+      `;
+    }
+    return `<div class="holding-item">
+      <div class="holding-header">
+        <div>
+          <span class="holding-name">${escHtml(h.fund_name || h.fund_code)}</span>
+          <span class="holding-code">${escHtml(h.fund_code)}</span>
+        </div>
+        <div class="holding-actions">
+          <button onclick="openEdit('${h.id}')" title="编辑">✏️</button>
+          <button onclick="deleteHolding('${h.id}')" title="删除">🗑️</button>
+        </div>
+      </div>
+      <div class="holding-details">
+        <div>份额：<span class="val">${h.shares}</span></div>
+        <div>均价：<span class="val">${Number(h.avg_cost).toFixed(4)}</span></div>
+        <div>总成本：<span class="val">${Number(h.total_cost).toFixed(2)}元</span></div>
+        <div>预警：<span class="val">${h.warn_down}% / +${h.warn_up}%</span></div>
+      </div>
+      ${profitHtml}
+    </div>`;
+  }).join('');
+}
+
+function toggleAddForm() {
+  $("addForm").classList.toggle("show");
+}
+
+async function addHolding() {
+  const code = $("addCode").value.trim();
+  if (!code) { alert("请输入基金代码"); return; }
+  const body = {
+    fund_code: code,
+    fund_name: $("addName").value.trim(),
+    shares: parseFloat($("addShares").value) || 0,
+    avg_cost: parseFloat($("addCost").value) || 0,
+    total_cost: parseFloat($("addTotal").value) || 0,
+    warn_down: parseFloat($("addWarnDown").value) || -3,
+    warn_up: parseFloat($("addWarnUp").value) || 15,
+  };
+  try {
+    await api("POST", "/api/fund/holdings", body);
+    $("addCode").value = ""; $("addName").value = "";
+    $("addShares").value = ""; $("addCost").value = "";
+    $("addTotal").value = "";
+    $("addForm").classList.remove("show");
+    loadHoldings();
+    showToast("✅ 已添加");
+  } catch(e) { alert("添加失败"); }
+}
+
+function openEdit(id) {
+  const h = holdings.find(x => x.id === id);
+  if (!h) return;
+  $("editId").value = h.id;
+  $("editName").value = h.fund_name || "";
+  $("editShares").value = h.shares;
+  $("editAvgCost").value = h.avg_cost;
+  $("editTotal").value = h.total_cost;
+  $("editWarnDown").value = h.warn_down;
+  $("editWarnUp").value = h.warn_up;
+  $("editOverlay").classList.add("show");
+}
+
+function closeEdit() {
+  $("editOverlay").classList.remove("show");
+}
+
+async function saveEdit() {
+  const id = $("editId").value;
+  const body = {
+    fund_name: $("editName").value.trim(),
+    shares: parseFloat($("editShares").value) || 0,
+    avg_cost: parseFloat($("editAvgCost").value) || 0,
+    total_cost: parseFloat($("editTotal").value) || 0,
+    warn_down: parseFloat($("editWarnDown").value) || -3,
+    warn_up: parseFloat($("editWarnUp").value) || 15,
+  };
+  try {
+    await api("PUT", `/api/fund/holdings/${id}`, body);
+    closeEdit();
+    loadHoldings();
+    showToast("✅ 已保存");
+  } catch(e) { alert("保存失败"); }
+}
+
+async function deleteHolding(id) {
+  if (!confirm("确定删除此持仓？")) return;
+  try {
+    await api("DELETE", `/api/fund/holdings/${id}`);
+    loadHoldings();
+    showToast("已删除");
+  } catch(e) { alert("删除失败"); }
+}
+
+/* ── 数据拉取 ── */
+async function doFetch() {
+  const btn = $("btnFetch");
+  btn.disabled = true;
+  btn.textContent = "⏳ 拉取中...";
+  showToast("正在拉取最新数据...");
+  try {
+    marketData = await api("POST", "/api/fund/fetch");
+    renderMarketCard();
+    renderHoldings();
+    showToast("✅ 数据已刷新");
+  } catch(e) {
+    showToast("❌ 拉取失败");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔄 刷新数据";
+  }
+}
+
+function renderMarketCard() {
+  if (!marketData) return;
+  const card = $("marketCard");
+  card.classList.add("show");
+  $("fetchTime").textContent = "数据时间：" + (marketData.fetch_time || "").replace("T", " ").split(".")[0];
+
+  if (marketData.index) {
+    const idx = marketData.index;
+    const sign = idx.change_pct >= 0 ? "+" : "";
+    const cls = idx.change_pct >= 0 ? "profit-pos" : "profit-neg";
+    $("indexRow").innerHTML = `${idx.name}：<span class="${cls}">${sign}${idx.change_pct}%</span>`;
+  } else {
+    $("indexRow").innerHTML = "上证指数数据暂不可用";
+  }
+
+  const fundsEl = $("marketFunds");
+  if (marketData.funds && marketData.funds.length) {
+    fundsEl.innerHTML = marketData.funds.map(f => {
+      const cls = (f.day_change_pct ?? 0) >= 0 ? "profit-pos" : "profit-neg";
+      const sign = (f.day_change_pct ?? 0) >= 0 ? "+" : "";
+      return `<div class="fund-row">
+        <span>${escHtml(f.fund_name)} (${f.fund_code})</span>
+        <span class="${cls}">${f.latest_nav?.toFixed(4) ?? '-'} ${f.day_change_pct !== null ? sign + f.day_change_pct + '%' : ''}</span>
+      </div>`;
+    }).join('');
+  } else {
+    fundsEl.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:6px 0">暂无持仓数据</div>';
+  }
+}
+
+/* ── AI 分析 ── */
+async function doAnalyze() {
+  const btn = $("btnAnalyze");
+  btn.disabled = true;
+  btn.innerHTML = "⏳ 分析中...";
+  showToast("已开始分析，可返回其他页面，完成后会语音通知");
+  // 不阻塞 UI，后台执行
+  api("POST", "/api/fund/analyze").then(result => {
+    if (result.ok) {
+      showToast("✅ 分析完成，请查看聊天页");
+    } else {
+      showToast("⚠️ " + (result.reason || "分析失败"));
+    }
+  }).catch(e => {
+    showToast("❌ 分析失败");
+  }).finally(() => {
+    btn.disabled = false;
+    btn.innerHTML = "📊 立即分析";
+  });
+}
+
+/* ── Loading ── */
+function showLoading(text) {
+  $("loadingText").textContent = text || "处理中...";
+  $("loadingMask").classList.add("show");
+}
+function hideLoading() {
+  $("loadingMask").classList.remove("show");
+}
+</script>
+</body>
+</html>

@@ -27,6 +27,8 @@ _STRIP_PATTERNS = [
     re.compile(r'\[HEART:[^\]]*\]'),
     re.compile(r'\[MEMORY:[^\]]*\]'),
     re.compile(r'\[查看动态:\d+\]'),
+    re.compile(r'\[SELFIE:[^\]]*\]'),
+    re.compile(r'\[DRAW:[^\]]*\]'),
     re.compile(r'<meta>[\s\S]*?</meta>'),
 ]
 

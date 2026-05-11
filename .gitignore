@@ -34,6 +34,24 @@ aion-chat/data/books/
 aion-chat/data/aion.db
 aion-chat/data/theater_personas.json
 aion-chat/data/ghost_forest/*.json
+aion-chat/data/fund_config.json
+aion-chat/data/fund_cache.json
+aion-chat/data/chatroom_config.json
+aion-chat/data/chatroom_images/
+aion-chat/data/mcp_servers.json
+aion-chat/data/wallpaper_config.json
+aion-chat/data/cert.pem
+aion-chat/data/key.pem
+aion-chat/data/tmp/
+
+# ── Connor-Codex 用户数据 ──
+Connor-Codex/messages.jsonl
+Connor-Codex/persona.md
+Connor-Codex/auto-responder-state.json
+Connor-Codex/uploads/
+Connor-Codex/node_modules/
+Connor-Codex/package-lock.json
+Connor-Codex/*.log
 
 # ── 保留空文件夹的 .gitkeep ──
 !aion-chat/data/chats/.gitkeep

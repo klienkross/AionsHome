@@ -5,15 +5,19 @@
 
 ## 技术栈
 - **后端**：Python FastAPI + SQLite (aiosqlite) + WebSocket
-- **前端**：多页面架构（原生 JS，无框架），暖光主题，手机/PC 自适应。chat.html 为主聊天页，独立功能页通过 common.css/common.js 共享样式和工具函数
-- **摄像头**：OpenCV (`cv2`) DirectShow 后端后台线程采集
-- **语音**：WebRTC VAD 语音检测 + 硬基流动 ASR (SenseVoiceSmall) + TTS (CosyVoice2)
-- **AI 接口**：硬基流动（OpenAI 兼容）、Google Gemini（REST API）、AiPro 中转站（OpenAI 兼容）
+- **前端**：多页面架构（原生 JS，无框架），暖光主题，手机/PC 自适应。chat.html/css/js 为主聊天页（结构/样式/逻辑分离），独立功能页通过 common.css/common.js 共享样式和工具函数
+- **摄像头**：OpenCV (`cv2`) DirectShow 后端后台线程采集 + ESP32-CAM HTTP 远程抓帧（双摄切换 + App 桥接模式）
+- **语音**：WebRTC VAD 语音检测 + 硬基流动 ASR (SenseVoiceSmall) + TTS (CosyVoice2) + 语音消息（按住录制）
+- **AI 接口**：硬基流动（OpenAI 兼容）、Google Gemini（REST API）、AiPro 中转站（OpenAI 兼容）、Gemini CLI（本地子进程调用，免费 OAuth 认证）、Codex CLI（本地子进程调用，Connor 专用）
+- **AI 生图**：Gemini `gemini-3.1-flash-image-preview`（REST API generateContent，responseModalities=["IMAGE"]）
 - **Embedding**：Gemini `gemini-embedding-001`（3072维），余弦相似度检索
-- **Android App**：Java，WebView + 前台推送服务（OkHttp 4.12.0 WebSocket）+ 原生录音桥 + 原生摄像头桥，compileSdk 34 / minSdk 24
+- **Android App**：Java，WebView + 前台推送服务（OkHttp 4.12.0 WebSocket）+ 原生录音桥 + 原生摄像头桥 + 原生视频录制桥（MediaCodec + MediaMuxer），compileSdk 34 / minSdk 24
 - **音乐**：pyncm（网易云音乐 API，搜索/歌曲详情/音频URL，支持 MUSIC_U Cookie VIP 登录 + 服务端代理推流）
 - **EPUB 解析**：ebooklib（EPUB 读取）+ BeautifulSoup4 / lxml（HTML 解析）
-- **依赖库**：fastapi, uvicorn, httpx, aiosqlite, opencv-python, Pillow, sounddevice, numpy, webrtcvad-wheels, pyncm, pywin32, psutil, ebooklib, beautifulsoup4, lxml
+- **基金监控**：akshare（A股/基金数据拉取）+ chinese-calendar（中国节假日/交易日判断）
+- **MCP 娱乐室**：mcp（Python MCP SDK，支持 Streamable HTTP / stdio 传输，接入外部服务如 AI 小镇）
+- **聊天室**：三人群聊（用户 + Aion + Connor-Codex），Connor 代理通过 HTTP 轮询接入 Codex CLI 服务，随机回复顺序，统一时间线上下文（私聊+群聊合并排序，场景切换标记），统一记忆总结（Aion/Connor 各自合并私聊+群聊消息总结，独立锚点，1小时无新消息自动触发），图片收发（用户发图→CLI 管线通过本地绝对路径传递、API 管线通过 base64 内嵌，Codex 回复 `[[image:...]]` 标记→前端渲染，图片存储于 `Connor-Codex/uploads/YYYY-MM-DD/`），TTS 语音合成（Aion/Connor 独立音色配置，硬基流动 CosyVoice2 服务端流式切分+并行合成，通过 SSE 推送音频分段顺序播放，配置持久化 localStorage）
+- **依赖库**：fastapi, uvicorn, httpx, aiosqlite, opencv-python, Pillow, sounddevice, numpy, webrtcvad-wheels, pyncm, pywin32, psutil, ebooklib, beautifulsoup4, lxml, akshare, chinese-calendar, mcp
 
 ## 模块化文件结构
 项目已从单文件拆分为 12 个模块化文件：
@@ -29,33 +33,43 @@
 │   ├── AionMonitoralart.mp3      # Core 查看监控前的提示音
 │   ├── AIonResponse.mp3          # 语音唤醒回复音频（"诶，我在呢"）
 │   ├── UserIcon.png              # 用户聊天头像
-│   └── AIIcon.png                # AI 聊天头像
+│   ├── AIIcon.png                # AI 聊天头像
+│   └── 生图锚点.jpg             # SELFIE 参考图（AI 人物一致性锚点）
+│   └── wallpaper/                # 动态壁纸媒体文件（图片+视频）
 ├── AionApp/                      # Android WebView 原生壳（Java，Android Studio 项目）
 │   ├── app/src/main/java/com/aion/chat/
 │   │   ├── LauncherActivity.java # 启动页：双地址选择（家庭WiFi / Tailscale）+ 记住选择 + 启动推送服务
 │   │   ├── WebViewActivity.java  # WebView 主页：全屏加载 chat.html，麦克风权限，前后台状态通知推送服务
-│   │   ├── AudioBridge.java      # 原生录音桥：AudioRecord 16kHz → base64 → JS 回调
-│   │   ├── CameraBridge.java     # 原生摄像头桥：legacy Camera API → NV21 字节旋转 → JPEG → JS 轮询（绕过 WebView HTTPS 限制）
-│   │   └── AionPushService.java  # 前台推送服务：独立 WebSocket 长连接 + 通知弹窗 + 断线重连 + WakeLock/WifiLock 保活
+│   │   ├── AudioBridge.java      # 原生录音桥：AudioRecord 16kHz → base64 → JS 回调，录制时同步转发 PCM 给 VideoBridge
+│   │   ├── CameraBridge.java     # 原生摄像头桥：legacy Camera API → NV21 字节旋转 → JPEG → JS 轮询（绕过 WebView HTTPS 限制），录制时转发帧给 VideoBridge
+│   │   ├── VideoBridge.java      # 原生视频录制桥：MediaCodec(H.264) + MediaCodec(AAC) + MediaMuxer → MP4，复用 CameraBridge/AudioBridge 的帧数据
+│   │   ├── (AionImageSaver)      # 图片保存桥（WebViewActivity 内匿名类）：JS base64 → MediaStore 写入相册
+│   │   └── AionPushService.java  # 前台推送服务：独立 WebSocket 长连接 + 通知弹窗 + 断线重连 + WakeLock/WifiLock 保活 + ESP32-CAM 桥接（拉帧→上传服务器）
 │   └── build.gradle              # compileSdk 34, minSdk 24, Gradle 8.5 + AGP 8.2.2, OkHttp 4.12.0
 ├── LittleToy/                    # BLE 玩具逆向分析 & 独立 demo
 │   ├── toy_control_v4.html       # 独立 BLE 控制页面（可单独使用）
 │   └── 逆向分析笔记.md           # SOSEXY 设备协议逆向笔记
+├── 启动壁纸.bat                  # Chrome App 模式无边框全屏启动动态壁纸
 └── aion-chat/
-    ├── main.py                   # 入口：lifespan、路由注册、静态挂载、WebSocket、PWA 路由、自动记忆总结定时任务
+    ├── main.py                   # 入口：lifespan、路由注册、静态挂载、WebSocket、PWA 路由、自动记忆总结定时任务（私聊+群聊空闲检测）、Connor自动总结定时任务
     ├── config.py                 # 全局路径、常量、settings/worldbook/chat_status/cam_config 读写
     ├── database.py               # SQLite 初始化（conversations/messages/memories/schedules/theater 等表 + 性能索引）
     ├── ws.py                     # WebSocket ConnectionManager 单例，含 tts_clients 状态追踪 + _tts_fallback HTTP 回落机制 + client_id 注册/定向推送
-    ├── ai_providers.py           # AI 调用：硅基流动/Gemini/AiPro中转站 流式 + 非流式 + 多模态消息构建
-    ├── memory.py                 # 向量记忆：embedding、综合评分召回、手动/自动总结、即时哨兵(RAG路由)、原文追溯
-    ├── camera.py                 # 摄像头：CameraMonitor 类、Sentinel 分析（注入设备活动摘要）、Core 唤醒、[CAM_CHECK]
+    ├── ai_providers.py           # AI 调用：硅基流动/Gemini/AiPro中转站/GeminiCLI 流式 + 非流式 + 多模态消息构建
+    ├── memory.py                 # 向量记忆：embedding、综合评分召回、手动/自动总结（合并私聊+群聊消息）、即时哨兵(RAG路由)、原文追溯
+    ├── camera.py                 # 摄像头：CameraMonitor 类、Sentinel 分析（注入设备活动摘要）、Core 唤醒、[CAM_CHECK]、ESP32-CAM 双摄切换+App桥接
     ├── location.py               # 高德地图定位：GPS心跳处理、三级研判、状态机(at_home/outside)、哨兵通知、POI搜索
     ├── voice.py                  # 语音唤醒 + 半双工通话（WebRTC VAD + 硬基流动 ASR），通话中自动携带 TTS 参数
     ├── tts.py                    # 服务端流式 TTS：按句切分（100-200字）+ 异步并行合成 + WebSocket/SSE 推送音频分片
     ├── schedule.py               # 日程/闹铃/定时监控管理器：ScheduleManager、文本指令解析、闹铃触发Core唤醒、定时监控截图+Core分析（注入设备活动摘要）
     ├── ghost_forest.py            # 奥罗斯幽林 TRPG 引擎：会话管理、AI 对话历史压缩、D20 骰子判定、角色属性/道具系统
     ├── gift.py                    # 礼物系统：AI 判断送礼 + 硅基流动 Kolors 生图 + 礼物数据 CRUD
+    ├── fund.py                    # 基金持仓监控：akshare数据拉取、盈亏计算、上证指数、历史走势、AI分析prompt生成、每日14:45定时任务(FundScheduler)
     ├── book.py                    # EPUB 解析模块：书籍导入、章节拆分、段落标注、图片提取
+    ├── image_gen.py               # AI 生图模块：Gemini 图片生成（SELFIE/DRAW 模式）
+    ├── mcp_client.py              # MCP 连接管理器：管理多个 MCP Server 连接（HTTP/stdio）、工具发现、统一 call_tool 接口、转换 OpenAI tools 格式
+    ├── context_builder.py          # 统一上下文构建：fetch_merged_timeline（合并私聊+群聊消息时间线）、render_merged_timeline（场景切换标记渲染）、build_ability_block、build_memory_blocks、strip_tool_commands
+    ├── chatroom.py                # 聊天室核心逻辑：Connor-Codex 代理调用（HTTP+taskId轮询+images）、统一时间线上下文构建、统一记忆总结（Connor 1v1+群聊合并，独立锚点 connor_unified）、1h无消息自动总结
     ├── routes/
     │   ├── __init__.py
     │   ├── book.py               # 阅读功能 API：书籍上传/列表/章节/进度/删除/图片/AI批注（单段+全章SSE）
@@ -63,16 +77,20 @@
     ├── chat.py               # 对话/消息 CRUD、send_message(SSE)、regenerate、cam-check-trigger、[MUSIC:xxx]/[ALARM:...]/[REMINDER:...]/[Monitor:...]/[TOY:x]/[查看动态:n]/[视频电话] 检测
     │   ├── music.py              # 音乐搜索/详情/播放/代理推流 API（pyncm）
     │   ├── schedule.py           # 日程 CRUD API（列表/添加/删除）
-    │   ├── cam.py                # 摄像头控制 + 监控日志 API
+    │   ├── cam.py                # 摄像头控制 + 监控日志 API + ESP32-CAM 画面源切换/桥接帧接收
     │   ├── location.py           # 定位 API：心跳上报、状态查询、POI搜索、配置管理、设置家位置
     │   ├── files.py              # 上传、聊天记录文件导出/管理
-    │   ├── settings.py           # 设置、世界书、模型列表、TTS 代理、视频通话开关
+    │   ├── settings.py           # 设置、世界书、模型列表、TTS 代理、视频通话开关、AI生图开关
     │   ├── memories.py           # 记忆库 CRUD + 手动总结触发 + 原文查看 + 锚点管理 API
     │   ├── heart_whispers.py     # 心语 API（列表查询 + 删除）
     │   ├── activity.py           # 活动日志 API（上报/查询/清理/状态诊断/10分钟摘要/AI联动开关配置）
     │   ├── voice.py              # 语音唤醒/通话控制 API
     │   ├── ghost_forest.py       # 奥罗斯幽林 TRPG API（16 个端点：人设/会话/剧情生成/选择/骰子/大结局）+ SSE 流式 TTS
-    │   └── gift.py               # 礼物系统 API（pending/receive/list/delete/test）
+    │   ├── gift.py               # 礼物系统 API（pending/receive/list/delete/test）
+    │   ├── fund.py               # 基金监控 API：持仓CRUD、配置开关、数据拉取、手动触发AI分析、缓存读取、历史走势
+    │   ├── playground.py         # 娱乐室 API：MCP Server 连接/断开、tool calling 循环、SSE 流式行动日志、经历总结归档
+    │   └── wallpaper.py          # 动态壁纸 API：文件列表/配置读写/上传/删除
+    │   └── chatroom.py           # 聊天室 API：房间 CRUD、发消息(SSE)、AI 互聊(SSE)、记忆 CRUD、配置、Connor 状态、总结记忆、图片上传（/api/chatroom/upload）+ 图片路径重写 + TTS流式合成（Aion/Connor独立音色）
     ├── activity.py               # 设备活动日志：JSONL 存储、自动清理（保留最近 3 小时）、PC 前台窗口采集（win32gui+psutil）、App 包名→中文名映射、10分钟窗口摘要（时长权重+carry-forward状态追溯）、AI联动开关+Prompt摘要生成
     ├── music.py                  # pyncm 封装层（搜索/歌曲详情/音频URL/MUSIC_U Cookie 登录/匿名登录）
     ├── README.md                 # 本文件
@@ -80,6 +98,8 @@
     ├── static/
     │   ├── home.html             # 手机风格主页 → /（应用图标网格 + Dock 栏）
     │   ├── chat.html             # 主聊天页 → /chat（含语音唤醒/TTS/BLE/音乐/系统日志/debug面板）
+    │   ├── chat.css              # 主聊天页样式（从 chat.html 拆分）
+    │   ├── chat.js               # 主聊天页逻辑（从 chat.html 拆分）
     │   ├── common.css            # 子页面共享样式（CSS变量/布局/组件/闹铃弹窗/toast）
     │   ├── common.js             # 子页面共享工具（api()/WS连接/闹铃弹窗/系统通知）
     │   ├── settings.html         # 设置页 → /settings（API Key 管理）
@@ -95,14 +115,22 @@
     │   ├── theater.html          # 小剧场页 → /theater（独立聊天+多角色管理+TTS，茶色暗色主题）
     │   ├── ghost-forest.html     # 奥罗斯幽林页 → /ghost-forest（TRPG 游戏：D20 骰子+角色扮演+AI DM）
     │   ├── gift.html              # 爱的印记页 → /gift（礼物陈列馆，缩略图网格+详情弹窗）
-    │   ├── video-call.js         # 视频通话模块：摄像头预览 + 截图 + 语音复用 + 来电/去电 UI
+    │   ├── fund.html              # 奥罗斯财团页 → /fund（基金持仓监控、数据拉取、AI分析、持仓管理）
+    │   ├── playground.html        # 娱乐室页 → /playground（MCP 服务连接 + AI 自主探索 + 行动日志 + 历史记录）
+    │   ├── playground.css         # 娱乐室样式
+    │   ├── playground.js          # 娱乐室前端逻辑（SSE 实时渲染 + 历史记录加载）
+    │   ├── chatroom.html          # 聊天室页 → /chatroom（三人群聊 + Connor 私聊 + 房间管理 + 记忆库悬浮窗 + 图片收发 + TTS设置）
+    │   ├── chatroom.css           # 聊天室样式（暖色三人气泡、头像、双换行拆分气泡、图片预览/查看器/内联图片、TTS滑块开关）
+    │   ├── chatroom.js            # 聊天室前端逻辑（SSE流式、AI互聊、记忆CRUD、世界书人设继承、图片上传/粘贴/[[image:]]渲染、TTS分段队列播放+音色配置持久化）
+    │   ├── wallpaper.html         # 动态壁纸页 → /wallpaper（全屏壁纸轮播+AI气泡，独立显示器使用）
+    │   ├── video-call.js         # 视频通话模块：摄像头预览 + 按住录制视频 + ASR转写 + 来电/去电 UI
     │   ├── manifest.json         # PWA Web App Manifest（从 /manifest.json 提供）
     │   └── sw.js                 # PWA Service Worker（从 /sw.js 提供）
     └── data/                     # ★ 备份只需复制此文件夹
         ├── chat.db               # SQLite 数据库
         ├── settings.json         # API Key 持久化
         ├── worldbook.json        # 世界书（AI/用户人设+名称）
-        ├── cam_config.json       # 摄像头监控配置
+        ├── cam_config.json       # 摄像头监控配置（active_source/esp32_cam_url/本地摄像头/定时/静默时段）
         ├── chat_status.json      # 聊天状态摘要（供哨兵参考）
         ├── location_config.json  # 定位配置（高德Key、家坐标、开关、安静时段、阈值等）
         ├── location_status.json  # 定位状态缓存（当前坐标、状态、地址、天气、POI等）
@@ -114,6 +142,10 @@
         ├── activity_logs/        # 设备活动日志（JSONL，按日期，保留最近 3 小时）
         ├── books/                # EPUB 书籍数据（解析后的章节+图片+批注数据库）
         ├── theater_personas.json # 小剧场角色预设（多套人设，JSON数组）
+        ├── fund_config.json      # 基金监控配置（开关、投资倾向）
+        ├── fund_cache.json       # 基金数据缓存（最近一次拉取结果）
+        ├── mcp_servers.json      # MCP Server 配置（娱乐室服务地址列表）
+        ├── wallpaper_config.json  # 动态壁纸配置（轮换间隔、文件启用状态、气泡锚点坐标）
         └── ghost_forest/          # 奥罗斯幽林 TRPG 数据
             ├── _personas.json     # DM/玩家人设预设
             └── {uuid}.json        # 游戏会话存档（每局一个文件）
@@ -137,11 +169,15 @@
 | `/theater` | theater.html 小剧场页（独立聊天+多角色+TTS） |
 | `/ghost-forest` | ghost-forest.html 奥罗斯幽林页（TRPG 冒险游戏） |
 | `/gift` | gift.html 爱的印记页（礼物陈列馆） |
+| `/fund` | fund.html 奥罗斯财团页（基金持仓监控） |
+| `/playground` | playground.html 娱乐室页（MCP 服务接入 + AI 自主探索） |
+| `/wallpaper` | wallpaper.html 动态壁纸页（全屏壁纸轮播+AI气泡） |
 | `/manifest.json` | PWA Web App Manifest |
 | `/sw.js` | PWA Service Worker（根路径提供，作用域覆盖全站） |
 | `/public/*` | 公共资源 |
 | `/static/*` | 静态文件 |
-| `/uploads/*` | data/uploads/ |
+| `/uploads/*` | data/uploads/（主聊天上传） |
+| `/cr-uploads/*` | Connor-Codex/uploads/（聊天室图片，按日期子目录） |
 | `/api/*` | 后端 API |
 | `/ws` | WebSocket 多端同步 |
 
@@ -180,6 +216,7 @@
 6. **上下文长度控制** — 滑块 1-100 条可调，默认 20
 7. **世界书（World Book）** — AI/用户人设 + 自定义名称，注入 prompt 前缀
 8. **图片/视频上传** — 多模态支持，Gemini 用 inline_data，硅基流动用 URL
+9. **语音消息** — 微信风格按住说话录音，松手发送。浏览器使用 MediaRecorder 录制 WebM，Android 使用原生 AudioBridge 录音。录音通过硅基流动 ASR 自动转写为文字，消息以语音气泡形式展示（显示时长 + 播放按钮），转写文本同时保存供记忆/上下文使用
 9. **聊天记录文件管理** — 自动导出 .md，文件管理器弹窗查看/下载/删除
 10. **API Key 管理** — 界面内设置面板，支持 Gemini + Gemini Free（哨兵+向量）+ 硅基流动 + 中转站 四组 Key
 11. **手机适配** — 侧栏抽屉式展开，聊天气泡布局，触屏友好，`@media (max-width: 768px)` 单独优化紧凑间距
@@ -214,6 +251,10 @@
 
 ### 摄像头智能监控（Sentinel/Core 双脑架构）
 28. **摄像头集成** — OpenCV DirectShow 后端，支持多摄像头切换，绿屏检测，智能预热验证
+28a. **ESP32-CAM 双摄** — 支持 ESP32-CAM 作为备选摄像头源，前端 tab 切换本地/ESP32，地址支持 IP 或 mDNS 名称（如 `espcam.local`）
+28b. **自动桥接** — 服务器直连 ESP32 失败时，自动通知 App（AionPushService）启动桥接：App 从热点局域网拉帧→上传服务器。直连恢复时自动关闭桥接
+28c. **户外模式** — 手机开热点 + ESP32 连热点，App 前台服务桥接帧数据到家里服务器（~1fps，约 80KB/帧），AI 仍可触发 Sentinel/[CAM_CHECK]/定时监控
+28d. **零侵入** — 所有下游（Sentinel、Core、[CAM_CHECK]、定时监控、预览）通过 `get_frame_jpeg()` 取帧，无需感知帧来源。`active_source` 默认 `local`，不配置 ESP32 时行为完全不变
 29. **Sentinel 哨兵** — 定时截图后由轻量模型（flash-lite）分析，注入设备活动摘要（近 60 分钟 6 条）作为辅助判断依据，输出结构化 JSON（含概况摘要 summary + 唤醒原因 core_reason）
 30. **Core 唤醒** — Sentinel 判断需要时唤醒 Core（当前聊天模型），Core 收到哨兵摘要+唤醒原因+最近5条日志+记忆召回，主动在对话中联系用户
 31. **监控日志系统** — 独立于聊天的 JSONL 日志，按日期存储，3 天自动清理
@@ -293,32 +334,89 @@
 ```
 
 ### 视频通话（[视频电话]）
-204. **视频通话模式** — 在语音唤醒基础上增加摄像头画面，实现「看到你 + 听到你 + 跟你说话」的完整通话体验。功能本质是语音通话 + 摄像头截图，不涉及 WebRTC 实时音视频流
+204. **视频通话模式** — 摄像头预览 + 按住录制视频片段 + ASR 转写 + AI 多模态理解，实现「看到你 + 听到你 + 跟你说话」的完整通话体验。录制的视频片段直接发送给 Gemini（inline_data，最大 20MB），AI 可以看到画面和听到声音
 205. **用户主动发起** — 聊天页面 📹 按钮发起视频通话，3 秒等待期间播放铃声动画，用户可取消
 206. **AI 主动发起** — AI 回复包含 `[视频电话]` 指令时，后端延迟 10 秒后通过 WebSocket 定向推送给发送者客户端，前端弹出来电 UI（铃声 + 接听/挂断按钮）
 207. **来电指示器** — AI 回复触发视频通话时，消息底部显示「📹 AI 正在发起视频通话...」动画指示器，10 秒后自动消失并触发来电 UI
 208. **摄像头预览** — 全屏通话界面显示用户摄像头画面（主画面）和 AI 头像（画中画），支持点击切换大小画面位置
-209. **摄像头截图** — 每条用户语音消息发送时自动截取当前摄像头画面，以 base64 JPEG 附加到消息中，AI 可以看到用户
-210. **前后摄像头切换** — 通话界面 🔄 按钮支持前后摄像头切换
-211. **语音复用** — 通话中的语音录音/ASR/TTS 完全复用现有语音唤醒系统，使用相同的 1.5 秒静音截断 + VAD 检测
-212. **Android 原生摄像头桥** — WebView 非安全上下文（HTTP 局域网）无法调用 `getUserMedia({video})`，通过 `CameraBridge.java` 使用 legacy Camera API 采集预览帧，NV21 纯字节数组旋转（不经过 Bitmap），后台线程 JPEG 编码，`setPreviewCallbackWithBuffer` 避免 GC 冻结，JS 通过 `requestAnimationFrame` 轮询 `getFrame()` 获取已旋转的 base64 JPEG
-213. **开关控制** — 聊天配置面板中「视频通话」开关控制 AI 是否具有发起视频通话的能力（`[视频电话]` 指令是否注入 prompt），用户主动发起不受开关影响
-214. **前端指令过滤** — 流式输出时前端实时 strip `[视频电话]`，用户看不到原始指令
-215. **消息保存** — 通话中的语音消息正常保存到聊天记录，截图作为图片附件一并存储
-216. **Chrome 兼容** — PC/手机 Chrome 浏览器使用标准 `getUserMedia` API 获取摄像头，无需原生桥；Android WebView 自动 fallback 到 `CameraBridge`
+209. **按住录制** — 通话界面底部「🎙 按住录制」按钮，按住开始录制视频+音频，松手停止并自动发送。支持上滑取消录制，最长录制 60 秒（自动停止）
+210. **浏览器双轨录制** — PC/手机 Chrome 使用双 MediaRecorder：一轨录制视频+音频（WebM），一轨单独录制音频（用于 ASR 转写），确保视频和转写文本同时获得
+211. **Android 原生视频录制** — `VideoBridge.java` 使用 MediaCodec(H.264) + MediaCodec(AAC) + MediaMuxer 编码 MP4，复用 CameraBridge 的 NV21 预览帧和 AudioBridge 的 PCM 音频帧，录制期间摄像头预览不中断
+212. **视频片段附件** — 录制完成后上传视频文件，ASR 转写音频，构建 `{type: "video_clip", url, duration, transcript}` 附件发送到聊天
+213. **Gemini 视频理解** — 当前消息的视频以 inline_data 发送给 Gemini（支持 video/mp4、video/webm），AI 可以同时理解画面和音频内容；历史消息中的视频片段仅保留转写文本 `[视频通话] {transcript}`，不重复发送视频数据
+214. **视频气泡** — 聊天记录中视频片段以渐变色气泡展示（📹 图标 + 时长），点击可全屏播放
+215. **前后摄像头切换** — 通话界面 🔄 按钮支持前后摄像头切换
+216. **不活跃自动挂断** — 120 秒内无任何录制操作自动挂断通话
+217. **开关控制** — 聊天配置面板中「视频通话」开关控制 AI 是否具有发起视频通话的能力（`[视频电话]` 指令是否注入 prompt），用户主动发起不受开关影响
+218. **前端指令过滤** — 流式输出时前端实时 strip `[视频电话]`，用户看不到原始指令
+
+### AI 生图（[SELFIE:xxx] / [DRAW:xxx]）
+400. **AI 自主生图** — AI 在回复中输出 `[SELFIE:prompt]`（自拍/角色一致性生图）或 `[DRAW:prompt]`（自由创作生图）指令，后端自动检测并异步调用 Gemini 生图 API
+401. **SELFIE 模式** — 附带 `public/生图锚点.jpg` 作为参考图片（base64 inlineData），Gemini 基于参考图生成角色一致的新图片，适合 AI 发自拍
+402. **DRAW 模式** — 纯文本 prompt 自由生图，不附带参考图，适合 AI 画画/创作
+403. **异步非阻塞** — 生图任务通过 `asyncio.create_task()` 在后台执行，不阻塞聊天流和页面操作。生图期间用户可继续发消息、切换页面
+404. **加载指示器** — 检测到生图指令后在 AI 消息下方显示「🎨 {AI名} 正在发送图片 ● ● ●」橙色主题弹跳动画（renderMessages 重建后自动恢复）
+405. **图片消息** — 生图完成后，图片保存到 `data/uploads/img_gen_{timestamp}.{ext}`，创建新 assistant 消息（附带图片附件），通过 WebSocket 广播 `msg_created` + `image_gen_done` 事件
+406. **图片查看器** — 聊天中的图片点击后弹出全屏 lightbox，支持保存图片（浏览器用 blob 下载，Android App 通过 `AionImageSaver` 原生桥接写入相册）
+407. **前端指令过滤** — 流式输出时前端实时 strip `[SELFIE:xxx]` 和 `[DRAW:xxx]`，用户看不到原始指令
+408. **TTS 过滤** — TTS 合成时自动剥除 `[SELFIE:...]` 和 `[DRAW:...]` 内容，不会被语音朗读
+409. **开关控制** — 聊天配置面板中「AI 生图」开关控制 AI 是否具有生图能力（指令是否注入 prompt），关闭后 AI 不会尝试生图
+410. **Gemini API** — 使用 `gemini-3.1-flash-image-preview` 模型，REST `generateContent` 端点，`responseModalities: ["IMAGE", "TEXT"]`，120 秒超时
+411. **三处统一** — send_message、regenerate、Core/语音/定时触发三套 `_bg_generate` 函数均支持生图指令检测和异步生图
+
+### AI 生图工作流程
+```
+【AI 触发生图（正常聊天 / 语音 / Core 主动发言）】
+  AI 回复包含 [SELFIE:穿着白裙子在花园里] 或 [DRAW:一只飞翔的龙]
+  → 后端 regex 检测 → 从显示文本和数据库中 strip 掉
+  → SSE 发 image_gen_start 事件 + WebSocket 广播
+  → 前端显示「🎨 正在发送图片」橙色指示器
+  → asyncio.create_task(_do_image_gen(...))
+
+【异步生图（_do_image_gen）】
+  ├ SELFIE 模式：读取 public/生图锚点.jpg → base64 编码 → 作为 inlineData 附加到请求
+  ├ DRAW 模式：仅发送文本 prompt
+  → POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent
+    requestBody: { contents: [{parts: [...]}], generationConfig: {responseModalities: ["IMAGE", "TEXT"]} }
+  → 解析 response → 提取 inlineData（base64 图片数据）
+  → 保存到 data/uploads/img_gen_{timestamp}.{ext}
+  → 创建 assistant 消息（附带图片附件 URL）
+  → WebSocket 广播 msg_created + image_gen_done
+  → 前端移除指示器 + 渲染新消息（含图片）
+
+【生图失败】
+  → WebSocket 广播 image_gen_failed
+  → 前端移除指示器
+
+【图片保存（全屏查看器）】
+  点击图片 → 全屏 lightbox
+  ├ 浏览器：fetch → blob → createObjectURL → <a download> 模拟点击
+  └ Android App：fetch → blob → FileReader → base64 → AionImageSaver.save() → MediaStore 写入相册
+```
+215. **消息保存** — 通话中的视频片段正常保存到聊天记录，视频文件上传到 `data/uploads/`，转写文本存入附件数据
+216. **Chrome 兼容** — PC/手机 Chrome 浏览器使用标准 `getUserMedia` API 获取摄像头+麦克风，无需原生桥；Android WebView 自动 fallback 到 `CameraBridge` + `AudioBridge` + `VideoBridge`
 
 ### 视频通话工作流程
 ```
 【用户主动发起】
   点击 📹 按钮 → 3 秒等待（播放铃声动画）→ 进入通话界面
   → 启动摄像头（getUserMedia 或 AionCamera 原生桥）
-  → 启动语音录音（复用语音唤醒 AudioBridge）
-  → 循环：
-    ├ VAD 检测 + 1.5 秒静音截断 → ASR 识别
-    ├ 截取摄像头画面 → base64 JPEG 附加到消息
-    ├ 发送消息到聊天（含截图）→ AI 回复 + TTS
-    └ TTS 播完 → 继续录音
-  → 挂断 → 停止摄像头 + 录音
+  → 启动音频流（仅预热，不录制）
+  → 底部显示「🎙 按住录制」按钮 + 挂断按钮
+
+【按住录制（核心交互）】
+  按下录制按钮 → 开始录制：
+    浏览器：双 MediaRecorder（视频+音频 WebM / 纯音频 WebM）
+    Android：AionVideo.startRecord() → MediaCodec H.264 + AAC + MediaMuxer
+  → 界面显示录制计时 + 红色脉冲动画
+  → 上滑进入「取消区域」→ 松手取消录制
+  → 正常松手 → 停止录制：
+    浏览器：双 Blob → 上传视频 + ASR 转写音频
+    Android：AionVideo.stopRecord() → base64 MP4 → 上传 + 收集的 PCM 帧构建 WAV → ASR
+  → 构建 {type:"video_clip", url, duration, transcript}
+  → POST 发送消息到聊天（视频 inline_data 发给 Gemini）
+  → AI 回复 + TTS → 录制按钮暂时禁用
+  → TTS 播完 → 恢复录制按钮 → 等待下次按住
 
 【AI 主动发起】
   AI 回复包含 [视频电话] → 后端检测 → 从显示文本 strip
@@ -328,6 +426,20 @@
   → 用户接听 → 进入通话界面（同上）
   → 用户挂断/超时 → 取消
 
+【历史消息处理】
+  当前消息 → 视频以 inline_data 发送给 Gemini（AI 看到画面+听到音频）
+  历史消息 → 仅保留转写文本「[视频通话] {transcript}」（不重复发送视频）
+  记忆总结/哨兵 → 仅使用转写文本
+
+【Android 原生视频录制桥（VideoBridge.java）】
+  JS 调用 AionVideo.startRecord(width, height)
+  → 创建 MediaCodec 视频编码器（H.264, NV12）+ 音频编码器（AAC, 16kHz mono）
+  → MediaMuxer 准备写入临时 MP4 文件
+  → CameraBridge.processFrame() 中转发 NV21 帧 → NV21→NV12 转换 → 送入视频编码器
+  → AudioBridge 录音线程中转发 PCM 帧 → 送入音频编码器
+  → 编码输出同步写入 MediaMuxer
+  → JS 调用 AionVideo.stopRecord() → flush + stop → 读取 MP4 文件 → base64 返回
+
 【Android 原生摄像头桥（CameraBridge.java）】
   JS 调用 AionCamera.start("user"|"environment")
   → Camera.open() → 设置 640×480 NV21 预览
@@ -336,7 +448,8 @@
   → 后台 ExecutorService 线程：
     ├ NV21 纯字节数组旋转（rotateNV21_CW90/270/180，~1ms）
     ├ YuvImage.compressToJpeg（已旋转的竖屏 JPEG）
-    └ Base64 编码 → 更新 lastFrameB64
+    ├ Base64 编码 → 更新 lastFrameB64
+    └ 录制中？→ 转发旋转后的 NV21 帧给 VideoBridge.onVideoFrame()
   → JS requestAnimationFrame 轮询 getFrame() → 更新 <img>.src
 ```
 
@@ -851,6 +964,39 @@
   → 可删除 → DELETE /api/gift/{id}（同步清理图片文件）
 ```
 
+### 奥罗斯财团（基金持仓监控）
+326. **持仓管理** — SQLite `fund_holdings` 表存储基金持仓信息（代码、名称、份额、平均成本、总成本、跌幅/涨幅预警阈值），前端支持添加/编辑/删除，持仓列表可折叠收起
+327. **数据拉取（不涉及 AI）** — 使用 akshare 拉取所有持仓基金的最新净值和涨跌幅（`fund_open_fund_daily_em` + `fund_open_fund_info_em` 兜底），新浪财经接口拉取上证指数实时涨跌。根据持仓计算当前市值、浮盈亏金额/百分比，检查是否触发预警阈值。拉取结果缓存到 `fund_cache.json`，刷新页面后仍可显示
+328. **历史走势查询** — `fund_open_fund_info_em` 拉取最近 N 天净值走势，分析时注入近 30 日走势摘要（最低/最高/整体趋势）
+329. **AI 分析** — 将持仓数据 + 历史走势 + 大盘背景 + 用户投资倾向拼成结构化 prompt，连同世界书人设 + 最近 20 条聊天上下文一起发送给当前聊天模型。AI 回复作为 assistant 消息插入聊天 + TTS 语音播报 + WebSocket 广播
+330. **每日定时分析** — `FundScheduler` 后台线程每 30 秒检查，交易日 14:45 自动触发分析。使用 `chinese_calendar.is_workday()` 判断交易日（自动处理周末 + 中国法定节假日含调休）
+331. **功能开关** — 顶部 toggle 开关，状态持久化在 `fund_config.json`，关闭后定时任务不触发、不影响其他功能
+332. **投资倾向** — 可编辑的文本框，保存后在 AI 分析时注入 prompt（如"计划买入黄金，等合适坑位"），帮助 AI 给出更贴合的建议
+333. **手动操作** — 「🔄 刷新数据」仅拉取数据不调 AI；「📊 立即分析」拉数据 + 调 AI + TTS，操作不阻塞页面，可自由切换到其他页面
+334. **主页入口** — home.html APPS 数组增加「奥罗斯财团」（`/fund`）
+
+### 奥罗斯财团工作流程
+```
+【手动刷新数据（不调 AI）】
+  点击「🔄 刷新数据」→ POST /api/fund/fetch
+  → akshare 拉取全量基金日数据 + 新浪财经拉取上证指数
+  → 逐只匹配持仓基金，计算盈亏、检查预警
+  → 缓存到 fund_cache.json → 返回前端渲染
+
+【手动/定时 AI 分析】
+  点击「📊 立即分析」→ POST /api/fund/analyze（或 14:45 定时触发）
+  → 拉取持仓数据 + 30 日历史走势
+  → 生成分析 prompt（持仓明细 + 走势摘要 + 大盘 + 投资倾向）
+  → 组装消息（世界书人设 + 20 条上下文 + prompt）
+  → stream_ai() 流式调用当前模型
+  → 插入系统消息「💰 奥罗斯财团 — 基金持仓分析」+ AI 回复
+  → TTS 语音播报 + WebSocket 广播到聊天页
+
+【定时任务（FundScheduler）】
+  后台线程每 30 秒检查 → 14:45 + 交易日 + 开关开启 → 触发 run_fund_analysis()
+  → 等待到 14:46 避免重复触发
+```
+
 ### 浏览器保活 & 系统通知
 105. **静音音频保活** — 页面加载后自动创建 AudioContext 播放无声音频（30秒循环），防止手机浏览器后台休眠导致 WebSocket 断连和闹铃失效
 106. **Web Notification** — 闹铃触发和监控提醒时通过 `Notification API` 发送系统级推送通知，即使浏览器在后台也能看到
@@ -858,8 +1004,9 @@
 ### Android 原生 App（AionApp / Aion Oloth）
 107. **WebView 壳应用** — Java Android 项目，WebView 加载 chat.html，支持文件上传、麦克风权限、全屏沉浸
 108. **双地址启动页** — LauncherActivity 提供「家庭WiFi」和「Tailscale」两个地址入口，支持「记住选择」下次自动进入
-109. **原生录音桥 AudioBridge** — 绕过 WebView 中 `getUserMedia` 需要 HTTPS 的限制，使用 Android 原生 `AudioRecord`（16kHz, VOICE_RECOGNITION）录音，通过 `@JavascriptInterface` 将 base64 PCM 数据回调到 JS
-110. **手势导航适配** — 兼容 Vivo X300 Pro 等全面屏手势导航，返回键弹出对话框（切换地址 / 退出 / 取消）
+109. **原生录音桥 AudioBridge** — 绕过 WebView 中 `getUserMedia` 需要 HTTPS 的限制，使用 Android 原生 `AudioRecord`（16kHz, VOICE_RECOGNITION）录音，通过 `@JavascriptInterface` 将 base64 PCM 数据回调到 JS。视频录制期间自动转发 PCM 帧给 VideoBridge
+110. **原生视频录制桥 VideoBridge** — MediaCodec(H.264) + MediaCodec(AAC) + MediaMuxer 编码 MP4，复用 CameraBridge 的视频帧和 AudioBridge 的音频帧进行视频录制，录制期间摄像头预览不中断。JS 通过 `window.AionVideo` 接口控制录制（`startRecord`/`stopRecord`/`cancel`），`stopRecord` 返回 base64 编码的 MP4 数据
+111. **手势导航适配** — 兼容 Vivo X300 Pro 等全面屏手势导航，返回键弹出对话框（切换地址 / 退出 / 取消）
 
 ### Android 前台推送服务（AionPushService）
 115. **前台服务 + 独立 WebSocket** — `AionPushService` 作为 Android 前台服务运行，通过 OkHttp 维持独立于 WebView 的 WebSocket 长连接（`/ws`），不依赖页面生命周期
@@ -1158,6 +1305,7 @@
 | `music` | 音乐卡片数据：主推荐歌曲 + 候选列表 |
 | `poi_search` | POI 搜索触发：含 msg_id + categories，前端显示蓝色搜索指示器 |
 | `toy_command` | 玩具控制指令：含 commands 数组 + msg_id |
+| `image_gen_start` | AI 生图开始：含 msg_id + prompt + is_selfie，前端显示橙色生图指示器 |
 | `debug` | Debug 数据：模型名、token 用量、召回记忆、完整 prompt |
 | `done` | 流结束 |
 
@@ -1183,6 +1331,9 @@
 | `tts_chunk` | TTS 音频分片推送（含 msg_id/seq/url），前端收到即加入播放队列 |
 | `tts_done` | TTS 合成完毕通知（含 msg_id），前端标记该消息队列已结束，播完最后一片后清理 |
 | `tts_state` | 客户端→服务端：TTS 开关/音色同步（`{enabled, voice}`），服务端据此判断是否需要合成 |
+| `image_gen_start` | AI 生图开始广播（SSE + WS 双通道） |
+| `image_gen_done` | AI 生图完成广播（含 conv_id），前端移除指示器 |
+| `image_gen_failed` | AI 生图失败广播（含 conv_id），前端移除指示器 |
 
 ### 消息角色说明
 | 角色 | 说明 | 是否显示在聊天 |
@@ -1206,6 +1357,8 @@
    - [SCHEDULE_DEL:id]      — 删除日程（始终可用）
    - [TOY:1]~[TOY:9]        — 控制玩具预设档位（仅密语模式开启时）
    - [TOY:STOP]             — 停止玩具（仅密语模式开启时）
+   - [SELFIE:prompt]        — AI 自拍生图（附带参考图，仅 AI 生图开关开启时）
+   - [DRAW:prompt]          — AI 自由画图（仅 AI 生图开关开启时）
    - 【当前日程列表】         — 活跃日程/闹铃一览
    - 【位置信息】             — 当前地址 + 实时天气 + 离家距离 + 状态（仅有有效坐标时注入）
 4. 当前准确时间                                                    ← ⚡缓存分界点
@@ -1326,6 +1479,24 @@
 **解决**：`except Exception` 兜底 + `finally: manager.disconnect(ws)` 确保任何原因断开都清理。
 **教训**：**WebSocket 端点的异常处理不要只 catch 特定异常，用 `except Exception` + `finally` 确保连接清理。**
 
+### 坑 10：CLI 管线图片不能用 base64 内嵌
+**现象**：用户在 Aion 私聊（Gemini CLI）和 Connor 私聊/群聊（Codex CLI）发送图片时报错。Gemini CLI: `Separator is not found, and chunk exceed the limit`；Codex CLI: `Input exceeds the maximum length of 1048576 characters`。
+**原因**：CLI 工具通过 stdin 管道接收 prompt，有长度限制（Codex CLI 明确 1MB 上限）。一张普通照片 base64 编码后几百 KB 到几 MB，直接内嵌必然超限。而 Gemini 原生 API 通过 HTTP POST JSON body 传输，几乎无大小限制，所以同样的 base64 方式在 API 调用中没问题。
+**解决**：CLI 管线改为传本地文件绝对路径，让 CLI 自行读取文件。API 管线（硅基流动/Gemini 原生）保持 base64 不变。
+**教训**：**不同 AI 调用方式对输入大小的限制不同。CLI stdin 有长度上限，不能简单复用 API 的 base64 方案。CLI 工具原生支持读取本地文件路径，应该利用这个能力。**
+
+### 坑 11：`fetch_merged_timeline` 的 room_id 参数语义混淆
+**现象**：Connor 私聊窗口合并时间线查询不到任何群聊消息，只能看到自己的私聊历史。
+**原因**：`fetch_merged_timeline(who, limit, room_id=room_id)` 中的 `room_id` 参数用于指定**群聊房间**ID，但 `build_connor_1v1_prompt` 错误地传入了 1v1 私聊的 room_id。函数内部用这个 room_id 去 `chatroom_rooms` 表查 `type='group'` 的房间，自然查不到。
+**解决**：Connor 1v1 调用时不传 `room_id`，让函数自动查找最新的群聊房间。
+**教训**：**函数参数语义不明确时容易误传。`room_id` 这个参数名无法区分是私聊房间还是群聊房间，应该在文档/注释中明确标注参数用途。**
+
+### 坑 12：Connor 群聊管线手动转纯文本丢失附件
+**现象**：Connor 群聊回复时看不到用户发送的图片，即使 `_build_cli_prompt` 已经支持附件处理。
+**原因**：`_reply_connor` 在调用 `stream_connor_cli` 之前，先把 `connor_history`（含 attachments）手动转为纯文本字符串（遍历 content 拼接），然后 `stream_connor_cli(prompt_text)` 再包装成 `[{"role": "user", "content": text}]`。附件信息在手动转文本这一步就已丢失，`_build_cli_prompt` 的附件处理逻辑永远触发不到。
+**解决**：`stream_connor_cli` 新增 `messages` 参数，`_reply_connor` 直接传 `connor_history`（保留 attachments），跳过手动转文本步骤。
+**教训**：**修复底层函数（`_build_cli_prompt`）时，必须检查整条调用链是否有中间层把信息提前丢弃了。"数据在到达修复点之前就已经丢失"是很隐蔽的 bug。**
+
 ### 最终技术方案总结
 | 组件 | 技术选型 | 关键参数 |
 |------|---------|---------|
@@ -1384,6 +1555,94 @@ python main.py
 
 ## 更新日志
 
+### 2026-05-10 — CLI 图片管线修复 + Connor 跨窗口上下文 + 多场景群聊集成
+
+**背景**：
+1. Connor 私聊窗口看不到群聊消息（`build_connor_1v1_prompt` 传了 1v1 的 room_id 给 `fetch_merged_timeline` 的 `room_id` 参数，但该参数是用于指定群聊房间的，导致 0 条群聊消息被合并）
+2. 闹铃/监控/哨兵/cam_check 等触发场景只能看到私聊历史，无法感知群聊上下文
+3. 通过 Gemini CLI 和 Codex CLI 发送图片全部报错（Gemini CLI: `Separator is not found, and chunk exceed the limit`；Codex CLI: `Input exceeds the maximum length of 1048576 characters`）
+
+**改动内容**：
+
+1. **`ai_providers.py` — `_build_cli_prompt` 图片/音频本地路径传递**
+   - 旧方式：完全忽略 messages 中的 `attachments` 字段
+   - 中间尝试：将图片转 base64 内嵌到 prompt 文本 → 失败（base64 编码后轻松超过 CLI stdin 的长度限制）
+   - 最终方案：解析附件为本地绝对路径，直接写入 prompt 文本，由 CLI 自行读取文件
+   - 支持 image/* 和 audio/* 两类附件，结构化附件（voice/video dict）跳过（已有 transcript 文本兜底）
+
+2. **`chatroom.py` — `stream_connor_cli` 支持 messages 列表**
+   - 新增 `messages` 参数，可直接传入完整消息列表（保留附件），不再强制转为纯文本
+   - 传入 messages 时自动注入 Connor persona 作为 system 消息
+
+3. **`chatroom.py` — `build_connor_1v1_prompt` → `build_connor_1v1_context`**
+   - 从返回纯文本 prompt 改为返回 messages 列表，timeline 消息保留 attachments 字段
+   - 修复 `room_id` 参数误传问题（不再传 1v1 room_id 给 `fetch_merged_timeline`）
+
+4. **`routes/chatroom.py` — Connor 群聊/私聊管线改造**
+   - `_reply_connor`（群聊）：不再手动将 history 转为纯文本（丢失附件），直接传 `connor_history` 给 `stream_connor_cli(messages=...)`
+   - `_generate_connor_reply`（私聊）：改用 `build_connor_1v1_context` + `stream_connor_cli(messages=...)`
+
+5. **`schedule.py` — 闹铃/监控触发集成群聊上下文**
+   - `_fire_alarm`、`_fire_monitor`：使用 `fetch_merged_timeline` 替代原来只查私聊的逻辑，懒导入避免循环依赖
+
+6. **`camera.py` — 哨兵/cam_check 集成群聊上下文**
+   - `_call_core`（哨兵 Core 唤醒）、`perform_cam_check`（主动查看监控）：同样使用 `fetch_merged_timeline`，懒导入避免循环依赖
+
+**不影响的线路**：硅基流动（`build_multimodal_messages`，base64 内嵌 API JSON）和 Gemini 原生 API（`build_gemini_contents`，base64 内嵌 `inline_data`）的图片处理方式不变
+
+**踩坑记录**：见下方坑 10、坑 11、坑 12
+
+### 2026-05-09 — 统一时间线上下文 + 统一记忆总结
+
+**背景**：之前 Aion 私聊只能看到私聊历史，群聊只能看到群聊历史，两个 AI 的记忆总结也各自独立（Connor 私聊和群聊分别总结，群聊记忆还要同步一份到 Aion 主库）。改为统一时间线，让每个 AI 都能同时看到私聊和群聊内容，记忆总结也合并处理。
+
+**改动内容**：
+
+1. **新增 `context_builder.py`** — 统一上下文构建模块：
+   - `fetch_merged_timeline(who, limit, *, conv_id, room_id)`：同时查询 `messages` 和 `chatroom_messages` 两张表，按 `created_at` 合并排序，返回统一时间线
+   - `render_merged_timeline(merged, who)`：将合并时间线转为 AI 历史格式，私聊/群聊混合时自动插入场景切换标记 `[以下为群聊记录]` / `[以下为私聊记录]`，消息前缀带 `[群聊]` / `[私聊]` 标签
+   - `build_ability_block()`、`build_memory_blocks()`、`strip_tool_commands()` 等工具函数从各处抽取统一
+
+2. **`routes/chat.py`** — Aion 私聊上下文统一：
+   - `send_message`、`edit_resend`、`regenerate` 三个函数的历史构建改为 `fetch_merged_timeline("aion")` + `render_merged_timeline()`，Aion 在私聊中也能看到群聊内容
+
+3. **`chatroom.py`** — 群聊上下文 + Connor 记忆统一：
+   - `build_aion_group_context()` / `build_connor_group_context()`：改用统一时间线，移除旧的跨窗口上下文注入
+   - `digest_chatroom()`：合并 Connor 1v1 + 群聊消息统一总结，使用 `connor_unified` 锚点，scope 固定为 `"connor"`，删除"群聊记忆同步写入 Aion 主库"逻辑（两个 AI 各管各的记忆）
+   - `_connor_1v1_auto_digest_loop()`：不再查找特定房间，直接调用 `digest_chatroom()` 统一总结
+   - `connor_1v1_on_message()`：群聊消息也触发计时器重置
+
+4. **`memory.py`** — Aion 记忆总结统一：
+   - `_do_digest()`：在私聊消息基础上追加查询群聊 `chatroom_messages`，标记 `_source`（private/group），混合来源时消息格式带 `[群聊]` / `[私聊]` 标签
+
+5. **`main.py`** — 自动总结空闲检测增强：
+   - `_auto_digest_loop()`：同时检查 `messages` 和 `chatroom_messages` 两张表的最后用户消息时间，避免群聊活跃时误触发私聊自动总结
+
+6. **`routes/chatroom.py`** — 触发器扩展：
+   - `_save_msg()`：群聊消息也触发 `connor_1v1_on_message()` 重置自动总结计时器
+
+7. **Bug 修复**：
+   - 流式输出气泡残留原始指令：`aion_done` / `connor_done` 事件用服务端清洗后的内容替换 streamingText
+   - 闹铃/日程创建时缺少系统消息：在 `process_schedule_commands` 之前预检测指令并插入系统提示
+   - 音乐点歌后不自动播放：添加 `autoplay: True` 参数
+
+### 2026-05-08 — Gemini CLI 本地调用接入
+
+**背景**：Gemini CLI（`@google/gemini-cli`）支持通过 Google OAuth 免费调用 Gemini 模型，无需 API Key。将其作为第四种 AI 调用方式集成到项目中。
+
+**改动内容**：
+1. **`ai_providers.py`**：
+   - 新增 `_find_gemini_script()`：自动定位全局安装的 gemini CLI 脚本（npm root -g 方式 + gemini.cmd 位置推导）
+   - 新增 `_build_cli_prompt(messages)`：将 messages 列表拼成 `[System Instruction] / [User] / [Assistant]` 格式的完整 prompt
+   - 新增 `call_gemini_cli()` 异步生成器：通过 `asyncio.create_subprocess_exec` 启动 CLI 子进程，stdin 传入 prompt（绕过 Windows 命令行 8K 长度限制），流式读取 stdout 并 yield
+   - `stream_ai()` 新增 `gemini_cli` provider 路由分支
+2. **`config.py`**：`MODELS` 字典新增 `CLI-2.5pro`、`CLI-3.1pro`、`CLI-2.5flash` 三个模型
+3. **新增 `cli线部署教程.md`**：面向朋友的 CLI 线路部署指南
+
+**使用方式**：聊天界面右上角切换模型到 `CLI-xxx`，其余（人设、记忆、指令解析、TTS）全部照常工作。不需要额外启动任何服务。
+
+**部署前置**：`npm install -g @google/gemini-cli` + 首次运行 `gemini` 完成 OAuth 认证
+
 ### 2026-04-08 — UI 多页面拆分重构
 
 **背景**：原 chat.html 单文件近 4000 行，所有功能（设置/世界书/记忆库/日程/摄像头/监控日志/定位）以模态弹窗形式耦合在聊天页内，维护和扩展困难。
@@ -1426,6 +1685,45 @@ python main.py
    - 点击「密语时刻」→ 关闭浮层 + 调用 `window.parent.openWhisper()`
 
 **涉及文件**：`routes/chat.py`（后端核心）、`static/chat.html`（前端浮层 + 导航改造）、`static/home.html`（iframe 适配）
+
+### 动态壁纸（独立显示器全屏壁纸 + AI 气泡）
+500. **全屏壁纸轮播** — 独立页面 `/wallpaper`，用于副屏全屏展示。支持图片和视频轮播，可配置轮换间隔（秒），视频播放完毕后自动切换下一个。全屏铺满（`object-fit: cover`），无黑边
+501. **淡入淡出过渡** — 双缓冲架构（两个媒体层交替），切换时新层在旧层上方 1.5 秒淡入，旧层在过渡完成后移除，确保无黑屏闪烁
+502. **资源就绪检测** — 图片通过轮询 `img.complete` + `naturalWidth`、视频通过轮询 `readyState >= 2` 确认资源就绪后再激活淡入，避免黑屏。保底超时（图片 2 秒 / 视频 3 秒）确保不会永远卡住
+503. **键盘操控** — `←` / `→` 方向键手动切换上/下一张壁纸，`F` 键切换全屏，`ESC` 退出全屏或锚点编辑模式。600ms 冷却保护防止快速按键导致黑屏
+504. **AI 聊天气泡** — 通过 WebSocket 接收 `msg_created` 事件，筛选 `role=assistant` 的消息，以半透明毛玻璃气泡显示在画面上。自动清洗 `[MUSIC:...]`、`[ALARM:...]`、`[REMINDER:...]`、`[Monitor:...]`、`[TOY:...]` 等指令标记和 Markdown 格式符号。气泡按 `\n\n` 自动拆分为多条，淡入显示，可配置自动消失时长（默认 12 秒）
+505. **气泡锚点系统** — 每张壁纸可独立设置气泡显示位置（百分比坐标），适应不同图片的人物位置。设置面板点击「编辑当前锚点」进入编辑模式，点击画面设定锚点位置，ESC 或右键退出
+506. **设置面板** — 鼠标移到屏幕底部边缘或双击打开设置面板，可配置：轮换间隔、气泡显示时长、启用/禁用单个壁纸文件、上传新壁纸、编辑气泡锚点。点击缩略图切换启用/禁用，右键缩略图跳转到该壁纸
+507. **Chrome App 模式启动** — `启动壁纸.bat` 使用 `chrome.exe --app=... --start-fullscreen` 启动，无地址栏/标签栏/边框，等同于独立桌面程序。关闭壁纸窗口不影响服务器和聊天
+508. **配置持久化** — 壁纸配置（轮换间隔、文件启用状态、气泡锚点坐标）存储在 `data/wallpaper_config.json`
+509. **完全独立** — 壁纸页面独立运行，与聊天系统仅通过 WebSocket 单向接收消息，开关壁纸不影响任何其他功能
+
+### 动态壁纸工作流程
+```
+【启动壁纸】
+  双击 启动壁纸.bat → Chrome --app 模式全屏打开 /wallpaper
+  → 加载 wallpaper_config.json + 扫描 public/wallpaper/ 目录
+  → 构建播放列表（排除 enabled=false 的文件）
+  → 显示第一张壁纸 → 启动轮换定时器 → 连接 WebSocket
+
+【壁纸轮播】
+  定时器到期（图片）/ 视频播放结束 → 切换下一个：
+    ├ 新层加载资源 → 轮询就绪状态（img.complete / video.readyState ≥ 2）
+    ├ 就绪后激活淡入（opacity 0→1，1.5 秒 CSS transition）
+    ├ 旧层 1.6 秒后隐藏并清理 DOM
+    └ 更新气泡锚点位置
+
+【AI 气泡显示】
+  WebSocket 收到 {type: "msg_created", data: {role: "assistant", content: "..."}}
+  → cleanAIText() 清洗指令标记和 Markdown 格式
+  → 按 \n\n 拆分为多条 → 逐条创建气泡 DOM（最多 5 条）
+  → 气泡淡入显示 → N 秒后自动淡出消失
+
+【锚点编辑】
+  设置面板 → 编辑当前锚点 → 进入编辑模式（crosshair 光标）
+  → 点击画面任意位置 → 保存百分比坐标到 config.files[name].bubble_anchor
+  → 实时更新气泡容器位置 → ESC/右键退出编辑模式
+```
 
 ## 注意事项
 - 搬迁目录后需修改 `一键启动.bat` 中的路径（第11行 `cd /d` 后面的绝对路径）

@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="/static/common.css">
 <style>
 /* ── 书库视图 ── */
-.library-view { display: flex; flex-direction: column; height: 100%; }
+.library-view { display: flex; flex-direction: column; flex: 1; min-height: 0; height: 100%; }
 .reader-view  { display: none; }
 
 .upload-area {
@@ -858,7 +858,7 @@ function playMusicOnline(songId) {
   if (!wrap) {
     wrap = document.createElement('div');
     wrap.id = 'globalMusicWrap';
-    wrap.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999;display:none;align-items:center;gap:8px;background:var(--surface);padding:0 12px;height:36px;box-shadow:0 2px 8px rgba(0,0,0,0.15);border-bottom:1px solid var(--border);';
+    wrap.style.cssText = 'position:fixed;top:max(34px, env(safe-area-inset-top, 0px));left:0;right:0;z-index:999;display:none;align-items:center;gap:8px;background:var(--surface);padding:0 12px;height:36px;box-shadow:0 2px 8px rgba(0,0,0,0.15);border-bottom:1px solid var(--border);';
 
     const playBtn = document.createElement('button');
     playBtn.id = 'globalMusicPlayBtn';

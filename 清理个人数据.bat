@@ -27,6 +27,13 @@ echo     - 源码中硬编码的 API Key (重置为空)
 echo     - 火山引擎 TTS 配置 + 输出
 echo     - 个人笔记/备份文件
 echo     - .vscode 配置
+echo     - 聊天室配置 + 聊天室图片
+echo     - 基金配置 + 基金缓存
+echo     - MCP 服务配置
+echo     - 壁纸配置
+echo     - SSL 证书
+echo     - Gemini CLI 调试日志 (cli_debug/)
+echo     - Connor-Codex 聊天记录 + 人设 + 上传图片 + 日志
 echo.
 echo   !! 请确认这是【复制出来的副本】!!
 echo   !! 不要在你自己的原始文件夹里运行 !!
@@ -79,6 +86,45 @@ mkdir "aion-chat\data\books"
 
 :: ── 清理小剧场角色预设 ──
 if exist "aion-chat\data\theater_personas.json" del /q "aion-chat\data\theater_personas.json"
+
+:: ── 清理聊天室配置 + 图片 ──
+if exist "aion-chat\data\chatroom_config.json" del /q "aion-chat\data\chatroom_config.json"
+if exist "aion-chat\data\chatroom_images" rmdir /s /q "aion-chat\data\chatroom_images"
+
+:: ── 清理基金配置 + 缓存 ──
+if exist "aion-chat\data\fund_config.json" del /q "aion-chat\data\fund_config.json"
+if exist "aion-chat\data\fund_cache.json" del /q "aion-chat\data\fund_cache.json"
+
+:: ── 清理 MCP 服务配置 ──
+if exist "aion-chat\data\mcp_servers.json" del /q "aion-chat\data\mcp_servers.json"
+
+:: ── 清理 Gemini CLI 调试日志 ──
+if exist "aion-chat\data\cli_debug" rmdir /s /q "aion-chat\data\cli_debug"
+
+:: ── 清理聊天室图片缓存 ──
+if exist "aion-chat\data\chatroom_images" rmdir /s /q "aion-chat\data\chatroom_images"
+
+:: ── 清理壁纸配置 ──
+if exist "aion-chat\data\wallpaper_config.json" del /q "aion-chat\data\wallpaper_config.json"
+
+:: ── 清理 SSL 证书 ──
+if exist "aion-chat\data\cert.pem" del /q "aion-chat\data\cert.pem"
+if exist "aion-chat\data\key.pem" del /q "aion-chat\data\key.pem"
+
+:: ── 清理 aion.db 旧数据库 ──
+if exist "aion-chat\data\aion.db" del /q "aion-chat\data\aion.db"
+
+:: ── Connor-Codex 个人数据 ──
+if exist "Connor-Codex\messages.jsonl" del /q "Connor-Codex\messages.jsonl"
+if exist "Connor-Codex\persona.md" (
+    echo. > "Connor-Codex\persona.md"
+)
+if exist "Connor-Codex\auto-responder-state.json" del /q "Connor-Codex\auto-responder-state.json"
+if exist "Connor-Codex\uploads" rmdir /s /q "Connor-Codex\uploads"
+mkdir "Connor-Codex\uploads"
+if exist "Connor-Codex\node_modules" rmdir /s /q "Connor-Codex\node_modules"
+if exist "Connor-Codex\package-lock.json" del /q "Connor-Codex\package-lock.json"
+del /q "Connor-Codex\*.log" 2>nul
 
 :: 重置 settings.json（清空所有 API Key）
 echo {} > "aion-chat\data\settings.json"

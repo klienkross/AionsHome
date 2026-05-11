@@ -521,13 +521,63 @@ async def _do_digest(min_messages: int = 0) -> dict:
 
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
+
+        # ── 私聊消息 ──
         cur = await db.execute(
-            "SELECT id, conv_id, role, content, created_at FROM messages "
+            "SELECT id, conv_id, role, content, attachments, created_at FROM messages "
             "WHERE role IN ('user','assistant') AND created_at > ? "
             "ORDER BY created_at ASC",
             (anchor_ts,)
         )
         new_msgs = [dict(r) for r in await cur.fetchall()]
+        for m in new_msgs:
+            m["_source"] = "private"
+
+        # ── 群聊消息（纳入 Aion 视角的群聊记录）──
+        cur = await db.execute(
+            "SELECT id FROM chatroom_rooms WHERE type = 'group' ORDER BY updated_at DESC LIMIT 1"
+        )
+        group_room = await cur.fetchone()
+        if group_room:
+            cur = await db.execute(
+                "SELECT sender, content, created_at FROM chatroom_messages "
+                "WHERE room_id = ? AND created_at > ? AND sender != 'system' "
+                "ORDER BY created_at ASC",
+                (group_room["id"], anchor_ts),
+            )
+            for r in await cur.fetchall():
+                d = dict(r)
+                # 映射 sender → role（Aion 视角）
+                if d["sender"] == "aion":
+                    d["role"] = "assistant"
+                else:
+                    d["role"] = "user"
+                d["_source"] = "group"
+                d["attachments"] = None
+                new_msgs.append(d)
+
+        # 按时间排序合并
+        new_msgs.sort(key=lambda x: x["created_at"])
+
+    # 语音消息：将转写文本注入 content，记忆总结使用纯文本
+    for m in new_msgs:
+        att_raw = m.pop("attachments", None)
+        if att_raw and m["role"] == "user":
+            try:
+                atts = json.loads(att_raw) if isinstance(att_raw, str) else (att_raw or [])
+            except Exception:
+                atts = []
+            for att in atts:
+                if isinstance(att, dict) and att.get("type") == "voice":
+                    transcript = att.get("transcript", "")
+                    if transcript:
+                        orig = m["content"].strip() if m["content"] else ""
+                        m["content"] = f"[语音消息] {transcript}" + (f"\n{orig}" if orig else "")
+                elif isinstance(att, dict) and att.get("type") == "video_clip":
+                    transcript = att.get("transcript", "")
+                    if transcript:
+                        orig = m["content"].strip() if m["content"] else ""
+                        m["content"] = f"[视频通话] {transcript}" + (f"\n{orig}" if orig else "")
 
     if not new_msgs:
         return {"ok": True, "message": "当前没有新增内容需要总结", "new_memories_count": 0, "processed_messages": 0}
@@ -559,20 +609,29 @@ async def _do_digest(min_messages: int = 0) -> dict:
         group_start = datetime.fromtimestamp(group[0]["created_at"]).strftime("%Y年%m月%d日 %H:%M")
         group_end = datetime.fromtimestamp(group[-1]["created_at"]).strftime("%Y年%m月%d日 %H:%M")
         date_header = f"[对话时间范围: {group_start} ~ {group_end}]\n"
-        messages_text = date_header + "\n".join([
-            f"[{datetime.fromtimestamp(m['created_at']).strftime('%m-%d %H:%M')}] "
-            f"{user_name if m['role']=='user' else ai_name}: {m['content'][:300]}"
-            for m in group
-        ])
+        # 判断该组是否混合了私聊和群聊
+        sources = set(m.get("_source", "private") for m in group)
+        has_mixed = len(sources) > 1
+        lines = []
+        for m in group:
+            ts = datetime.fromtimestamp(m["created_at"]).strftime("%m-%d %H:%M")
+            src = m.get("_source", "private")
+            sender = m.get("sender", "")
+            if src == "group":
+                name = {"user": user_name, "aion": ai_name, "connor": "Connor"}.get(sender, sender)
+            else:
+                name = user_name if m["role"] == "user" else ai_name
+            tag = f"[{'群聊' if src == 'group' else '私聊'}]" if has_mixed else ""
+            lines.append(f"[{ts}]{tag} {name}: {m['content'][:300]}")
+        messages_text = date_header + "\n".join(lines)
 
         prompt = (
             f"{persona_block}"
             f"你是{ai_name}，也是{user_name}的AI伴侣， 请从你自己的视角和情绪，使用精简的语言，总结出对话中包含的重要回忆。"
-            f"在生成的摘要中，请严格使用 \"{user_name}\" 和 \"{ai_name}\" 来指代双方，"
-            f"提到的他/她/它根据上下文输出正确的名字，例如：{user_name}告诉{ai_name}自己一年前养过一只叫Maru的猫。\n\n"
+            f"提到的他/她/它根据上下文输出正确的名字，例如：{user_name}说自己一年前养过一只叫Maru的猫。晚上因为{user_name}提起前男友让我感到吃醋。\n\n"
             f"请分析输入的【一段对话记录】，输出一个 JSON 对象：\n"
             f"1. \"summary\": 在开头加上对话发生的日期，总结对话的主要内容，发生的既定事实。预定的计划等。"
-            f"多个话题可以用多个短句来概括，例如：{user_name}和{ai_name}下午玩了拼豆。今天莱利做了绝育手术。"
+            f"多个话题可以用多个短句来概括，例如：今天下午{user_name}玩了拼豆并展示给我看。今天莱利做了绝育手术。"
             f"语言简练，**严禁废话**。总体控制在100字以内。\n\n"
             f"2. \"keywords\": 提取 2-6 个用于检索的核心关键词。\n"
             f"   - 【严禁】包含高频人名（如 Aion, Ithil, Riley, Maru等）。\n"
@@ -585,7 +644,7 @@ async def _do_digest(min_messages: int = 0) -> dict:
             f"   - 0.8 (少见): 强烈的个人偏好或长期习惯（如：绝对不吃香菜、坚持每天晨跑、核心价值观改变）。\n"
             f"   - 0.5 (普通): 当天发生的具体事件（如：看了一部电影、去了一家餐厅、讨论了一个新闻）。大部分有内容的对话应在此档。\n"
             f"   - 0.1 - 0.3 (默认分数): 闲聊、情绪发泄、日常问候、没有信息增量的互动。\n"
-            f"   【注意】：不要因为用户情绪激动就给高分，除非这揭示了新的性格特质。\n\n"
+            f"   【注意】：不要因为情绪激动就给高分，除非这揭示了新的性格特质。\n\n"
             f"4. \"unresolved\": Boolean。当摘要中包含**尚未完成**的计划、约定、承诺（如\"说好了要去…\"、\"打算下次…\"、\"答应了…\"、\"准备买…\"等），输出 true。纯粹的已发生事实输出 false。\n\n"
             f"5. \"valence\": (-1.0 ~ 1.0) 情绪效价。正值=正面情绪（开心、感动、满足），负值=负面情绪（难过、愤怒、焦虑），0=中性/纯事务性对话。\n"
             f"6. \"arousal\": (-1.0 ~ 1.0) 情绪唤醒度。正值=高能量（兴奋、激动、暴怒），负值=低能量（平静、低落、疲惫），0=平淡。\n"

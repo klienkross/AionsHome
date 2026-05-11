@@ -2,9 +2,9 @@
 摄像头 API + 监控日志 API
 """
 
-import time, asyncio
+import time, asyncio, urllib.request
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
@@ -23,6 +23,7 @@ class CamConfigUpdate(BaseModel):
     quiet_hours_enabled: Optional[bool] = None
     quiet_hours_start: Optional[str] = None
     quiet_hours_end: Optional[str] = None
+    esp32_cam_url: Optional[str] = None
 
 @router.get("/api/cam/cameras")
 async def list_cameras():
@@ -40,6 +41,9 @@ async def cam_status():
         "camera_open": cam.running,
         "monitoring": cam.monitoring,
         "camera_index": cam.cfg["camera_index"],
+        "active_source": cam.cfg.get("active_source", "local"),
+        "esp32_cam_url": cam.cfg.get("esp32_cam_url", ""),
+        "esp32_bridge_active": cam._esp32_bridge_active,
         "auto_interval_min": cam.cfg.get("auto_interval_min", 10),
         "auto_interval_max": cam.cfg.get("auto_interval_max", 20),
         "max_screenshots": cam.cfg["max_screenshots"],
@@ -61,10 +65,13 @@ async def cam_open(camera_index: int = 0):
 
 @router.post("/api/cam/close")
 async def cam_close():
-    if cam._cam_op_lock.locked():
-        return {"ok": False, "message": "摄像头操作进行中，请稍候"}
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, cam.close_camera)
+    if cam.cfg.get("active_source") == "esp32":
+        await loop.run_in_executor(None, cam.close_esp32)
+    else:
+        if cam._cam_op_lock.locked():
+            return {"ok": False, "message": "摄像头操作进行中，请稍候"}
+        await loop.run_in_executor(None, cam.close_camera)
     return {"ok": True}
 
 @router.post("/api/cam/monitor/start")
@@ -102,6 +109,8 @@ async def update_cam_config(body: CamConfigUpdate):
         cam.cfg["quiet_hours_start"] = body.quiet_hours_start
     if body.quiet_hours_end is not None:
         cam.cfg["quiet_hours_end"] = body.quiet_hours_end
+    if body.esp32_cam_url is not None:
+        cam.cfg["esp32_cam_url"] = body.esp32_cam_url.strip()
     save_cam_config(cam.cfg)
     return {"ok": True}
 
@@ -146,3 +155,47 @@ async def get_log_entries(date_str: str):
 async def get_today_logs():
     entries = read_monitor_logs()
     return {"date": time.strftime('%Y-%m-%d'), "entries": entries}
+
+# ── ESP32-CAM 画面源切换 ─────────────────────────
+class SourceSwitch(BaseModel):
+    source: str          # "local" | "esp32"
+    esp32_url: Optional[str] = None
+
+@router.post("/api/cam/source")
+async def switch_cam_source(body: SourceSwitch):
+    if body.source not in ("local", "esp32"):
+        return {"ok": False, "message": "source 只能是 local 或 esp32"}
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(None, lambda: cam.switch_source(body.source, body.esp32_url))
+    return {
+        "ok": ok,
+        "active_source": cam.cfg.get("active_source", "local"),
+        "message": "切换成功" if ok else "切换失败，请检查连接",
+    }
+
+@router.get("/api/cam/esp32/ping")
+async def esp32_ping():
+    url = cam.cfg.get("esp32_cam_url", "").strip()
+    if not url:
+        return {"online": False, "message": "ESP32-CAM URL 未配置"}
+    try:
+        snapshot_url = url.rstrip("/") + "/capture"
+        req = urllib.request.Request(snapshot_url, method="GET")
+        loop = asyncio.get_event_loop()
+        def _ping():
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return len(resp.read()) > 100
+        ok = await loop.run_in_executor(None, _ping)
+        return {"online": ok, "url": url}
+    except Exception as e:
+        return {"online": False, "message": str(e)}
+
+# ── ESP32-CAM App 桥接帧接收 ─────────────────────
+@router.post("/api/cam/esp32/frame")
+async def receive_esp32_frame(request: Request):
+    """接收 App 桥接推来的 JPEG 帧"""
+    jpg_bytes = await request.body()
+    if not jpg_bytes or len(jpg_bytes) < 100:
+        return {"ok": False, "message": "无效数据"}
+    ok = cam.receive_esp32_frame(jpg_bytes)
+    return {"ok": ok}

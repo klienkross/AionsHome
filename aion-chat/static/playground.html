@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>娱乐室 - Aion</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#ff8359">
+<link rel="stylesheet" href="/static/playground.css">
+</head>
+<body data-theme="dark">
+
+<div class="pg-app">
+  <!-- 顶栏 -->
+  <header class="pg-header">
+    <button class="pg-back-btn" onclick="location.href='/'">⬅</button>
+    <h1 class="pg-title">娱乐室</h1>
+    <select class="pg-server-select" id="serverSelect">
+      <option value="">选择服务器...</option>
+    </select>
+  </header>
+
+  <!-- 连接状态卡片 -->
+  <div class="pg-status-card" id="statusCard">
+    <div class="pg-status-icon" id="statusIcon">⚪</div>
+    <div class="pg-status-info">
+      <div class="pg-status-name" id="statusName">未连接</div>
+      <div class="pg-status-detail" id="statusDetail">请选择一个服务器并连接</div>
+    </div>
+    <button class="pg-connect-btn" id="connectBtn" onclick="toggleConnect()">连接</button>
+  </div>
+
+  <!-- 工具列表（连接后显示） -->
+  <div class="pg-tools-panel" id="toolsPanel" style="display:none;">
+    <div class="pg-tools-header" onclick="toggleToolsPanel()">
+      🧰 可用工具 (<span id="toolCount">0</span>)
+      <span class="pg-tools-arrow" id="toolsArrow">▼</span>
+    </div>
+    <div class="pg-tools-list" id="toolsList"></div>
+  </div>
+
+  <!-- 行动日志 -->
+  <div class="pg-log-area" id="logArea">
+    <!-- 历史记录列表（默认显示） -->
+    <div class="pg-history-panel" id="historyPanel">
+      <div class="pg-log-placeholder" id="logPlaceholder">
+        <div class="pg-log-emoji">🎮</div>
+        <div>连接服务器后，输入指令让AI出去探索吧！</div>
+      </div>
+      <div class="pg-history-list" id="historyList"></div>
+    </div>
+    <!-- 当前运行日志（运行时显示） -->
+    <div class="pg-live-log" id="liveLog" style="display:none;"></div>
+  </div>
+
+  <!-- 输入栏 -->
+  <div class="pg-input-bar">
+    <input type="text" class="pg-input" id="instructionInput"
+           placeholder="输入指令，比如「去逛逛，看看大家在聊什么」"
+           onkeydown="if(event.key==='Enter')sendInstruction()">
+    <button class="pg-send-btn" id="sendBtn" onclick="sendInstruction()">出发</button>
+  </div>
+</div>
+
+<script src="/static/playground.js"></script>
+</body>
+</html>

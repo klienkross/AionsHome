@@ -2,10 +2,10 @@
 摄像头监控：CameraMonitor 类、Sentinel 分析、Core 唤醒、监控日志读写
 """
 
-import json, time, re, base64, asyncio, threading, sqlite3, random
+import json, time, re, base64, asyncio, threading, sqlite3, random, urllib.request
 from pathlib import Path
 
-import cv2, aiosqlite
+import cv2, httpx, numpy as np, aiosqlite
 
 from config import (
     DB_PATH, SCREENSHOTS_DIR, MONITOR_LOGS_DIR,
@@ -13,7 +13,7 @@ from config import (
 )
 from database import get_db
 from ws import manager
-from ai_providers import stream_ai
+from ai_providers import stream_ai, CLI_STATUS_PREFIX
 from memory import recall_memories
 from sentinel import call_sentinel
 from tts import TTSStreamer
@@ -147,6 +147,11 @@ class CameraMonitor:
         self.crop_zoom = 1.0
         self.crop_cx = 0.5
         self.crop_cy = 0.5
+        # ESP32-CAM 状态
+        self._esp32_thread = None
+        self._esp32_running = False
+        self._esp32_bridge_active = False  # App 桥接模式
+        self._frame_ts = 0                 # 最新帧的时间戳
 
     def set_event_loop(self, loop):
         self._loop = loop
@@ -260,6 +265,187 @@ class CameraMonitor:
         with self._lock:
             self._latest_frame = None
 
+    # ── ESP32-CAM 支持 ────────────────────────────────
+
+    def open_esp32(self) -> bool:
+        """启动 ESP32-CAM 抓帧（直连 + App 桥接自动切换）"""
+        url = self.cfg.get("esp32_cam_url", "").strip()
+        if not url:
+            print("[ESP32-CAM] URL 未配置")
+            return False
+        self._stop_current_source()
+
+        # 快速探测直连
+        snapshot_url = url.rstrip("/") + "/capture"
+        direct_ok = self._try_direct_fetch(snapshot_url) is not None
+        if direct_ok:
+            print(f"[ESP32-CAM] 直连成功: {url}")
+        else:
+            print(f"[ESP32-CAM] 直连失败，将依赖 App 桥接")
+
+        self._esp32_running = True
+        self._esp32_bridge_active = not direct_ok
+        self.running = True
+        self._esp32_thread = threading.Thread(target=self._esp32_capture_loop, daemon=True)
+        self._esp32_thread.start()
+
+        # 直连失败时，通知 App 启动桥接
+        if not direct_ok and self._loop:
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "esp32_bridge", "data": {"active": True, "url": snapshot_url}}),
+                self._loop
+            )
+        print(f"[ESP32-CAM] 已启动, URL={url}, bridge={self._esp32_bridge_active}")
+        return True
+
+    def close_esp32(self):
+        """停止 ESP32-CAM 抓帧线程"""
+        self._esp32_running = False
+        self.running = False
+        self.monitoring = False
+        # 通知 App 停止桥接
+        if self._esp32_bridge_active and self._loop:
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "esp32_bridge", "data": {"active": False}}),
+                self._loop
+            )
+        self._esp32_bridge_active = False
+        if self._esp32_thread and self._esp32_thread.is_alive():
+            self._esp32_thread.join(timeout=5)
+        self._esp32_thread = None
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=3)
+        self._monitor_thread = None
+        with self._lock:
+            self._latest_frame = None
+        self._frame_ts = 0
+        print("[ESP32-CAM] 已关闭")
+
+    def _try_direct_fetch(self, url: str):
+        """尝试直连 ESP32 拉取一帧，成功返回 frame，失败返回 None"""
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                jpg_data = resp.read()
+            if len(jpg_data) < 100:
+                return None
+            arr = np.frombuffer(jpg_data, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            return frame if frame is not None and frame.size > 0 else None
+        except Exception:
+            return None
+
+    def receive_esp32_frame(self, jpg_bytes: bytes) -> bool:
+        """接收 App 桥接推来的 JPEG 帧"""
+        try:
+            arr = np.frombuffer(jpg_bytes, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if frame is not None and frame.size > 0:
+                with self._lock:
+                    self._latest_frame = frame
+                self._frame_ts = time.time()
+                return True
+        except Exception as e:
+            print(f"[ESP32-CAM] 接收桥接帧失败: {e}")
+        return False
+
+    def _esp32_capture_loop(self):
+        """ESP32 抓帧循环：优先直连，失败时通过 App 桥接"""
+        url = self.cfg.get("esp32_cam_url", "").rstrip("/") + "/capture"
+        fail_count = 0
+        bridge_notified = self._esp32_bridge_active
+        while self._esp32_running:
+            # 尝试直连
+            frame = self._try_direct_fetch(url)
+            if frame is not None:
+                with self._lock:
+                    self._latest_frame = frame
+                self._frame_ts = time.time()
+                fail_count = 0
+                # 直连恢复时关闭桥接
+                if bridge_notified:
+                    bridge_notified = False
+                    self._esp32_bridge_active = False
+                    if self._loop:
+                        asyncio.run_coroutine_threadsafe(
+                            manager.broadcast({"type": "esp32_bridge", "data": {"active": False}}),
+                            self._loop
+                        )
+                    print("[ESP32-CAM] 直连恢复，关闭桥接")
+                time.sleep(0.5)
+                continue
+
+            # 直连失败
+            fail_count += 1
+            if fail_count >= 3 and not bridge_notified and self._loop:
+                # 连续失败 3 次，激活 App 桥接
+                bridge_notified = True
+                self._esp32_bridge_active = True
+                asyncio.run_coroutine_threadsafe(
+                    manager.broadcast({"type": "esp32_bridge", "data": {"active": True, "url": url}}),
+                    self._loop
+                )
+                print(f"[ESP32-CAM] 直连失败 {fail_count} 次，激活 App 桥接")
+            elif fail_count % 20 == 0:
+                print(f"[ESP32-CAM] 连续 {fail_count} 次拉取失败")
+
+            # 桥接模式下不频繁重试直连（App 会推帧过来）
+            if bridge_notified:
+                time.sleep(5)
+            else:
+                time.sleep(min(5, 0.5 + fail_count * 0.3))
+        # 退出时关闭桥接
+        if bridge_notified and self._loop:
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast({"type": "esp32_bridge", "data": {"active": False}}),
+                self._loop
+            )
+        print("[ESP32-CAM] 抓帧线程退出")
+
+    def _stop_current_source(self):
+        """关闭当前正在运行的画面源（本地或 ESP32），不改 cfg"""
+        if self._esp32_running:
+            self._esp32_running = False
+            self.running = False
+            if self._esp32_thread and self._esp32_thread.is_alive():
+                self._esp32_thread.join(timeout=5)
+            self._esp32_thread = None
+        if self.cap or (self._thread and self._thread.is_alive()):
+            # 需要持有锁来关闭本地摄像头
+            if self._cam_op_lock.acquire(blocking=False):
+                try:
+                    self._close_camera_internal()
+                finally:
+                    self._cam_op_lock.release()
+            else:
+                self._cancel_verify = True
+                self.running = False
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=3)
+        self._monitor_thread = None
+        with self._lock:
+            self._latest_frame = None
+
+    def switch_source(self, source: str, esp32_url: str = None) -> bool:
+        """切换画面源: 'local' 或 'esp32'"""
+        was_monitoring = self.monitoring
+        self._stop_current_source()
+        self.monitoring = False
+
+        if esp32_url is not None:
+            self.cfg["esp32_cam_url"] = esp32_url
+        self.cfg["active_source"] = source
+        save_cam_config(self.cfg)
+
+        if source == "esp32":
+            ok = self.open_esp32()
+        else:
+            ok = self.open_camera(self.cfg["camera_index"])
+
+        if ok and was_monitoring:
+            self.start_monitoring()
+        return ok
+
     def _capture_loop(self):
         """采集循环：读帧失败或绿屏超时后触发重连（只重连用户配置的摄像头）"""
         fail_count = 0
@@ -368,7 +554,10 @@ class CameraMonitor:
         if self.monitoring:
             return
         if not self.running:
-            self.open_camera()
+            if self.cfg.get("active_source") == "esp32":
+                self.open_esp32()
+            else:
+                self.open_camera()
         self.monitoring = True
         self.cfg["monitor_enabled"] = True
         save_cam_config(self.cfg)
@@ -520,7 +709,7 @@ call_core判断依据：
 - 结合设备活动动态综合判断：根据上下文分析，如果动态显示{user_name}不符合上下文讨论到的内容，例如：说去睡觉了，却在刷抖音小红书。说去工作了，却在浏览不相干的内容，进行评估，自行决定是否向Core报告情况。"""
 
         img_b64 = base64.b64encode(filepath.read_bytes()).decode()
-        print("[Monitor] 正在调用 Sentinel (qwen3-vl-flash)")
+        print("[Monitor] 正在调用 Sentinel")
 
         monitoring_log = ""
         call_core = False
@@ -587,17 +776,10 @@ call_core判断依据：
             conv_id = conv["id"]
             model_key = conv["model"] or DEFAULT_MODEL
 
-            cur = await db.execute(
-                "SELECT role, content, attachments FROM messages WHERE conv_id=? AND role IN ('user','assistant') ORDER BY created_at DESC LIMIT 20",
-                (conv_id,)
-            )
-            rows = await cur.fetchall()
-            history = []
-            for r in reversed(rows):
-                d = dict(r)
-                # 哨兵唤醒 Core 时不携带历史图片，只带文本上下文
-                d["attachments"] = []
-                history.append(d)
+        # 统一时间线：合并私聊 + 群聊消息
+        from context_builder import fetch_merged_timeline, render_merged_timeline
+        merged = await fetch_merged_timeline("aion", 20, conv_id=conv_id)
+        history = render_merged_timeline(merged, "aion")
 
         prefix = []
         if wb.get("ai_persona"):
@@ -671,6 +853,8 @@ call_core判断依据：
         try:
             _temp = SETTINGS.get("temperature")
             async for chunk in stream_ai(messages, model_key, temperature=_temp):
+                if chunk.startswith(CLI_STATUS_PREFIX):
+                    continue
                 full_text += chunk
                 if core_tts:
                     core_tts.feed(chunk)
@@ -769,20 +953,10 @@ async def perform_cam_check(conv_id: str, model_key: str):
         prefix.append({"role": "user", "content": f"[系统设定 - 用户信息]\n{wb['user_persona']}"})
         prefix.append({"role": "assistant", "content": "收到，我会记住你的信息。"})
 
-    # 获取最近对话上下文
-    async with get_db() as db:
-        db.row_factory = aiosqlite.Row
-        cur = await db.execute(
-            "SELECT role, content, attachments FROM messages WHERE conv_id=? AND role IN ('user','assistant') ORDER BY created_at DESC LIMIT 6",
-            (conv_id,)
-        )
-        rows = await cur.fetchall()
-    recent = []
-    for r in reversed(rows):
-        d = dict(r)
-        # Core 主动查看监控时不携带历史图片，只带文本上下文
-        d["attachments"] = []
-        recent.append(d)
+    # 获取最近对话上下文（统一时间线：合并私聊 + 群聊消息）
+    from context_builder import fetch_merged_timeline, render_merged_timeline
+    merged = await fetch_merged_timeline("aion", 6, conv_id=conv_id)
+    recent = render_merged_timeline(merged, "aion")
 
     cam_prompt = (
         f"你刚才想看看{user_name}在干什么，这是系统从监控摄像头抓取的实时画面。"
@@ -807,6 +981,8 @@ async def perform_cam_check(conv_id: str, model_key: str):
     try:
         _temp = SETTINGS.get("temperature")
         async for chunk in stream_ai(messages, model_key, temperature=_temp):
+            if chunk.startswith(CLI_STATUS_PREFIX):
+                continue
             full_text += chunk
             if cam_tts:
                 cam_tts.feed(chunk)

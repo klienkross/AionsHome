@@ -13,16 +13,24 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.content.ContentValues;
+import android.provider.MediaStore;
+import android.util.Base64;
 import android.webkit.ConsoleMessage;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+
+import java.io.InputStream;
+import java.io.IOException;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.appcompat.app.AlertDialog;
@@ -31,6 +39,7 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.view.WindowCompat;
 
 /**
  * WebView 全屏聊天页
@@ -76,30 +85,81 @@ public class WebViewActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // 状态栏/导航栏颜色与页面暖色背景一致
-        getWindow().setStatusBarColor(0xFFfff9f5);
-        getWindow().setNavigationBarColor(0xFFfff9f5);
-        // 浅色背景需要深色图标
-        int uiFlags = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            uiFlags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-        }
-        getWindow().getDecorView().setSystemUiVisibility(uiFlags);
+        // WebView 始终 edge-to-edge；子页面的状态栏避让由 chat.html 的 iframe 浮层处理
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        getWindow().setStatusBarColor(android.graphics.Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(android.graphics.Color.TRANSPARENT);
 
         // 开启 WebView 调试（Android Studio Logcat 可看 console.log）
         WebView.setWebContentsDebuggingEnabled(true);
 
         webView = new WebView(this);
+        webView.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         setContentView(webView);
 
+        // 状态栏图标样式桥接（让网页可以根据主题动态切换深色/浅色图标）
+        webView.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void setBarStyle(String style) {
+                mainHandler.post(() -> {
+                    android.view.View dv = getWindow().getDecorView();
+                    int flags = dv.getSystemUiVisibility();
+                    if ("light".equals(style)) {
+                        // 浅色背景 → 深色图标
+                        flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                        }
+                    } else {
+                        // 深色背景 → 浅色图标
+                        flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            flags &= ~android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                        }
+                    }
+                    dv.setSystemUiVisibility(flags);
+                });
+            }
+        }, "AionStatusBar");
+
         // 原生麦克风桥接（绕过 getUserMedia 的 HTTPS 限制）
-        webView.addJavascriptInterface(new AudioBridge(webView), "AionAudio");
+        AudioBridge audioBridge = new AudioBridge(webView);
+        webView.addJavascriptInterface(audioBridge, "AionAudio");
 
         // 原生摄像头桥接（绕过 getUserMedia 的 HTTPS 限制）
-        webView.addJavascriptInterface(new CameraBridge(webView), "AionCamera");
+        CameraBridge cameraBridge = new CameraBridge(webView);
+        webView.addJavascriptInterface(cameraBridge, "AionCamera");
+
+        // 原生视频录制桥接（复用摄像头+麦克风帧，MediaCodec+MediaMuxer 编码 MP4）
+        VideoBridge videoBridge = new VideoBridge(webView, getCacheDir());
+        audioBridge.setVideoBridge(videoBridge);
+        cameraBridge.setVideoBridge(videoBridge);
+        webView.addJavascriptInterface(videoBridge, "AionVideo");
 
         // 原生 BLE 桥接（绕过 WebView 不支持 Web Bluetooth API 的限制）
         webView.addJavascriptInterface(new BleBridge(webView, this), "AionBle");
+
+        // 图片保存桥接（WebView 不支持 blob URL 下载，用原生方法写入相册）
+        webView.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void save(String base64Data, String filename) {
+                try {
+                    byte[] bytes = Base64.decode(base64Data, Base64.DEFAULT);
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.Images.Media.DISPLAY_NAME, filename);
+                    values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+                    values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Aion");
+                    Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+                    if (uri != null) {
+                        java.io.OutputStream os = getContentResolver().openOutputStream(uri);
+                        if (os != null) { os.write(bytes); os.close(); }
+                    }
+                    mainHandler.post(() -> Toast.makeText(WebViewActivity.this, "图片已保存到相册", Toast.LENGTH_SHORT).show());
+                } catch (Exception e) {
+                    mainHandler.post(() -> Toast.makeText(WebViewActivity.this, "保存失败: " + e.getMessage(), Toast.LENGTH_SHORT).show());
+                }
+            }
+        }, "AionImageSaver");
 
         // 权限请求延迟到页面加载完成后，避免系统弹窗阻塞 WebView 加载
         // 见 onPageFinished → requestPermissionsSequentially()
@@ -111,6 +171,7 @@ public class WebViewActivity extends AppCompatActivity {
         s.setMediaPlaybackRequiresUserGesture(false); // 允许自动播放音频（TTS / 闹铃）
         s.setAllowFileAccess(true);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        s.setCacheMode(WebSettings.LOAD_NO_CACHE);  // 不使用 HTTP 缓存（静态资源走本地 assets）
         s.setUserAgentString(s.getUserAgentString() + " AionChatApp/1.0");
 
         // 让 WebView 的渲染和真实 Chrome 保持一致
@@ -144,6 +205,45 @@ public class WebViewActivity extends AppCompatActivity {
                 }
                 startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl()));
                 return true;
+            }
+
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                String path = request.getUrl().getPath();
+                if (path == null) return super.shouldInterceptRequest(view, request);
+
+                // 匹配 /public/* 和 /static/*.js|css|json 的请求
+                String assetPath = null;
+                if (path.startsWith("/public/")) {
+                    // 排除 wallpaper/ 目录（用户动态内容）和上传目录
+                        // 排除可能随时更换的前端资源
+                    String sub = path.substring(8); // 去掉 "/public/"
+                    if (!sub.startsWith("wallpaper/")
+                            && !sub.equals("AIIcon.png")
+                            && !sub.equals("UserIcon.png")
+                            && !sub.equals("chat-bg-light.jpg")
+                            && !sub.equals("chat-bg-dark.jpg")
+                            && !sub.equals("视频来电头像.jpg")) {
+                        assetPath = "public/" + sub;
+                    }
+                } else if (path.startsWith("/static/") && !path.endsWith(".html")) {
+                    // 只拦截 js/css/json，不拦截 HTML（HTML 经常更新）
+                    String sub = path.substring(8);
+                    if (sub.endsWith(".js") || sub.endsWith(".css") || sub.equals("manifest.json") || sub.equals("sw.js")) {
+                        assetPath = "static/" + sub;
+                    }
+                }
+
+                if (assetPath != null) {
+                    try {
+                        InputStream is = getAssets().open(assetPath);
+                        String mime = guessMimeType(assetPath);
+                        return new WebResourceResponse(mime, "UTF-8", is);
+                    } catch (IOException e) {
+                        // 本地没有此文件，回退到网络加载
+                    }
+                }
+                return super.shouldInterceptRequest(view, request);
             }
 
             @Override
@@ -516,6 +616,21 @@ public class WebViewActivity extends AppCompatActivity {
 
     private static final int REQ_LOCATION = 3001;
     private static final int REQ_BACKGROUND_LOCATION = 3002;
+
+    /** 根据文件扩展名推断 MIME 类型 */
+    private String guessMimeType(String path) {
+        if (path.endsWith(".png"))  return "image/png";
+        if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+        if (path.endsWith(".svg"))  return "image/svg+xml";
+        if (path.endsWith(".ico"))  return "image/x-icon";
+        if (path.endsWith(".webp")) return "image/webp";
+        if (path.endsWith(".js"))   return "application/javascript";
+        if (path.endsWith(".css"))  return "text/css";
+        if (path.endsWith(".json")) return "application/json";
+        if (path.endsWith(".mp3"))  return "audio/mpeg";
+        if (path.endsWith(".mp4"))  return "video/mp4";
+        return "application/octet-stream";
+    }
 
     @Override
     protected void onDestroy() {

@@ -13,6 +13,8 @@ DATA_DIR.mkdir(exist_ok=True)
 DB_PATH = DATA_DIR / "chat.db"
 UPLOADS_DIR = DATA_DIR / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
+CODEX_UPLOADS_DIR = BASE_DIR.parent / "Connor-Codex" / "uploads"
+CODEX_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 CHATS_DIR = DATA_DIR / "chats"
 CHATS_DIR.mkdir(exist_ok=True)
 SCREENSHOTS_DIR = DATA_DIR / "screenshots"
@@ -129,9 +131,10 @@ def sanitize_filename(name):
 #                    "base_url": "https://xxx/v1", "key_name": "<上面的key_name>"}
 #   base_url 填到 /v1 层（代码会自动拼 /chat/completions）。
 MODELS = {
-    "硅基GLM-5":        {"provider": "siliconflow", "model": "Pro/zai-org/GLM-5"},
     "硅基GLM-5.1":      {"provider": "siliconflow", "model": "Pro/zai-org/GLM-5.1"},
+    "硅基GLM-5":        {"provider": "siliconflow", "model": "Pro/zai-org/GLM-5"},
     "硅基Kimi-K2.5":    {"provider": "siliconflow", "model": "Pro/moonshotai/Kimi-K2.5"},
+    "硅基Kimi2.6":      {"provider": "siliconflow", "model": "Pro/moonshotai/Kimi-K2.6"},
     "gemini-3.1-flash-lite": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
     "gemini-2.5-pro":        {"provider": "gemini", "model": "gemini-2.5-pro"},
     "gemini-3-flash":        {"provider": "gemini", "model": "gemini-3-flash-preview"},
@@ -139,8 +142,15 @@ MODELS = {
     "claude-sonnet-4-6":  {"provider": "aipro", "model": "claude-sonnet-4-6"},
     "claude-opus4.6":    {"provider": "aipro", "model": "claude-opus-4-6"},
     "claude-opus4.6T":    {"provider": "aipro", "model": "claude-opus-4-6-thinking"},
-    "哈基米3.1pro":    {"provider": "aipro", "model": "gemini-3.1-pro-high"},
+    "哈基米opus4.7": {"provider": "aipro", "model": "claude-opus-4-7"},
+    "哈基米opus4.6":  {"provider": "aipro", "model": "claude-opus-4-6"},
+    "哈基米gpt-5.5":    {"provider": "aipro", "model": "gemini-3.1-pro-high"},
+    "哈基米3.1pro":     {"provider": "aipro", "model": "gemini-3.1-pro-high"},
     "哈基米2.5pro":    {"provider": "aipro", "model": "gemini-2.5-pro"},
+    "CLI-2.5pro":       {"provider": "gemini_cli", "model": "gemini-2.5-pro"},
+    "CLI-3.1pro":       {"provider": "gemini_cli", "model": "gemini-3.1-pro-preview"},
+    "CLI-2.5flash":     {"provider": "gemini_cli", "model": "gemini-2.5-flash"},
+    "Codex":            {"provider": "codex_cli",  "model": ""},
 
     # 自定义第三方 OpenAI 兼容端点示例（删掉注释#即可启用，填好 base_url 与 key_name）
     # "自定义-claude":  {"provider": "custom", "model": "claude-sonnet-4-6", "base_url": "https://your-relay.example.com/v1", "key_name": "myrelay"},
@@ -151,6 +161,8 @@ DEFAULT_MODEL = SETTINGS.get("default_model") or next(iter(MODELS), "gemini-3-fl
 # ── 摄像头默认配置 ───────────────────────────────
 DEFAULT_CAM_CFG = {
     "camera_index": 0,
+    "active_source": "local",
+    "esp32_cam_url": "",
     "auto_interval_min": 10,
     "auto_interval_max": 20,
     "max_screenshots": 200,
@@ -182,4 +194,6 @@ def save_cam_config(cfg: dict):
 
 # ── 允许上传的文件类型 ────────────────────────────
 ALLOWED_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-                 'video/mp4', 'video/webm', 'video/quicktime'}
+                 'video/mp4', 'video/webm', 'video/quicktime',
+                 'audio/webm', 'audio/ogg', 'audio/wav', 'audio/mp4',
+                 'audio/mpeg', 'audio/x-wav'}

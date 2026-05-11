@@ -2,6 +2,70 @@
 
 const $ = id => document.getElementById(id);
 
+// Android APK 中 WebView 是 edge-to-edge，普通功能页需要自己避开系统状态栏。
+// iframe 子页面由 chat.html 的浮层统一处理，避免重复留白。
+if (navigator.userAgent.includes('AionChatApp')) {
+  const root = document.documentElement;
+  root.classList.add('aion-app');
+  if (window.parent !== window) root.classList.add('aion-iframe');
+  document.addEventListener('DOMContentLoaded', () => {
+    if (window.parent === window) {
+      const topBar = document.querySelector('.top-bar');
+      const color = getSolidVisualColor(topBar ? getComputedStyle(topBar).backgroundColor : '', getPageBaseColor());
+      root.style.setProperty('--aion-safe-bg', color);
+      if (window.AionStatusBar) window.AionStatusBar.setBarStyle(isLightVisualColor(color) ? 'light' : 'dark');
+    }
+  });
+}
+
+function parseVisualColor(value) {
+  if (!value || value === 'transparent') return null;
+  const hexMatch = value.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hexMatch) {
+    const hex = hexMatch[1].length === 3 ? hexMatch[1].split('').map(part => part + part).join('') : hexMatch[1];
+    return {
+      red: parseInt(hex.slice(0, 2), 16),
+      green: parseInt(hex.slice(2, 4), 16),
+      blue: parseInt(hex.slice(4, 6), 16),
+      alpha: 1
+    };
+  }
+  const rgbMatch = value.match(/rgba?\(([^)]+)\)/i);
+  if (!rgbMatch) return null;
+  const parts = rgbMatch[1].split(/[\s,\/]+/).filter(Boolean).map(Number);
+  if (parts.length < 3) return null;
+  return { red: parts[0], green: parts[1], blue: parts[2], alpha: parts.length > 3 ? parts[3] : 1 };
+}
+
+function isLightVisualColor(value) {
+  const color = parseVisualColor(value);
+  if (!color || color.alpha <= 0.05) return true;
+  return ((color.red * 299) + (color.green * 587) + (color.blue * 114)) / 1000 > 150;
+}
+
+function colorToRgbString(color) {
+  return `rgb(${Math.round(color.red)}, ${Math.round(color.green)}, ${Math.round(color.blue)})`;
+}
+
+function getPageBaseColor() {
+  const rootStyle = getComputedStyle(document.documentElement);
+  const bodyStyle = getComputedStyle(document.body);
+  return rootStyle.getPropertyValue('--bg').trim() || bodyStyle.backgroundColor || '#fff9f5';
+}
+
+function getSolidVisualColor(foregroundValue, backgroundValue) {
+  const foreground = parseVisualColor(foregroundValue);
+  const background = parseVisualColor(backgroundValue) || parseVisualColor('#fff9f5');
+  if (!foreground || foreground.alpha <= 0.05) return colorToRgbString(background);
+  if (foreground.alpha >= 0.98) return colorToRgbString(foreground);
+  const alpha = foreground.alpha;
+  return colorToRgbString({
+    red: foreground.red * alpha + background.red * (1 - alpha),
+    green: foreground.green * alpha + background.green * (1 - alpha),
+    blue: foreground.blue * alpha + background.blue * (1 - alpha)
+  });
+}
+
 // 在 iframe 子页面浮层中时，返回按钮改为关闭浮层回到聊天页
 if (window.parent !== window) {
   document.addEventListener('DOMContentLoaded', () => {

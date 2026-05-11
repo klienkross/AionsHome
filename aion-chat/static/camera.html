@@ -29,6 +29,13 @@
 .cam-config-row input { width:60px; text-align:center; }
 .cam-config-row input[type="time"] { width:auto; min-width:90px; }
 .cam-status { font-size:11px; color:var(--text3); margin-top:8px; text-align:center; }
+.cam-source-tabs { display:flex; gap:0; margin-bottom:8px; border-radius:8px; overflow:hidden; border:1px solid var(--border); }
+.cam-source-tab { flex:1; padding:7px 0; text-align:center; font-size:13px; cursor:pointer; background:var(--surface2); color:var(--text2); border:none; transition:all .2s; }
+.cam-source-tab.active { background:var(--accent,#ff8359); color:#fff; font-weight:600; }
+.cam-source-tab:not(.active):hover { background:var(--surface3,#eee); }
+.esp32-status-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-left:4px; vertical-align:middle; }
+.esp32-status-dot.online { background:#4caf50; }
+.esp32-status-dot.offline { background:#f44336; }
 </style>
 </head>
 <body>
@@ -49,10 +56,22 @@
       </div>
     </div>
     <div class="cam-controls">
-      <div class="cam-config-row" style="margin:0">
+      <div class="cam-source-tabs">
+        <button class="cam-source-tab active" id="srcTabLocal" onclick="switchSourceTab('local')">💻 本地摄像头</button>
+        <button class="cam-source-tab" id="srcTabEsp32" onclick="switchSourceTab('esp32')">📡 ESP32-CAM<span class="esp32-status-dot offline" id="esp32Dot"></span></button>
+      </div>
+      <div id="localCamRow" class="cam-config-row" style="margin:0">
         <label>摄像头</label>
         <select id="camSelect2" onchange="camChangeCamera2()"></select>
         <button onclick="camRefreshList2()" style="background:none;border:none;cursor:pointer;font-size:14px" title="刷新">🔄</button>
+      </div>
+      <div id="esp32CamRow" class="cam-config-row" style="margin:0;display:none">
+        <label>地址</label>
+        <input type="text" id="esp32UrlInput" placeholder="http://espcam.local" style="flex:1;min-width:140px">
+        <button class="cam-btn" onclick="esp32TestPing()" style="padding:4px 8px;font-size:12px">测试</button>
+      </div>
+      <div id="esp32BridgeStatus" style="display:none;font-size:11px;color:var(--text3);margin:2px 0">
+        🔗 App 桥接模式（通过手机中转）
       </div>
       <button class="cam-btn" id="camOpenBtn" onclick="camToggleOpen()">📷 开启摄像头</button>
       <button class="cam-btn" onclick="camManualScreenshot()">📸 截图</button>
@@ -102,6 +121,7 @@ let camCrop = { zoom: 1.0, cx: 0.5, cy: 0.5 };
 let _camCropTimer = null;
 let _camBusy = false;
 let countdownTimer = null;
+let _activeSource = "local";
 
 (async function init() {
   await syncCamModalState();
@@ -113,6 +133,9 @@ let countdownTimer = null;
 async function syncCamModalState() {
   try {
     const status = await api("GET", "/api/cam/status");
+    _activeSource = status.active_source || "local";
+    updateSourceTabs(_activeSource);
+    $("esp32UrlInput").value = status.esp32_cam_url || "";
     $("camMonitorToggle2").checked = status.monitoring;
     $("camIntervalMin2").value = status.auto_interval_min;
     $("camIntervalMax2").value = status.auto_interval_max;
@@ -123,8 +146,11 @@ async function syncCamModalState() {
     $("quietHoursRange2").style.display = status.quiet_hours_enabled ? "" : "none";
     $("camOpenBtn").textContent = status.camera_open ? "⏹ 关闭摄像头" : "📷 开启摄像头";
     $("camOpenBtn").className = status.camera_open ? "cam-btn danger" : "cam-btn";
+    const bridgeEl = $("esp32BridgeStatus");
+    if (bridgeEl) bridgeEl.style.display = (status.esp32_bridge_active && _activeSource === "esp32") ? "" : "none";
     updateCamStatusText(status);
-    await camRefreshList2();
+    if (_activeSource === "local") await camRefreshList2();
+    esp32CheckOnline();
     startCountdown();
   } catch(e) {
     $("camStatus2").textContent = "获取状态失败";
@@ -188,8 +214,17 @@ async function camToggleOpen() {
   const btn = $("camOpenBtn"); btn.disabled = true; btn.textContent = "⏳ 请稍候...";
   try {
     const status = await api("GET", "/api/cam/status");
-    if (status.camera_open) await api("POST", "/api/cam/close");
-    else { const idx = parseInt($("camSelect2").value); await api("POST", `/api/cam/open?camera_index=${isNaN(idx) ? (status.camera_index||0) : idx}`); }
+    if (status.camera_open) {
+      await api("POST", "/api/cam/close");
+    } else {
+      if (_activeSource === "esp32") {
+        const url = ($("esp32UrlInput").value || "").trim();
+        await api("POST", "/api/cam/source", { source: "esp32", esp32_url: url || undefined });
+      } else {
+        const idx = parseInt($("camSelect2").value);
+        await api("POST", `/api/cam/open?camera_index=${isNaN(idx) ? (status.camera_index||0) : idx}`);
+      }
+    }
     syncCamModalState();
   } finally { btn.disabled = false; _camBusy = false; }
 }
@@ -219,6 +254,63 @@ async function camApplyConfig() {
     auto_interval_min: intervalMin, auto_interval_max: intervalMax, max_screenshots: maxKeep,
     quiet_hours_enabled: quietEnabled, quiet_hours_start: $("quietHoursStart2").value || "00:00", quiet_hours_end: $("quietHoursEnd2").value || "09:00"
   });
+}
+
+// ── ESP32-CAM 画面源切换 ───────────────────────────
+function updateSourceTabs(source) {
+  _activeSource = source;
+  $("srcTabLocal").className = "cam-source-tab" + (source === "local" ? " active" : "");
+  $("srcTabEsp32").className = "cam-source-tab" + (source === "esp32" ? " active" : "");
+  $("localCamRow").style.display = source === "local" ? "" : "none";
+  $("esp32CamRow").style.display = source === "esp32" ? "" : "none";
+}
+
+async function switchSourceTab(source) {
+  if (_camBusy || source === _activeSource) { updateSourceTabs(source); return; }
+  _camBusy = true;
+  const btn = $("camOpenBtn"); btn.disabled = true; btn.textContent = "⏳ 切换中...";
+  updateSourceTabs(source);
+  try {
+    const payload = { source };
+    if (source === "esp32") {
+      const url = ($("esp32UrlInput").value || "").trim();
+      if (url) payload.esp32_url = url;
+    }
+    const res = await api("POST", "/api/cam/source", payload);
+    if (!res.ok) showToast(res.message || "切换失败");
+    await syncCamModalState();
+  } catch(e) {
+    showToast("切换失败");
+    updateSourceTabs(_activeSource);
+  } finally {
+    btn.disabled = false; _camBusy = false;
+  }
+}
+
+async function esp32CheckOnline() {
+  const dot = $("esp32Dot"); if (!dot) return;
+  try {
+    const res = await api("GET", "/api/cam/esp32/ping");
+    dot.className = "esp32-status-dot " + (res.online ? "online" : "offline");
+  } catch(e) {
+    dot.className = "esp32-status-dot offline";
+  }
+}
+
+async function esp32TestPing() {
+  const url = ($("esp32UrlInput").value || "").trim();
+  if (!url) { showToast("请输入 ESP32-CAM 地址"); return; }
+  // 先保存 URL 到配置
+  await api("PUT", "/api/cam/config", { esp32_cam_url: url });
+  showToast("⏳ 测试连接中...");
+  const res = await api("GET", "/api/cam/esp32/ping");
+  if (res.online) {
+    showToast("✅ ESP32-CAM 在线");
+    $("esp32Dot").className = "esp32-status-dot online";
+  } else {
+    showToast("❌ 连接失败: " + (res.message || "无法访问"));
+    $("esp32Dot").className = "esp32-status-dot offline";
+  }
 }
 </script>
 </body>

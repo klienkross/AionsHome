@@ -32,6 +32,10 @@ async def init_db():
             await db.execute("ALTER TABLE messages ADD COLUMN attachments TEXT DEFAULT ''")
         except:
             pass
+        try:
+            await db.execute("ALTER TABLE messages ADD COLUMN starred INTEGER DEFAULT 0")
+        except:
+            pass
         # 性能索引
         await db.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_id ON messages(conv_id, created_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)")
@@ -228,6 +232,111 @@ async def init_db():
             await db.execute("ALTER TABLE memories RENAME TO memories_v1")
         except:
             pass
+        # ── 基金持仓表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS fund_holdings (
+                id TEXT PRIMARY KEY,
+                fund_code TEXT NOT NULL,
+                fund_name TEXT DEFAULT '',
+                shares REAL DEFAULT 0,
+                avg_cost REAL DEFAULT 0,
+                total_cost REAL DEFAULT 0,
+                warn_down REAL DEFAULT -3.0,
+                warn_up REAL DEFAULT 15.0,
+                created_at REAL NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_fund_holdings_code ON fund_holdings(fund_code)")
+        # ── 娱乐室日志表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS playground_logs (
+                id TEXT PRIMARY KEY,
+                server TEXT NOT NULL,
+                instruction TEXT NOT NULL,
+                events TEXT NOT NULL DEFAULT '[]',
+                summary TEXT DEFAULT '',
+                created_at REAL NOT NULL
+            )
+        """)
+        try:
+            await db.execute("ALTER TABLE playground_logs ADD COLUMN summary TEXT DEFAULT ''")
+        except:
+            pass
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_playground_logs_created ON playground_logs(created_at DESC)")
+        # ── 聊天室房间表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS chatroom_rooms (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'group',
+                aion_persona TEXT DEFAULT '',
+                connor_persona TEXT DEFAULT '',
+                context_minutes INTEGER DEFAULT 30,
+                ai_chat_rounds INTEGER DEFAULT 3,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_chatroom_rooms_updated ON chatroom_rooms(updated_at DESC)")
+        # ── 聊天室消息表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS chatroom_messages (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                content TEXT NOT NULL,
+                attachments TEXT DEFAULT '[]',
+                created_at REAL NOT NULL,
+                FOREIGN KEY (room_id) REFERENCES chatroom_rooms(id) ON DELETE CASCADE
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_chatroom_msg_room ON chatroom_messages(room_id, created_at)")
+        # ── 聊天室记忆表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS chatroom_memories (
+                id TEXT PRIMARY KEY,
+                room_id TEXT NOT NULL,
+                scope TEXT DEFAULT 'group',
+                content TEXT NOT NULL,
+                keywords TEXT DEFAULT '',
+                importance REAL DEFAULT 0.5,
+                embedding BLOB,
+                source_start_ts REAL,
+                source_end_ts REAL,
+                created_at REAL NOT NULL,
+                unresolved INTEGER DEFAULT 0
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_chatroom_mem_room ON chatroom_memories(room_id, created_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_chatroom_mem_scope ON chatroom_memories(scope)")
+        # ── 聊天室总结锚点表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS chatroom_digest_anchors (
+                room_id TEXT PRIMARY KEY,
+                anchor_ts REAL NOT NULL DEFAULT 0
+            )
+        """)
+        # ── 活动轨迹表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS life_trajectory (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_life_trajectory_created ON life_trajectory(created_at DESC)")
+        # ── 记账与生理期表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bookkeeping (
+                id TEXT PRIMARY KEY,
+                record_type TEXT NOT NULL,
+                amount REAL DEFAULT 0,
+                description TEXT DEFAULT '',
+                created_at REAL NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_bookkeeping_created ON bookkeeping(created_at DESC)")
         await db.commit()
 
 

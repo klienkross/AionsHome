@@ -94,3 +94,33 @@ async def remote_asr(file: UploadFile = File(...)):
     except Exception as e:
         print(f"[RemoteASR] Error: {e}")
         return {"text": "", "error": str(e)}
+
+
+@router.post("/api/voice/transcribe")
+async def transcribe_voice_message(file: UploadFile = File(...)):
+    """语音消息转写：接收上传的音频文件，调硅基流动 ASR 返回文本"""
+    key = get_key("siliconflow")
+    if not key:
+        return {"text": "", "error": "No siliconflow key"}
+    content = await file.read()
+    mime = file.content_type or "audio/webm"
+    ext = file.filename.rsplit(".", 1)[-1] if file.filename and "." in file.filename else "webm"
+    print(f"[VoiceTranscribe] Received {len(content)} bytes, mime={mime}, ext={ext}")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                ASR_URL,
+                headers={"Authorization": f"Bearer {key}"},
+                files={"file": (f"voice.{ext}", content, mime)},
+                data={"model": ASR_MODEL, "language": "zh"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            raw_text = result.get("text", "").strip()
+            text = _EMOJI_RE.sub("", raw_text).strip()
+            print(f"[VoiceTranscribe] Result: '{text}'")
+            return {"text": text}
+    except Exception as e:
+        print(f"[VoiceTranscribe] Error: {e}")
+        return {"text": "", "error": str(e)}

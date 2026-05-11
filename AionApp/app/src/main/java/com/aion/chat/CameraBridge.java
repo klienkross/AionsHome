@@ -50,9 +50,24 @@ public class CameraBridge {
     private byte[] inputBuf;  // 专用输入缓冲区，不与 lastRotatedNv21 共用
     private android.graphics.SurfaceTexture surfaceTexture; // 保持引用以便释放
 
+    // 视频录制桥接 — 录制时同步推送帧
+    private volatile VideoBridge videoBridge;
+
     public CameraBridge(WebView webView) {
         this.webView = webView;
     }
+
+    /** 设置视频录制桥接，录制时自动推送预览帧 */
+    public void setVideoBridge(VideoBridge vb) {
+        this.videoBridge = vb;
+    }
+
+    /** 返回当前旋转后的画面尺寸 [width, height]，供 VideoBridge 初始化编码器 */
+    @JavascriptInterface
+    public int getRotatedWidth() { return rotatedWidth; }
+
+    @JavascriptInterface
+    public int getRotatedHeight() { return rotatedHeight; }
 
     @JavascriptInterface
     public boolean start(String facingStr) {
@@ -266,6 +281,12 @@ public class CameraBridge {
         if (lastRotatedNv21 == null || lastRotatedNv21.length != src.length)
             lastRotatedNv21 = new byte[src.length];
         System.arraycopy(src, 0, lastRotatedNv21, 0, src.length);
+
+        // 推送给 VideoBridge（录制时）
+        VideoBridge vb = videoBridge;
+        if (vb != null && vb.isRecording()) {
+            vb.onVideoFrame(src, rotatedWidth, rotatedHeight);
+        }
 
         // JPEG 编码（一次编码，已旋转）
         YuvImage yuv = new YuvImage(src, ImageFormat.NV21, rotatedWidth, rotatedHeight, null);

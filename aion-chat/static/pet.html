@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aion Pet</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  width: 100vw; height: 100vh; overflow: hidden;
+  background: transparent;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  user-select: none;
+}
+
+#petContainer {
+  position: absolute;
+  bottom: 20px;
+  right: 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* ── 气泡容器 ── */
+#bubbleContainer {
+  max-width: 320px;
+  min-width: 60px;
+  margin-bottom: 6px;
+  pointer-events: none;
+}
+.chat-bubble {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: #2c2c2c;
+  padding: 10px 14px;
+  border-radius: 14px 14px 4px 14px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  line-height: 1.55;
+  box-shadow: 0 3px 18px rgba(0,0,0,0.12);
+  animation: bubbleIn 0.4s ease forwards;
+  word-break: break-word;
+}
+@keyframes bubbleIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.chat-bubble.fade-out {
+  animation: bubbleOut 0.8s ease forwards;
+}
+@keyframes bubbleOut {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(0.95); }
+}
+
+/* ── Canvas 精灵 ── */
+#petCanvas {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  cursor: pointer;
+}
+
+/* ── 底部控制栏 ── */
+#controlBar {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(20, 20, 20, 0.85);
+  backdrop-filter: blur(10px);
+  z-index: 100;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+#controlBar:hover, #controlBar.show { opacity: 1; }
+
+#controlBar label {
+  font-size: 12px;
+  color: #aaa;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+#controlBar input[type="checkbox"] {
+  accent-color: #ff8359;
+}
+.ctrl-btn {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  background: rgba(255,255,255,0.15);
+  color: #ddd;
+  transition: background 0.2s;
+}
+.ctrl-btn:hover { background: rgba(255,255,255,0.25); }
+
+/* ── 触发区 ── */
+#triggerZone {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 8px;
+  z-index: 99;
+}
+</style>
+</head>
+<body>
+
+<div id="petContainer">
+  <div id="bubbleContainer"></div>
+  <canvas id="petCanvas" width="192" height="208"></canvas>
+</div>
+
+<div id="triggerZone"></div>
+<div id="controlBar">
+  <label><input type="checkbox" id="petToggle"> 桌宠开关</label>
+  <button class="ctrl-btn" id="testBubbleBtn">测试气泡</button>
+  <select id="animSelect" style="font-size:11px;background:#333;color:#ddd;border:1px solid #555;border-radius:4px;padding:2px 4px;"></select>
+</div>
+
+<script>
+// ── 配置 ──
+const SCALE = 2;          // 像素放大倍率
+const CANVAS_W = 192;
+const CANVAS_H = 208;
+const BUBBLE_DURATION = 15000; // 气泡显示时长 ms
+const MAX_BUBBLES = 4;
+
+const canvas = document.getElementById('petCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = CANVAS_W;
+canvas.height = CANVAS_H;
+canvas.style.width = (CANVAS_W * SCALE) + 'px';
+canvas.style.height = (CANVAS_H * SCALE) + 'px';
+
+// ── 状态 ──
+let manifest = null;
+let strips = {};       // animId → Image
+let currentAnim = 'idle';
+let frameIdx = 0;
+let lastFrameTime = 0;
+let petEnabled = false;
+let animRequest = null;
+
+// ── 加载 manifest + sprite strips ──
+async function loadAssets() {
+  const res = await fetch('/aion-pet/manifest.json');
+  manifest = await res.json();
+
+  const promises = [];
+  for (const [id, anim] of Object.entries(manifest.animations)) {
+    const img = new Image();
+    const src = `/aion-pet/${anim.pngSrc}`;
+    promises.push(new Promise((resolve) => {
+      img.onload = resolve;
+      img.onerror = resolve;
+      img.src = src;
+    }));
+    strips[id] = img;
+  }
+  await Promise.all(promises);
+
+  // 填充动画选择器
+  const sel = document.getElementById('animSelect');
+  for (const [id, anim] of Object.entries(manifest.animations)) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = anim.displayName || id;
+    sel.appendChild(opt);
+  }
+  sel.value = 'idle';
+  sel.addEventListener('change', () => switchAnimation(sel.value));
+}
+
+// ── 动画播放 ──
+function getFrameDuration(animId, idx) {
+  const anim = manifest.animations[animId];
+  if (anim.frameDurationsMs && anim.frameDurationsMs[idx] !== undefined) {
+    return anim.frameDurationsMs[idx];
+  }
+  return anim.frameDurationMs || 140;
+}
+
+function tick(ts) {
+  if (!petEnabled || !manifest) {
+    animRequest = requestAnimationFrame(tick);
+    return;
+  }
+
+  const anim = manifest.animations[currentAnim];
+  if (!anim || !strips[currentAnim]) {
+    animRequest = requestAnimationFrame(tick);
+    return;
+  }
+
+  const duration = getFrameDuration(currentAnim, frameIdx);
+  if (ts - lastFrameTime >= duration) {
+    ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+    const strip = strips[currentAnim];
+    const sw = anim.frameWidth || CANVAS_W;
+    const sh = anim.frameHeight || CANVAS_H;
+    ctx.drawImage(strip, frameIdx * sw, 0, sw, sh, 0, 0, CANVAS_W, CANVAS_H);
+    lastFrameTime = ts;
+
+    // 处理 loopStart（如 sleep_prone）
+    const loopStart = anim.loopStart || 0;
+    const nextIdx = frameIdx + 1;
+    if (nextIdx >= anim.frameCount) {
+      frameIdx = anim.loop !== false ? loopStart : anim.frameCount - 1;
+    } else {
+      frameIdx = nextIdx;
+    }
+  }
+  animRequest = requestAnimationFrame(tick);
+}
+
+function switchAnimation(animId) {
+  if (!manifest || !manifest.animations[animId]) return;
+  if (currentAnim === animId) return;
+  currentAnim = animId;
+  frameIdx = 0;
+  lastFrameTime = 0;
+  document.getElementById('animSelect').value = animId;
+}
+
+// ── 气泡 ──
+const bubbles = [];
+
+function showBubble(text) {
+  text = cleanAIText(text);
+  if (!text.trim()) return;
+  const parts = text.split(/\n\n+/).filter(s => s.trim());
+  for (const part of parts) {
+    _addOneBubble(part.trim());
+  }
+}
+
+function _addOneBubble(text) {
+  const container = document.getElementById('bubbleContainer');
+  while (bubbles.length >= MAX_BUBBLES) {
+    const old = bubbles.shift();
+    old.el.remove();
+    clearTimeout(old.timer);
+  }
+  const el = document.createElement('div');
+  el.className = 'chat-bubble';
+  el.textContent = text;
+  container.appendChild(el);
+
+  const entry = { el, timer: null };
+  entry.timer = setTimeout(() => {
+    el.classList.add('fade-out');
+    setTimeout(() => {
+      el.remove();
+      const idx = bubbles.indexOf(entry);
+      if (idx >= 0) bubbles.splice(idx, 1);
+    }, 800);
+  }, BUBBLE_DURATION);
+  bubbles.push(entry);
+}
+
+function cleanAIText(text) {
+  text = text.replace(/\[(?:MUSIC|ALARM|REMINDER|Monitor|TOY|PET|查看动态|视频电话|POI_SEARCH|CAM_CHECK|SELFIE|DRAW|HEART|MEMORY|SCHEDULE_DEL)[^\]]*\]/gi, '');
+  text = text.replace(/\*\*(.+?)\*\*/g, '$1');
+  text = text.replace(/\*(.+?)\*/g, '$1');
+  text = text.replace(/^#{1,6}\s*/gm, '');
+  text = text.replace(/`([^`]+)`/g, '$1');
+  text = text.replace(/```[\s\S]*?```/g, '');
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+
+// ── WebSocket ──
+let ws = null;
+function sendPetState() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'pet_state', enabled: petEnabled }));
+  }
+}
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.onopen = () => { console.log('[Pet] WS connected'); sendPetState(); };
+  ws.onmessage = e => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'pet_command' && msg.data?.action) {
+        switchAnimation(msg.data.action);
+      }
+      if (msg.type === 'msg_created' && msg.data?.role === 'assistant') {
+        showBubble(msg.data.content);
+      }
+    } catch {}
+  };
+  ws.onclose = () => setTimeout(connectWS, 3000);
+  ws.onerror = () => ws.close();
+}
+
+// ── 开关 ──
+async function loadPetSetting() {
+  try {
+    const res = await fetch('/api/settings/pet');
+    const data = await res.json();
+    petEnabled = !!data.pet_enabled;
+  } catch {
+    petEnabled = false;
+  }
+  document.getElementById('petToggle').checked = petEnabled;
+  updateVisibility();
+}
+
+async function togglePet(enabled) {
+  petEnabled = enabled;
+  updateVisibility();
+  await fetch('/api/settings/pet', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  });
+  sendPetState();
+}
+
+function updateVisibility() {
+  const container = document.getElementById('petContainer');
+  container.style.display = petEnabled ? 'flex' : 'none';
+  if (petEnabled && !animRequest) {
+    animRequest = requestAnimationFrame(tick);
+  }
+}
+
+// ── 点击角色触发动画 ──
+canvas.addEventListener('click', () => {
+  if (!petEnabled) return;
+  // 随机切一个表情动画
+  const emotes = ['happy', 'waving', 'jumping', 'tsundere', 'angry'];
+  const pick = emotes[Math.floor(Math.random() * emotes.length)];
+  switchAnimation(pick);
+  // 几秒后回到 idle
+  setTimeout(() => {
+    if (['happy', 'waving', 'jumping', 'tsundere', 'angry'].includes(currentAnim)) {
+      switchAnimation('idle');
+    }
+  }, 3000);
+});
+
+// ── 控制栏 ──
+document.getElementById('triggerZone').addEventListener('mouseenter', () => {
+  document.getElementById('controlBar').classList.add('show');
+});
+document.getElementById('controlBar').addEventListener('mouseleave', () => {
+  document.getElementById('controlBar').classList.remove('show');
+});
+document.getElementById('petToggle').addEventListener('change', e => togglePet(e.target.checked));
+document.getElementById('testBubbleBtn').addEventListener('click', () => {
+  showBubble('这是一条测试气泡消息~\n\n看看效果怎么样？');
+});
+
+// ── 启动 ──
+async function init() {
+  await loadAssets();
+  await loadPetSetting();
+  animRequest = requestAnimationFrame(tick);
+  connectWS();
+}
+init();
+</script>
+</body>
+</html>

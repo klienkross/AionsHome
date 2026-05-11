@@ -17,3 +17,6 @@ websockets
 pywin32
 psutil
 aiohttp
+akshare
+chinese-calendar
+mcp
