@@ -72,7 +72,7 @@ const videoCall = (() => {
     });
 
     // 背景图
-    const bg = _createElement('img', { src: '/public/视频通话背景.jpg' }, {
+    const bg = _createElement('img', { src: '/public/视频通话背景.jpg?v=2' }, {
       position: 'absolute', top: 0, left: 0, width: '100%', height: '100%',
       objectFit: 'cover', opacity: '0.4'
     });
@@ -85,7 +85,7 @@ const videoCall = (() => {
     });
 
     // 来电头像
-    const avatar = _createElement('img', { src: '/public/视频来电头像.jpg' }, {
+    const avatar = _createElement('img', { src: '/public/视频来电头像.jpg?v=2' }, {
       width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover',
       border: '3px solid rgba(255,255,255,0.3)'
     });
@@ -173,7 +173,7 @@ const videoCall = (() => {
     const mainView = _createElement('div', { id: 'vcMainView' }, {
       position: 'absolute', top: 0, left: 0, width: '100%', height: '100%'
     });
-    const aiImg = _createElement('img', { id: 'vcAiPhoto', src: '/public/视频背景照片.jpg' }, {
+    const aiImg = _createElement('img', { id: 'vcAiPhoto', src: '/public/视频背景照片.jpg?v=2' }, {
       width: '100%', height: '100%', objectFit: 'cover'
     });
     mainView.appendChild(aiImg);
@@ -201,7 +201,7 @@ const videoCall = (() => {
     _overlay.appendChild(pipView);
 
     // PiP 中的 AI 照片（互换时使用，默认隐藏）
-    const pipAi = _createElement('img', { id: 'vcPipAi', src: '/public/视频背景照片.jpg' }, {
+    const pipAi = _createElement('img', { id: 'vcPipAi', src: '/public/视频背景照片.jpg?v=2' }, {
       width: '100%', height: '100%', objectFit: 'cover', display: 'none',
       position: 'absolute', top: 0, left: 0
     });

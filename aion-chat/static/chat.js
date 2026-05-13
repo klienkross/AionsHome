@@ -1231,7 +1231,7 @@ function renderMessages() {
     } else {
       bubblesHtml = `<div class="msg-bubble">${formatMsg(displayContent)}${renderAttachments(m.attachments)}</div>`;
     }
-    const avatarSrc = isUser ? '/public/UserIcon.png' : '/public/AIIcon.png';
+    const avatarSrc = isUser ? '/public/UserIcon.png?v=2' : '/public/AIIcon.png?v=2';
     const ttsBtn = !isUser ? `<button class="tts-replay-btn" onclick="replayTTS('${m.id}')" title="重听语音">🔊</button>` : '';
     return `
     <div class="msg-row ${m.role}" id="m_${m.id}">

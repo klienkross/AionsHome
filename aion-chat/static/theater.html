@@ -641,7 +641,7 @@ function renderMessages() {
     const isUser = m.role === 'user';
     const cls = isUser ? 'user' : 'assistant';
     const name = isUser ? '你' : '🎭';
-    const avatar = isUser ? '/public/UserIcon.png' : '/public/AIIcon.png';
+    const avatar = isUser ? '/public/UserIcon.png?v=2' : '/public/AIIcon.png?v=2';
     const ts = m.created_at ? new Date(m.created_at * 1000) : null;
     const timeStr = ts ? `${ts.getHours().toString().padStart(2,'0')}:${ts.getMinutes().toString().padStart(2,'0')}` : '';
 

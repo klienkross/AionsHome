@@ -782,7 +782,7 @@ function renderChapter(data) {
   // 为有批注的段落添加气泡
   for (const [pIdx, anno] of Object.entries(annotations)) {
     const marker = `data-p="${pIdx}"`;
-    const bubble = `<span class="anno-bubble" onclick="showAnnotation(${pIdx})" title="${escHtml(aiName)}的批注"><img src="/public/AIIcon.png" alt=""></span>`;
+    const bubble = `<span class="anno-bubble" onclick="showAnnotation(${pIdx})" title="${escHtml(aiName)}的批注"><img src="/public/AIIcon.png?v=2" alt=""></span>`;
     // 在段落闭标签前插入气泡
     html = html.replace(
       new RegExp(`(<p\\s+${marker}>)(.*?)(</p>)`, 's'),
@@ -1149,7 +1149,7 @@ let replySending = false;
 function renderChatBubble(role, content) {
   const isUser = role === 'user';
   const name = isUser ? userName : aiName;
-  const avatar = isUser ? '/public/UserIcon.png' : '/public/AIIcon.png';
+  const avatar = isUser ? '/public/UserIcon.png?v=2' : '/public/AIIcon.png?v=2';
   // 把文本按双换行分段，多段各自一个气泡
   const parts = content.split(/\n{2,}/).filter(p => p.trim());
   const bubbles = parts.length > 1
@@ -1290,7 +1290,7 @@ async function doSendInPanel(msgContent, skipUserBubble) {
   const aiRow = document.createElement('div');
   aiRow.className = 'rc-row assistant';
   aiRow.innerHTML = `
-    <img class="rc-avatar" src="/public/AIIcon.png" alt="">
+    <img class="rc-avatar" src="/public/AIIcon.png?v=2" alt="">
     <div class="rc-body">
       <div class="rc-name">${escHtml(aiName)}</div>
       <div class="rc-bubble thinking">正在思考...</div>
