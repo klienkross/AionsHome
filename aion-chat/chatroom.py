@@ -2,7 +2,7 @@
 聊天室核心逻辑：Connor 代理调用、跨窗口上下文构建、AI 互聊控制、聊天室记忆管理
 """
 
-import json, time, struct, asyncio
+import json, time, struct, asyncio, shutil
 from typing import Optional
 from pathlib import Path
 
@@ -11,7 +11,7 @@ import aiosqlite, httpx
 from config import DATA_DIR, DEFAULT_MODEL, load_worldbook
 from database import get_db
 from memory import get_embedding, cosine_similarity, _pack_embedding, _unpack_embedding, _keyword_match_score
-from ai_providers import call_codex_cli, CLI_STATUS_PREFIX, _build_cli_prompt
+from ai_providers import call_claude_cli, CLI_STATUS_PREFIX, _build_cli_prompt
 from context_builder import build_ability_block, build_memory_blocks, fetch_merged_timeline, render_merged_timeline
 
 # ── Connor-Codex 服务配置 ──
@@ -120,15 +120,8 @@ _CONNOR_TIMEOUT_SENTINEL = "__CONNOR_STILL_PROCESSING__"
 
 
 async def check_connor_online() -> bool:
-    """检查 Connor-Codex 服务是否在线"""
-    cfg = load_chatroom_config()
-    base = cfg["connor_url"].rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=3) as client:
-            resp = await client.get(f"{base}/api/health")
-            return resp.status_code == 200
-    except Exception:
-        return False
+    """检查 Connor 是否可用（Claude CLI 存在即视为在线）"""
+    return shutil.which("claude") is not None
 
 
 # ══════════════════════════════════════════════════
@@ -166,7 +159,7 @@ async def stream_connor_cli(prompt: str = None, *, messages: list[dict] = None):
             persona = _read_connor_persona()
             if persona:
                 messages = [{"role": "system", "content": persona}] + messages
-    async for chunk in call_codex_cli(messages, "", None):
+    async for chunk in call_claude_cli(messages, "", None):
         yield chunk
 
 
