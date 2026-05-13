@@ -94,7 +94,7 @@ POI_SEARCH_PATTERN = re.compile(r'\[POI_SEARCH:([^\]]+)\]')
 OBSIDIAN_READ_PATTERN   = re.compile(r'\[OBSIDIAN_READ:(\d{4}-\d{2}-\d{2})\]')
 OBSIDIAN_RECENT_PATTERN = re.compile(r'\[OBSIDIAN_RECENT:(\d+)\]')
 OBSIDIAN_SEARCH_PATTERN = re.compile(r'\[OBSIDIAN_SEARCH:([^\]]+)\]')
-TOY_CMD_PATTERN = re.compile(r'\[TOY:(\d|STOP)\]')
+TOY_CMD_PATTERN = re.compile(r'\[TOY:((?:\d|STOP)|(?:mode=\d+(?:,speed=\d+)?(?:,speed_b=\d+)?))\]')
 PET_CMD_PATTERN = re.compile(r'\[PET:([a-z_\-]+)\]', re.IGNORECASE)
 META_TAG_PATTERN = re.compile(r'\s*<meta>.*?</meta>', re.DOTALL)
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -211,6 +211,47 @@ def _extract_reply_image_attachments(text: str) -> tuple[str, list]:
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
     return cleaned, _dedupe_attachments(attachments)
 
+def _parse_toy_match(match_str: str) -> dict:
+    """解析 TOY 指令匹配结果，返回 {'type': 'preset', 'value': 3} 或 {'type': 'direct', 'mode': 3, 'speed': 7}"""
+    if match_str == "STOP":
+        return {"type": "preset", "value": 0}
+    if match_str.isdigit():
+        return {"type": "preset", "value": int(match_str)}
+    params = {}
+    for part in match_str.split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            params[k.strip()] = int(v.strip())
+    return {"type": "direct", **params}
+
+
+async def _dispatch_toy_commands(toy_matches: list, ai_msg_id: str, conv_id: str):
+    """统一处理 toy 指令：根据配置决定走 GATT 还是广播"""
+    if SETTINGS.get("toy_adv_enabled"):
+        import toy_adv
+        for m in toy_matches:
+            parsed = _parse_toy_match(m)
+            if parsed["type"] == "preset":
+                payload_hex = toy_adv.build_for_preset(parsed["value"], SETTINGS)
+            else:
+                payload_hex = toy_adv.build_direct(
+                    parsed.get("mode", 0), parsed.get("speed", 0),
+                    SETTINGS, speed_b=parsed.get("speed_b", 0),
+                )
+            if payload_hex:
+                await manager.broadcast({
+                    "type": "toy_adv",
+                    "data": {"payloadHex": payload_hex, "preset": m, "msg_id": ai_msg_id},
+                })
+    else:
+        simple_cmds = [m for m in toy_matches if m == "STOP" or m.isdigit()]
+        if simple_cmds:
+            toy_data = {"type": "toy_command", "commands": simple_cmds, "msg_id": ai_msg_id}
+            await _q.put(toy_data)
+            await manager.broadcast({"type": "toy_command", "data": toy_data})
+    await _toy_sys_msg(conv_id, toy_matches)
+
+
 async def _toy_sys_msg(conv_id: str, commands: list):
     """为玩具指令插入系统消息"""
     wb = load_worldbook()
@@ -218,10 +259,12 @@ async def _toy_sys_msg(conv_id: str, commands: list):
     for cmd in commands:
         if cmd == 'STOP':
             text = f"❤️ {ai_name} 停止了玩具"
-        else:
+        elif cmd.isdigit():
             n = int(cmd)
             name = TOY_PRESET_NAMES.get(n, f'档位{n}')
             text = f"❤️ {ai_name} · 心动{n} · {name}"
+        else:
+            text = f"❤️ {ai_name} · 玩具控制 · {cmd}"
         now = time.time()
         msg_id = f"msg_{int(now*1000)}_toy"
         async with get_db() as db:
@@ -668,6 +711,8 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
         pass
     if body.whisper_mode:
         abilities.append(f"[TOY:1]~[TOY:9] — 控制{user_name}身上的情趣玩具切换到对应预设档位（1最温柔，9最强烈）。[TOY:STOP] — 停止玩具。你可以根据对话氛围自然地使用这些指令来挑逗和调教{user_name}，配合你的话语循序渐进，不要一上来就用高档位。")
+        if SETTINGS.get("toy_adv_enabled"):
+            abilities.append(f"[TOY:mode=M,speed=S] — 精确控制玩具：M为振动波形(0-19)，S为强度(0-9)。波形和强度可能互斥，具体取决于设备。可选参数speed_b用于双马达设备。")
     if SETTINGS.get("video_call_enabled", True):
         abilities.append(f"[视频电话] — 当你想和{user_name}进行视频聊天看看对方当前状态时可以用该指令发起视频通话。")
     if SETTINGS.get("image_gen_enabled", False):
@@ -981,10 +1026,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
             await export_conversation(conv_id)
 
             if toy_matches:
-                toy_data = {'type': 'toy_command', 'commands': toy_matches, 'msg_id': ai_msg_id}
-                await _q.put(toy_data)
-                await manager.broadcast({"type": "toy_command", "data": toy_data})
-                await _toy_sys_msg(conv_id, toy_matches)
+                await _dispatch_toy_commands(toy_matches, ai_msg_id, conv_id)
 
             if pet_matches and _is_pet_available():
                 await manager.broadcast({"type": "pet_command", "data": {"action": pet_matches[-1].lower()}})
@@ -1186,6 +1228,8 @@ async def send_message(conv_id: str, body: MsgCreate):
         pass
     if body.whisper_mode:
         abilities.append(f"[TOY:1]~[TOY:9] — 控制{user_name}身上的情趣玩具切换到对应预设档位（1最温柔，9最强烈）。[TOY:STOP] — 停止玩具。你可以根据对话氛围自然地使用这些指令来挑逗和调教{user_name}，配合你的话语循序渐进，不要一上来就用高档位。")
+        if SETTINGS.get("toy_adv_enabled"):
+            abilities.append(f"[TOY:mode=M,speed=S] — 精确控制玩具：M为振动波形(0-19)，S为强度(0-9)。波形和强度可能互斥，具体取决于设备。可选参数speed_b用于双马达设备。")
     if SETTINGS.get("video_call_enabled", True):
         abilities.append(f"[视频电话] — 当你想和{user_name}进行视频聊天看看对方当前状态时可以用该指令发起视频通话。")
     if SETTINGS.get("image_gen_enabled", False):
@@ -1645,10 +1689,7 @@ async def send_message(conv_id: str, body: MsgCreate):
 
             # 推送 [TOY:x] 指令到前端
             if toy_matches:
-                toy_data = {'type': 'toy_command', 'commands': toy_matches, 'msg_id': ai_msg_id}
-                await _q.put(toy_data)
-                await manager.broadcast({"type": "toy_command", "data": toy_data})
-                await _toy_sys_msg(conv_id, toy_matches)
+                await _dispatch_toy_commands(toy_matches, ai_msg_id, conv_id)
 
             # 推送 [PET:xxx] 桌宠指令到前端
             if pet_matches and _is_pet_available():
@@ -2568,6 +2609,8 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
         pass
     if whisper_mode:
         abilities.append(f"[TOY:1]~[TOY:9] — 控制{user_name}身上的情趣玩具切换到对应预设档位（1最温柔，9最强烈）。[TOY:STOP] — 停止玩具。你可以根据对话氛围自然地使用这些指令来挑逗和调教{user_name}，配合你的话语循序渐进，不要一上来就用高档位。")
+        if SETTINGS.get("toy_adv_enabled"):
+            abilities.append(f"[TOY:mode=M,speed=S] — 精确控制玩具：M为振动波形(0-19)，S为强度(0-9)。波形和强度可能互斥，具体取决于设备。可选参数speed_b用于双马达设备。")
     if SETTINGS.get("video_call_enabled", True):
         abilities.append(f"[视频电话] — 当你想和{user_name}进行视频聊天看看对方当前状态时可以用该指令发起视频通话。")
     if SETTINGS.get("image_gen_enabled", False):
@@ -2916,10 +2959,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
 
             # 推送 [TOY:x] 指令到前端
             if toy_matches:
-                toy_data = {'type': 'toy_command', 'commands': toy_matches, 'msg_id': ai_msg_id}
-                await _q.put(toy_data)
-                await manager.broadcast({"type": "toy_command", "data": toy_data})
-                await _toy_sys_msg(conv_id, toy_matches)
+                await _dispatch_toy_commands(toy_matches, ai_msg_id, conv_id)
 
             # 推送 [PET:xxx] 桌宠指令到前端
             if pet_matches and _is_pet_available():

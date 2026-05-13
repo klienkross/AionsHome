@@ -761,6 +761,10 @@ body[data-theme="light"] .msg-row.system .system-notice { background: rgba(0,0,0
 
 /* ── 密语时刻面板 ── */
 .whisper-modal { max-width:400px; max-height:85vh; overflow-y:auto; }
+.whisper-type-bar { display:flex; gap:0; margin-bottom:12px; border-radius:8px; overflow:hidden; border:1px solid var(--border); }
+.whisper-type-btn { flex:1; padding:8px 0; border:none; background:var(--surface2); color:var(--text3); font-size:12px; cursor:pointer; transition:.2s; opacity:0.6; }
+.whisper-type-btn.active { background:linear-gradient(135deg,#e8537a,#c44569); color:#fff; font-weight:600; opacity:1; box-shadow:inset 0 -2px 4px rgba(0,0,0,0.15); letter-spacing:.5px; }
+.whisper-type-btn:not(.active):hover { opacity:0.8; background:var(--border); }
 .whisper-conn-bar { display:flex; align-items:center; justify-content:space-between; background:var(--surface2); border:1px solid var(--border); border-radius:10px; padding:10px 14px; margin-bottom:12px; }
 .whisper-conn-left { display:flex; align-items:center; gap:8px; }
 .whisper-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
@@ -1321,7 +1325,7 @@ body[data-theme="light"] .plus-menu-item { text-shadow: none; }
     left: 0;
     right: 0;
     height: calc(env(safe-area-inset-top, 0px) + 68px);
-    z-index: 7; /* 在消息之上，在 header(z-index:8) 之下 */
+    z-index: 7;
     pointer-events: none;
     background: linear-gradient(
       to bottom,

@@ -2015,6 +2015,11 @@ async function _processSSEStream(res) {
             if (data.cards && data.cards.length) playMusicOnline(data.cards[0].id);
           } else if (data.type === "toy_command") {
             if (toyConnected) data.commands.forEach(c => toyExecCmd(c));
+          } else if (data.type === "toy_adv") {
+            if (window.AionBle && window.AionBle.sendAdvertise) {
+              window.AionBle.sendAdvertise(data.payloadHex, 2000);
+              toyLog('📡 AI广播 → ' + (data.preset || ''), 'wl-send');
+            }
           } else if (data.type === "heart_whisper") {
             showHeartWhisperHint(data.msg_id, data.content);
           } else if (data.type === "memory_record") {
@@ -2294,6 +2299,11 @@ async function regenerateMsg(aiMsgId) {
             if (d.cards && d.cards.length) playMusicOnline(d.cards[0].id);
           } else if (d.type === "toy_command") {
             if (toyConnected) d.commands.forEach(c => toyExecCmd(c));
+          } else if (d.type === "toy_adv") {
+            if (window.AionBle && window.AionBle.sendAdvertise) {
+              window.AionBle.sendAdvertise(d.payloadHex, 2000);
+              toyLog('📡 AI广播 → ' + (d.preset || ''), 'wl-send');
+            }
           } else if (d.type === "heart_whisper") {
             showHeartWhisperHint(d.msg_id, d.content);
           } else if (d.type === "memory_record") {
@@ -3450,7 +3460,8 @@ async function toyActivatePreset(idx) {
 
 function toyStopAll() {
   toyActivePreset = -1;
-  toySendData2(toyBuildStopCmd());
+  if (toyDeviceType === 'adv') { toyAdvTestPreset(0); }
+  else { toySendData2(toyBuildStopCmd()); }
   toyLog('⏹ 停止', 'wl-sys');
   toyRenderGrid();
 }
@@ -3471,7 +3482,10 @@ function toyRenderGrid() {
     const d = document.createElement('div');
     d.className = 'whisper-p-btn' + (i === toyActivePreset ? ' active' : '');
     d.innerHTML = `<span class="wp-icon">${TOY_PICONS[i]}</span><span class="wp-name">${TOY_PNAMES[i]}</span><button class="wp-edit" onclick="event.stopPropagation();toyOpenEditor(${i})">⚙</button>`;
-    d.onclick = () => { if (toyConnected) toyActivatePreset(i); else toyLog('请先连接','wl-err'); };
+    d.onclick = () => {
+      if (toyDeviceType === 'adv') { toyAdvTestPreset(i + 1); toyActivePreset = i; toyRenderGrid(); return; }
+      if (toyConnected) toyActivatePreset(i); else toyLog('请先连接','wl-err');
+    };
     g.appendChild(d);
   }
 }
@@ -3523,6 +3537,7 @@ function openWhisper() {
   toyLoadPresets();
   toyRenderGrid();
   toyUpdateUI();
+  toySetType(toyDeviceType);
   $('whisperModeToggle').checked = whisperMode;
   $('whisperModal').classList.add('show');
 }
@@ -3584,6 +3599,73 @@ function toyCloseEditor() { $('toyEditorOverlay').classList.remove('show'); }
 function onWhisperModeChange() {
   whisperMode = $('whisperModeToggle').checked;
   toyLog(whisperMode ? '🔮 密语模式已开启' : '🔮 密语模式已关闭', 'wl-sys');
+}
+
+// ══════════════════════════════════════════════════
+// ── 密语时刻：广播模式 ──
+// ══════════════════════════════════════════════════
+let toyDeviceType = localStorage.getItem('toy_device_type') || 'gatt';
+
+function toySetType(type) {
+  toyDeviceType = type;
+  localStorage.setItem('toy_device_type', type);
+  $('toyTypeGatt').classList.toggle('active', type === 'gatt');
+  $('toyTypeAdv').classList.toggle('active', type === 'adv');
+  $('toyGattSection').style.display = type === 'gatt' ? '' : 'none';
+  $('toyAdvSection').style.display = type === 'adv' ? '' : 'none';
+  if (type === 'adv') toyAdvLoadConfig();
+}
+
+async function toyAdvLoadConfig() {
+  try {
+    const res = await api('GET', '/api/toy-adv/config');
+    if (!res.ok) return;
+    const sel = $('toyAdvModel');
+    if (sel && !sel.options.length) {
+      const devRes = await api('GET', '/api/toy-adv/devices');
+      if (devRes.ok) {
+        sel.innerHTML = devRes.devices.map(d => `<option value="${d.model}">${d.name} (${d.model})</option>`).join('');
+      }
+    }
+    if (sel) sel.value = res.toy_adv_model || 'K134';
+    const ch = $('toyAdvChannel');
+    if (ch) ch.value = String(res.toy_adv_channel || 37);
+  } catch (e) {
+    toyLog('加载广播配置失败: ' + e.message, 'wl-err');
+  }
+}
+
+async function toyAdvSaveConfig() {
+  try {
+    const model = $('toyAdvModel')?.value || 'K134';
+    const channel = parseInt($('toyAdvChannel')?.value || '37');
+    await api('POST', '/api/toy-adv/config', {
+      toy_adv_enabled: true,
+      toy_adv_model: model,
+      toy_adv_channel: channel,
+    });
+    toyLog(`📡 广播配置已保存: ${model} / CH${channel}`, 'wl-sys');
+  } catch (e) {
+    toyLog('保存失败: ' + e.message, 'wl-err');
+  }
+}
+
+async function toyAdvTestPreset(idx) {
+  try {
+    const res = await api('POST', '/api/toy-adv/test', { preset: idx });
+    if (res.ok && res.payloadHex) {
+      if (window.AionBle && window.AionBle.sendAdvertise) {
+        window.AionBle.sendAdvertise(res.payloadHex, 2000);
+        toyLog(`📡 广播 → 预设${idx}`, 'wl-send');
+      } else {
+        toyLog(`📡 payload 已构建 (${res.payloadLength}B)，需要手机端发送`, 'wl-sys');
+      }
+    } else {
+      toyLog('构建失败: ' + (res.error || '未知错误'), 'wl-err');
+    }
+  } catch (e) {
+    toyLog('测试失败: ' + e.message, 'wl-err');
+  }
 }
 
 // ── 礼物弹窗系统 ──

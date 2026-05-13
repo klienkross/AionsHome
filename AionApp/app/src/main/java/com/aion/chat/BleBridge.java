@@ -3,6 +3,10 @@ package com.aion.chat;
 import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.le.AdvertiseCallback;
+import android.bluetooth.le.AdvertiseData;
+import android.bluetooth.le.AdvertiseSettings;
+import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
@@ -121,6 +125,50 @@ public class BleBridge {
     public void sendData(final String hexCmd) {
         if (!connected || writeChar == null) return;
         writeExecutor.execute(() -> sendDataInternal(hexCmd));
+    }
+
+    /**
+     * 发送 BLE 广播（用于广播类玩具控制）
+     * payload 由后端 ble_core 构建，前端直接传入 hex 字符串
+     */
+    @JavascriptInterface
+    public void sendAdvertise(final String payloadHex, final int durationMs) {
+        if (adapter == null || !adapter.isEnabled()) {
+            callJs("toyNativeBle.onError('蓝牙未开启')");
+            return;
+        }
+        BluetoothLeAdvertiser advertiser = adapter.getBluetoothLeAdvertiser();
+        if (advertiser == null) {
+            callJs("toyNativeBle.onError('此设备不支持BLE广播')");
+            return;
+        }
+
+        byte[] payload = hexToBytes(payloadHex);
+
+        AdvertiseSettings settings = new AdvertiseSettings.Builder()
+                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
+                .setConnectable(false)
+                .setTimeout(Math.min(durationMs, 10000))
+                .build();
+
+        AdvertiseData data = new AdvertiseData.Builder()
+                .setIncludeDeviceName(false)
+                .setIncludeTxPowerLevel(false)
+                .addManufacturerData(0xFFFF, payload)
+                .build();
+
+        advertiser.startAdvertising(settings, data, new AdvertiseCallback() {
+            @Override
+            public void onStartSuccess(AdvertiseSettings settingsInEffect) {
+                callJs("toyNativeBle.onLog('📡 广播已发射 (" + durationMs + "ms)')");
+            }
+
+            @Override
+            public void onStartFailure(int errorCode) {
+                callJs("toyNativeBle.onError('广播失败: code=" + errorCode + "')");
+            }
+        });
     }
 
     // ── BLE 扫描 ──
