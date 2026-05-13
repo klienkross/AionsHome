@@ -39,7 +39,6 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import androidx.core.view.WindowCompat;
 
 /**
  * WebView 全屏聊天页
@@ -85,10 +84,9 @@ public class WebViewActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // WebView 始终 edge-to-edge；子页面的状态栏避让由 chat.html 的 iframe 浮层处理
-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
-        getWindow().setStatusBarColor(android.graphics.Color.TRANSPARENT);
-        getWindow().setNavigationBarColor(android.graphics.Color.TRANSPARENT);
+        // 状态栏/导航栏使用主题深色背景，系统自动处理键盘避让
+        getWindow().setStatusBarColor(0xFF060a24);
+        getWindow().setNavigationBarColor(0xFF060a24);
 
         // 开启 WebView 调试（Android Studio Logcat 可看 console.log）
         WebView.setWebContentsDebuggingEnabled(true);

@@ -75,7 +75,8 @@
             android:name=".WebViewActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|keyboard|keyboardHidden"
-            android:screenOrientation="portrait" />
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
 
         <!-- 后台推送服务（前台服务 + WebSocket 长连接） -->
         <service
