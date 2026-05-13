@@ -305,7 +305,9 @@ async def _analyze_events(events: list[dict], source: str = "window"):
                 geofence_note = f"\n⚠️ 重要事件：{user_name}{action}了【{zone}】\n"
                 break
 
-    prompt = f"""你是一个传感器数据分析师，同时也是{user_name}的恋人。根据传感器事件和上下文信息，分析{user_name}当前的状态。
+    prompt = f"""你是一个传感器数据分析师。根据传感器事件和上下文信息，客观记录{user_name}当前的状态。
+
+注意：短时间内切换多个app是正常的手机使用习惯，不要过度解读为"碎片化行为"或"注意力分散"。
 
 当前时间：{now_str}
 {user_name}最后一次和你聊天的时间：{last_user_time_str}
@@ -328,14 +330,14 @@ async def _analyze_events(events: list[dict], source: str = "window"):
 {{"monitoringlog":"根据传感器数据分析{user_name}当前的状态和活动。例如：{user_name}在家，手机亮屏刷了会小红书，之后放下手机没有活动。今天步数3420步。","summary":"综合分析{user_name}这段时间的整体状况，一两句话即可。","call_core":false,"core_reason":""}}
 
 字段说明：
-- monitoringlog: 基于传感器数据的客观分析，禁止胡编猜测
-- summary: 综合最近的状态变化和关键事件
+- monitoringlog: 基于传感器数据的客观记录，只写事实，禁止推测情绪或心理状态
+- summary: 综合最近的状态变化和关键事件，一两句话
 - call_core: 是否唤醒主脑主动联系{user_name}
-- core_reason: 仅当call_core为true时填写
+- core_reason: 仅当call_core为true时填写，限一句话
 
-call_core判断依据：
-- false: {user_name}一切正常 / 夜间在睡觉 / 前不久才发过消息
-- true: 地理围栏变化且{ai_name}还不知道 / 长时间无活动需关心 / 异常行为模式（深夜仍活跃等）/ 你觉得可以主动联系{user_name}（大约20%概率）"""
+call_core判断依据（默认false，只有明确理由才设true）：
+- false: {user_name}正常使用手机 / 夜间在睡觉 / 前不久才发过消息 / 没有显著变化
+- true: 地理围栏变化且{ai_name}还不知道 / 超过2小时无任何活动需关心 / 深夜2点后仍活跃"""
 
     log.info("调用 Sentinel 分析 %d 个事件 (source=%s, has_image=%s)", len(events), source, bool(image_b64))
 
