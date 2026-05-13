@@ -12,7 +12,7 @@ from fastapi import APIRouter, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from config import DEFAULT_MODEL, DATA_DIR, CODEX_UPLOADS_DIR
+from config import DEFAULT_MODEL, DATA_DIR, CODEX_UPLOADS_DIR, SETTINGS
 from database import get_db
 from ws import manager
 from ai_providers import stream_ai, CLI_STATUS_PREFIX
@@ -569,7 +569,7 @@ class ConfigUpdate(BaseModel):
 @router.get("/config")
 async def get_config():
     cfg = load_chatroom_config()
-    # connor_online 不再阻塞返回，前端可通过 /connor-status 单独查询
+    cfg["connor_name"] = SETTINGS.get("connor_name", "Connor")
     return {**cfg, "connor_online": None}
 
 

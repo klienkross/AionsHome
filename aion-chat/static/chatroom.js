@@ -9,10 +9,12 @@ let chatroomModel = '';
 let pendingAttachments = [];  // [{url, type, name}]
 
 const AVATARS = {
-  user: '/public/UserIcon.png',
-  aion: '/public/gropicon1.png',
-  connor: '/public/codexicon.png',
+  user: '/public/UserIcon.png?v=2',
+  aion: '/public/AIIcon.png?v=2',
+  connor: '/public/codexicon.png?v=2',
 };
+
+let NAMES = { user: '我', aion: 'Aion', connor: 'Connor' };
 
 // ── 音效 ──
 const sndSend = new Audio('/public/发送消息.mp3');
@@ -281,7 +283,7 @@ function renderMessages(msgs) {
     messagesEl.innerHTML = `
       <div class="empty-state">
         <div class="icon">${currentRoom.type === 'connor_1v1' ? '🤖' : '👥'}</div>
-        <div>${currentRoom.type === 'connor_1v1' ? '和 Connor 开始私聊吧' : '三人群聊，开始吧'}</div>
+        <div>${currentRoom.type === 'connor_1v1' ? `和 ${NAMES.connor} 开始私聊吧` : '三人群聊，开始吧'}</div>
       </div>`;
     return;
   }
@@ -296,7 +298,7 @@ function msgHTML(m) {
     return `<div class="system-event-msg" data-msg-id="${m.id || ''}">${esc(m.content || '')}</div>`;
   }
 
-  const senderNames = { user: '我', aion: 'Aion', connor: 'Connor' };
+  const senderNames = NAMES;
   const name = senderNames[sender] || sender;
   const avatar = AVATARS[sender] || AVATARS.user;
   const time = timeStr(m.created_at);
@@ -424,7 +426,7 @@ let pendingStreamId = null;
 
 function startStreamingBubble(sender, id) {
   streamingText = '';
-  const senderNames = { aion: 'Aion', connor: 'Connor' };
+  const senderNames = NAMES;
   const name = senderNames[sender] || sender;
   const avatar = AVATARS[sender] || AVATARS.user;
 
@@ -548,13 +550,13 @@ composer.addEventListener('submit', async (e) => {
 function handleSSE(data) {
   switch (data.type) {
     case 'aion_start':
-      appendTyping('Aion');
+      appendTyping(NAMES.aion);
       // 延迟创建流式气泡，等第一个 chunk 到达时再创建
       pendingStreamSender = 'aion';
       pendingStreamId = data.id;
       break;
     case 'aion_status':
-      updateTypingStatus('Aion', data.text);
+      updateTypingStatus(NAMES.aion, data.text);
       break;
     case 'aion_chunk':
       if (pendingStreamSender && !streamingBubble) {
@@ -575,12 +577,12 @@ function handleSSE(data) {
       playRecv();
       break;
     case 'connor_start':
-      appendTyping('Connor');
+      appendTyping(NAMES.connor);
       pendingStreamSender = 'connor';
       pendingStreamId = data.id;
       break;
     case 'connor_status':
-      updateTypingStatus('Connor', data.text);
+      updateTypingStatus(NAMES.connor, data.text);
       break;
     case 'connor_chunk':
       if (pendingStreamSender && !streamingBubble) {
@@ -901,10 +903,10 @@ async function checkConnor() {
     const result = await api('/connor-status');
     const online = result.online;
     connorDot.className = `connor-dot ${online ? 'online' : ''}`;
-    connorStatusEl.textContent = `Connor: ${online ? '在线' : '离线'}`;
+    connorStatusEl.textContent = `${NAMES.connor}: ${online ? '在线' : '离线'}`;
   } catch {
     connorDot.className = 'connor-dot';
-    connorStatusEl.textContent = 'Connor: 离线';
+    connorStatusEl.textContent = `${NAMES.connor}: 离线`;
   }
 }
 
@@ -1112,6 +1114,14 @@ function escWithImages(str) {
 // ══════════════════════════════════════════════════
 
 (async function init() {
+  try {
+    const [wb, cfg] = await Promise.all([
+      fetch('/api/worldbook').then(r => r.json()),
+      api('/config'),
+    ]);
+    if (wb.ai_name) NAMES.aion = wb.ai_name;
+    if (cfg.connor_name) NAMES.connor = cfg.connor_name;
+  } catch {}
   await fetchCurrentModel();
   await loadRooms();
   // 默认打开最后一次聊天的房间

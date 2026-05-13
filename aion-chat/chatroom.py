@@ -8,7 +8,7 @@ from pathlib import Path
 
 import aiosqlite, httpx
 
-from config import DATA_DIR, DEFAULT_MODEL, load_worldbook
+from config import DATA_DIR, DEFAULT_MODEL, SETTINGS, load_worldbook
 from database import get_db
 from memory import get_embedding, cosine_similarity, _pack_embedding, _unpack_embedding, _keyword_match_score
 from ai_providers import call_claude_cli, CLI_STATUS_PREFIX, _build_cli_prompt
@@ -131,6 +131,10 @@ async def check_connor_online() -> bool:
 _CONNOR_PERSONA_PATH = Path(__file__).parent.parent / "Connor-Codex" / "persona.md"
 
 
+def get_connor_name() -> str:
+    return SETTINGS.get("connor_name", "Connor")
+
+
 def _read_connor_persona() -> str:
     """读取 Connor 的人设文件"""
     if _CONNOR_PERSONA_PATH.exists():
@@ -217,11 +221,14 @@ def format_cross_context(messages: list[dict], label: str) -> str:
     """将跨窗口消息格式化为上下文文本"""
     if not messages:
         return ""
+    wb = load_worldbook()
+    _ai = wb.get("ai_name", "Aion")
+    _name_map = {"user": wb.get("user_name", "用户"), "assistant": _ai, "aion": _ai, "connor": get_connor_name()}
     lines = [f"[{label} - 近期对话摘要]"]
     for m in messages:
         ts = time.strftime("%H:%M", time.localtime(m.get("created_at", 0)))
         role = m.get("role") or m.get("sender", "unknown")
-        name = {"user": "用户", "assistant": "Aion", "aion": "Aion", "connor": "Connor"}.get(role, role)
+        name = _name_map.get(role, role)
         text = (m.get("content") or "")[:300]
         lines.append(f"  [{ts}] {name}: {text}")
     return "\n".join(lines)
@@ -361,7 +368,7 @@ async def digest_chatroom(room_id: str = None, model_key: str = None) -> dict:
     wb = load_worldbook()
     user_name = wb.get("user_name", "用户")
     ai_name = wb.get("ai_name", "AI")
-    connor_name = "Connor"
+    connor_name = get_connor_name()
 
     # 构建人设前缀（Connor 已有自身人设，这里注入 Aion 和用户信息供参考）
     persona_block = ""
@@ -491,6 +498,8 @@ async def build_aion_group_context(
     # 0. 注入世界书（和主聊天一致的人设）
     wb = load_worldbook()
     user_name = wb.get("user_name", "用户")
+    ai_name = wb.get("ai_name", "Aion")
+    connor_name = get_connor_name()
     if wb.get("ai_persona"):
         history.append({"role": "user", "content": f"[系统设定 - AI人设]\n{wb['ai_persona']}"})
         history.append({"role": "assistant", "content": "收到，我会按照设定扮演角色。"})
@@ -541,8 +550,8 @@ async def build_aion_group_context(
     # 5. 群聊说明
     history.append({"role": "user", "content": (
         "[群聊说明]\n"
-        "你现在在一个三人群聊中，参与者：用户（Ithil）、你（Aion）、Connor。\n"
-        "Connor 是另一个 AI 伴侣。请自然地参与群聊对话，可以回应用户也可以和 Connor 交流。\n"
+        f"你现在在一个三人群聊中，参与者：用户（{user_name}）、你（{ai_name}）、{connor_name}。\n"
+        f"{connor_name} 是另一个 AI 伴侣。请自然地参与群聊对话，可以回应用户也可以和 {connor_name} 交流。\n"
         "回复时直接说话即可，不需要加前缀标记自己的身份。\n"
         "以下对话记录按时间线排列，可能包含私聊和群聊的混合内容。"
     )})
@@ -573,6 +582,8 @@ async def build_connor_group_context(
 
     wb = load_worldbook()
     user_name = wb.get("user_name", "用户")
+    ai_name = wb.get("ai_name", "Aion")
+    connor_name = get_connor_name()
 
     # 0. Connor 人设
     connor_full_persona = connor_persona or _read_connor_persona()
@@ -618,8 +629,8 @@ async def build_connor_group_context(
     # 4. 群聊说明
     history.append({"role": "user", "content": (
         "[群聊说明]\n"
-        "你现在在一个三人群聊中，参与者：用户（Ithil）、Aion（另一个AI）、你（Connor）。\n"
-        "请自然地参与群聊对话，可以回应用户也可以和 Aion 交流。\n"
+        f"你现在在一个三人群聊中，参与者：用户（{user_name}）、{ai_name}（另一个AI）、你（{connor_name}）。\n"
+        f"请自然地参与群聊对话，可以回应用户也可以和 {ai_name} 交流。\n"
         "回复时直接说话即可，不需要加前缀标记。\n"
         "以下对话记录按时间线排列，可能包含私聊和群聊的混合内容。"
     )})

@@ -875,6 +875,7 @@ async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            limit=1024 * 1024,  # 1MB line buffer，避免大 JSON 行超限
         )
 
         line_buf = ""
