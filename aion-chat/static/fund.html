@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>奥罗斯财团 - Aion</title>
 <link rel="stylesheet" href="/static/common.css">
+<script src="/static/components.js"></script>
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#ff8359">
@@ -17,20 +18,6 @@
 }
 .fund-toggle .label { font-size: 14px; font-weight: 600; color: var(--text); }
 .fund-toggle .status { font-size: 12px; color: var(--text3); margin-left: 8px; }
-.switch { position: relative; width: 44px; height: 24px; flex-shrink: 0; }
-.switch input { opacity: 0; width: 0; height: 0; }
-.switch .slider {
-  position: absolute; inset: 0; background: #ccc; border-radius: 24px;
-  cursor: pointer; transition: 0.3s;
-}
-.switch .slider::before {
-  content: ''; position: absolute; left: 2px; top: 2px;
-  width: 20px; height: 20px; background: #fff; border-radius: 50%;
-  transition: 0.3s;
-}
-.switch input:checked + .slider { background: var(--accent); }
-.switch input:checked + .slider::before { transform: translateX(20px); }
-
 /* ── 操作按钮组 ── */
 .action-row {
   display: flex; gap: 8px; margin-bottom: 14px;
@@ -201,10 +188,7 @@
 </head>
 <body>
 <div class="sub-page">
-  <div class="top-bar">
-    <button class="back-btn" onclick="location.href='/'">⬅</button>
-    <h2>💰 奥罗斯财团</h2>
-  </div>
+  <aion-topbar title="💰 奥罗斯财团"></aion-topbar>
   <div class="page-content">
 
     <!-- 功能开关 -->
@@ -213,10 +197,7 @@
         <span class="label">基金监控</span>
         <span class="status" id="toggleStatus">每日 14:45 自动分析</span>
       </div>
-      <label class="switch">
-        <input type="checkbox" id="enableToggle" checked onchange="toggleEnabled()">
-        <span class="slider"></span>
-      </label>
+      <aion-toggle id="enableToggle" checked></aion-toggle>
     </div>
 
     <!-- 操作按钮 -->
@@ -326,6 +307,7 @@ let marketData = null;
 
 (async function init() {
   await loadConfig();
+  $("enableToggle").addEventListener('change', () => toggleEnabled());
   await loadHoldings();
   await loadCache();
 })();

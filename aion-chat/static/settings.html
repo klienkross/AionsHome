@@ -5,16 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>设置 - Aion</title>
 <link rel="stylesheet" href="/static/common.css">
+<script src="/static/components.js"></script>
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#ff8359">
 </head>
 <body>
 <div class="sub-page">
-  <div class="top-bar">
-    <button class="back-btn" onclick="location.href='/'">⬅</button>
-    <h2>⚙ 设置</h2>
-  </div>
+  <aion-topbar title="⚙ 设置"></aion-topbar>
   <div class="page-content">
     <label class="form-label">Gemini API Key</label>
     <input class="form-input" type="text" id="geminiKeyInput" placeholder="输入 Gemini API Key..." autocomplete="off" style="font-family:monospace">

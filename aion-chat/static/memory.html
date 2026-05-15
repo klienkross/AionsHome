@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>记忆库 - Aion</title>
 <link rel="stylesheet" href="/static/common.css">
+<script src="/static/components.js"></script>
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#ff8359">
@@ -80,10 +81,7 @@
 </head>
 <body>
 <div class="sub-page">
-  <div class="top-bar">
-    <button class="back-btn" onclick="location.href='/'">⬅</button>
-    <h2>🧠 记忆库</h2>
-  </div>
+  <aion-topbar title="🧠 记忆库"></aion-topbar>
   <div class="page-content">
     <input class="mem-search" id="memSearch" type="text" placeholder="🔍 搜索记忆..." oninput="filterMemories()">
     <div class="mem-filters" id="memFilters" style="display:flex;gap:6px;margin-bottom:8px;">

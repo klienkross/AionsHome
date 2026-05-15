@@ -50,7 +50,6 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 .sidebar { width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
 .sidebar-header { padding: 10px; border-bottom: 1px solid var(--border); display: flex; gap: 6px; }
 .sidebar-header button { flex:1; padding: 10px; border: none; border-radius: 8px; background: var(--accent); color: #fff; font-size: 14px; cursor: pointer; }
-.sidebar-header .settings-btn { flex:none; width:40px; background:var(--surface2); color:var(--text); font-size:18px; }
 .conv-list { flex:1; overflow-y: auto; padding: 4px 6px; }
 .conv-item { padding: 11px 10px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; margin-bottom: 1px; }
 .conv-item:hover { background: var(--surface2); }
@@ -297,8 +296,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 
 /* ── 侧栏底部 ── */
 .sidebar-footer { padding:10px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:4px; }
-.sidebar-footer button { width:100%; padding:10px; border:none; border-radius:8px; background:var(--surface2); color:var(--text); font-size:14px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px; }
-.sidebar-footer button:hover { background:var(--border); }
+
 
 /* ── 世界书 ── */
 .wb-modal { max-width:500px; }
@@ -752,6 +750,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 #subPageBar span { font-size:14px; color:var(--text2); flex:1; }
 #subPageFrame { flex:1; border:none; width:100%; }
 </style>
+<script src="/static/components.js"></script>
 </head>
 <body>
 
@@ -759,15 +758,15 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <button onclick="newConversation()">+ 新对话</button>
-      <button class="settings-btn" onclick="openFileManager()">📁</button>
-      <button class="settings-btn" onclick="openSubPage('/settings')">⚙</button>
+      <aion-icon-btn icon="📁" onclick="openFileManager()"></aion-icon-btn>
+      <aion-icon-btn icon="⚙" onclick="openSubPage('/settings')"></aion-icon-btn>
     </div>
     <div class="conv-list" id="convList"></div>
     <div class="sidebar-footer">
-      <button id="sysLogBtn" onclick="openSystemLog()">📋 系统日志</button>
-      <button onclick="openWhisper()">💗 密语时刻</button>
-      <button onclick="openWalletPanel()">💰 钱包</button>
-      <button onclick="openSubPage('/')">🏠 返回主页</button>
+      <aion-sidebar-btn id="sysLogBtn" icon="📋" onclick="openSystemLog()">系统日志</aion-sidebar-btn>
+      <aion-sidebar-btn icon="💗" onclick="openWhisper()">密语时刻</aion-sidebar-btn>
+      <aion-sidebar-btn icon="💰" onclick="openWalletPanel()">钱包</aion-sidebar-btn>
+      <aion-sidebar-btn icon="🏠" onclick="openSubPage('/')">返回主页</aion-sidebar-btn>
     </div>
   </aside>
   <div class="overlay" id="overlay" onclick="closeSidebar()"></div>

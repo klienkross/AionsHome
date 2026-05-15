@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>定位地图 - Aion</title>
 <link rel="stylesheet" href="/static/common.css">
+<script src="/static/components.js"></script>
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#ff8359">
@@ -39,10 +40,7 @@
 </head>
 <body>
 <div class="sub-page">
-  <div class="top-bar">
-    <button class="back-btn" onclick="location.href='/'">⬅</button>
-    <h2>📍 定位地图</h2>
-  </div>
+  <aion-topbar title="📍 定位地图"></aion-topbar>
   <div class="page-content">
     <!-- 状态概览 -->
     <div class="loc-panel-status">

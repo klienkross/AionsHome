@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>活动日志 - Aion</title>
 <link rel="stylesheet" href="/static/common.css">
+<script src="/static/components.js"></script>
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#ff8359">
@@ -112,17 +113,16 @@
 </head>
 <body>
 <div class="sub-page">
-  <div class="top-bar">
-    <button class="back-btn" onclick="location.href='/'">⬅</button>
-    <h2>📊 活动日志 <span class="live-dot" id="liveDot" title="实时接收中"></span></h2>
-    <div style="margin-left:auto; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text2);">
+  <aion-topbar title="📊 活动日志">
+    <span slot="actions" class="live-dot" id="liveDot" title="实时接收中"></span>
+    <div slot="actions" style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text2);">
       <span>AI联动</span>
       <label class="toggle-switch" title="开启后AI可以查看设备动态、哨兵/监督也会携带活动摘要">
         <input type="checkbox" id="activityTrackingToggle" onchange="toggleActivityTracking(this.checked)">
         <span class="toggle-slider"></span>
       </label>
     </div>
-  </div>
+  </aion-topbar>
   <div class="page-content">
     <!-- 筛选 -->
     <div class="filter-row">
