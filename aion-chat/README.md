@@ -255,8 +255,9 @@
 28b. **自动桥接** — 服务器直连 ESP32 失败时，自动通知 App（AionPushService）启动桥接：App 从热点局域网拉帧→上传服务器。直连恢复时自动关闭桥接
 28c. **户外模式** — 手机开热点 + ESP32 连热点，App 前台服务桥接帧数据到家里服务器（~1fps，约 80KB/帧），AI 仍可触发 Sentinel/[CAM_CHECK]/定时监控
 28d. **零侵入** — 所有下游（Sentinel、Core、[CAM_CHECK]、定时监控、预览）通过 `get_frame_jpeg()` 取帧，无需感知帧来源。`active_source` 默认 `local`，不配置 ESP32 时行为完全不变
-29. **Sentinel 哨兵** — 定时截图后由轻量模型（flash-lite）分析，注入设备活动摘要（近 60 分钟 6 条）作为辅助判断依据，输出结构化 JSON（含概况摘要 summary + 唤醒原因 core_reason）
-30. **Core 唤醒** — Sentinel 判断需要时唤醒 Core（当前聊天模型），Core 收到哨兵摘要+唤醒原因+最近5条日志+记忆召回，主动在对话中联系用户
+28e. **主屏幕画面合成** — 所有监控截图（哨兵巡逻/[CAM_CHECK]/定时监控/前端预览）均自动合成摄像头画面（上）+ 主屏幕截图（下）的上下拼接图，屏幕截图使用 `PIL.ImageGrab.grab()` 仅抓取主显示器并缩放到与摄像头同宽（~1280px），合成图约 128KB（JPEG quality=85），AI 可同时看到用户和用户的电脑屏幕内容
+29. **Sentinel 哨兵** — 每次巡逻截图前先广播 `monitor_alert` 播放提示音并等待 5 秒（给用户准备时间），然后截图交由轻量模型（flash-lite）分析，注入设备活动摘要（近 60 分钟 6 条）作为辅助判断依据，输出结构化 JSON（含概况摘要 summary + 唤醒原因 core_reason）
+30. **Core 唤醒** — Sentinel 判断需要时唤醒 Core（当前聊天模型），直接复用哨兵截图（不再重新截图），Core 收到哨兵摘要+唤醒原因+最近5条日志+记忆召回+哨兵截图，主动在对话中联系用户
 31. **监控日志系统** — 独立于聊天的 JSONL 日志，按日期存储，3 天自动清理
 32. **日志查看器** — 侧边栏「📜 监控日志」按钮，按日期浏览，显示概况摘要和唤醒原因，WebSocket 实时推送新日志
 33. **聊天状态摘要（chat_status）** — 即时哨兵提取，存储在 `data/chat_status.json`，监控哨兵分析时自动注入
@@ -282,7 +283,9 @@
 ### Sentinel/Core 工作流程
 ```
 【哨兵定时监控】
-  定时截图 → 获取设备活动摘要（近 60 分钟 6 条）→ Sentinel(flash-lite) 分析 → 输出 JSON:
+  广播 monitor_alert → 前端播放提示音 → 等待 5 秒
+  → 截图（摄像头画面 + 主屏幕画面上下拼接）
+  → 获取设备活动摘要（近 60 分钟 6 条）→ Sentinel(flash-lite) 分析 → 输出 JSON:
     {
       "monitoringlog": "观察描述...",
       "summary": "这段时间的概况摘要...",
@@ -291,12 +294,12 @@
     }
     ↓ 日志写入 monitor_logs/YYYY-MM-DD.jsonl + WebSocket 广播
     ↓ (如果 call_core = true)
-    组装提示词（含唤醒原因 + 概况摘要 + 最近5条日志 + 世界书 + 聊天上下文 + 记忆召回）
+    复用哨兵截图 + 组装提示词（含唤醒原因 + 概况摘要 + 最近5条日志 + 世界书 + 聊天上下文 + 记忆召回）
     → Core(当前模型) 生成回复 → 作为 assistant 消息插入对话
 
 【Core 主动查看监控 [CAM_CHECK]】
   Core 回复包含 [CAM_CHECK] → 后端检测并发 SSE 事件 + WebSocket 广播 → 前端播放提示音
-  → 等待 5 秒 → POST /api/cam-check-trigger → 后端截图
+  → 等待 5 秒 → POST /api/cam-check-trigger → 后端截图（摄像头画面 + 主屏幕画面上下拼接）
   → 带人设+上下文+图片调用 Core → 结果作为新 assistant 消息保存+广播
 ```
 

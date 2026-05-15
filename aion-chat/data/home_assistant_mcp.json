@@ -1,0 +1,15 @@
+﻿{
+    "ha_url":  "http://127.0.0.1:8123",
+    "ha_token":  "这里需要你的token！！",
+    "dry_run":  false,
+    "allowed_domains":  [
+                            "light",
+                            "switch",
+                            "fan",
+                            "cover",
+                            "climate",
+                            "humidifier",
+                            "scene",
+                            "script"
+                        ]
+}

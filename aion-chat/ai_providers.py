@@ -12,7 +12,7 @@ logger = logging.getLogger("ai_providers")
 MAX_RETRIES = 2
 RETRY_DELAY = 1.5
 
-from config import get_key, MODELS, UPLOADS_DIR, CODEX_UPLOADS_DIR, load_worldbook
+from config import get_key, MODELS, UPLOADS_DIR, CODEX_UPLOADS_DIR, load_worldbook, SETTINGS
 
 # CLI 状态前缀：yield 此前缀的 chunk 会被 _bg_generate 拦截为状态事件，不送入 TTS 和正文
 CLI_STATUS_PREFIX = "\x00CLI_STATUS:"
@@ -44,6 +44,23 @@ def _strip_gemini_cli_noise(text: str) -> str:
     # 去除被裁出来后可能剩下的多余空行
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     return cleaned.strip()
+
+
+def _extract_gemini_cli_report_error(stderr_text: str) -> tuple[str | None, str | None]:
+    """从 Gemini CLI 的临时错误报告里提炼核心错误，并保留报告路径。"""
+    if not stderr_text:
+        return None, None
+    match = re.search(r"Full report available at:\s*(.+?\.json)", stderr_text)
+    if not match:
+        return None, None
+    report_path = Path(match.group(1).strip())
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, str(report_path)
+    err_msg = payload.get("error", {}).get("message")
+    cleaned = err_msg.strip() if isinstance(err_msg, str) and err_msg.strip() else None
+    return cleaned, str(report_path)
 
 
 # 流式状态机：噪音块开始 → 闭合 token 列表
@@ -594,7 +611,8 @@ async def _spawn_cli_process(cmd: list[str], prompt: str, env: dict | None = Non
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         stdin=asyncio.subprocess.PIPE,
-        env=env
+        env=env,
+        limit=8 * 1024 * 1024,
     )
     proc.stdin.write(prompt.encode("utf-8"))
     await proc.stdin.drain()
@@ -641,9 +659,11 @@ async def call_gemini_cli(messages: list, model: str, meta: dict | None = None,
     #   init / message(user) / tool_use / tool_result / message(assistant,delta) / result(stats)
     # 好处：结构化解析只提取 assistant 正文，tool_use/tool_result 转为状态事件，
     # 不再需要 GeminiCliNoiseFilter 噪音过滤；result 事件自带 token 统计。
-    # --approval-mode auto_edit 允许 CLI 自动执行文件读写操作（如下载图片存盘），
-    # 否则非交互模式下 write_file 等工具默认被拒绝。
-    cmd.extend(["--skip-trust", "--approval-mode", "yolo", "-o", "stream-json", "-p", " "])
+    # --approval-mode yolo 允许 CLI 自动执行文件读写和工具调用（如下载图片存盘），
+    # plan 模式下非交互模式 write_file 等工具默认被拒绝。
+    # 通过前端「允许调用工具」开关控制。
+    approval = "yolo" if SETTINGS.get("gemini_cli_tools_enabled", False) else "plan"
+    cmd.extend(["--skip-trust", "--approval-mode", approval, "-o", "stream-json", "-p", " "])
 
     try:
         proc = await _spawn_cli_process(cmd, prompt)
@@ -661,9 +681,15 @@ async def call_gemini_cli(messages: list, model: str, meta: dict | None = None,
                 f.write(prompt)
                 f.write("\n\n=== RAW JSONL ===\n")
 
-        # stream-json 模式：逐行读取 JSONL，按 type 分发
+        # stream-json 模式：按块读取后再切 JSONL。
+        # 不能直接 `async for line in proc.stdout`，否则超长 JSON 行会触发
+        # asyncio StreamReader 的行缓冲上限，报：
+        # `Separator is not found, and chunk exceed the limit`
         line_buf = ""
-        async for chunk in proc.stdout:
+        while True:
+            chunk = await proc.stdout.read(64 * 1024)
+            if not chunk:
+                break
             text = chunk.decode("utf-8", errors="replace")
             if not text:
                 continue
@@ -732,6 +758,15 @@ async def call_gemini_cli(messages: list, model: str, meta: dict | None = None,
                     err_msg = event.get("message", "") or event.get("error", "")
                     if err_msg:
                         yield f"\n[GeminiCLI错误] {err_msg[:500]}"
+        if line_buf.strip():
+            try:
+                event = json.loads(line_buf.strip())
+            except json.JSONDecodeError:
+                event = None
+            if event and event.get("type") == "error":
+                err_msg = event.get("message", "") or event.get("error", "")
+                if err_msg:
+                    yield f"\n[GeminiCLI错误] {err_msg[:500]}"
 
         if debug_log:
             with open(debug_log, "a", encoding="utf-8") as f:
@@ -741,7 +776,11 @@ async def call_gemini_cli(messages: list, model: str, meta: dict | None = None,
         if proc.returncode and proc.returncode != 0:
             stderr_out = await proc.stderr.read()
             err = stderr_out.decode("utf-8", errors="replace").strip()
-            if err:
+            report_err, report_path = _extract_gemini_cli_report_error(err)
+            if report_err:
+                detail = f"\n完整报告：{report_path}" if report_path else ""
+                yield f"\n[GeminiCLI错误] {report_err[:500]}{detail}"
+            elif err:
                 yield f"\n[GeminiCLI错误 code={proc.returncode}] {err[:500]}"
 
     except FileNotFoundError:
@@ -795,44 +834,69 @@ async def call_codex_cli(messages: list, model: str, meta: dict | None = None,
         proc = await _spawn_cli_process(cmd, prompt, env)
 
         last_agent_text = ""
-        async for raw_line in proc.stdout:
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line:
-                continue
+        line_buf = ""
+        while True:
+            chunk = await proc.stdout.read(64 * 1024)
+            if not chunk:
+                break
+            line_buf += chunk.decode("utf-8", errors="replace")
+            while "\n" in line_buf:
+                line, line_buf = line_buf.split("\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                etype = event.get("type", "")
+                item = event.get("item", {})
+                item_type = item.get("type", "")
+
+                # 实时状态事件 → yield 状态标记（不会进入正文/TTS）
+                if etype == "item.started":
+                    if item_type == "web_search":
+                        yield f"{CLI_STATUS_PREFIX}🔍 正在联网搜索…"
+                    elif item_type == "command_execution":
+                        cmd_str = item.get("command", "")
+                        short_cmd = cmd_str[:60] + ("…" if len(cmd_str) > 60 else "") if cmd_str else ""
+                        yield f"{CLI_STATUS_PREFIX}⚙️ 正在执行命令{'：' + short_cmd if short_cmd else '…'}"
+                elif etype == "item.completed":
+                    if item_type == "web_search":
+                        query = item.get("query", "")
+                        yield f"{CLI_STATUS_PREFIX}🔍 搜索完成{'：' + query[:50] if query else ''}"
+                    elif item_type == "command_execution":
+                        status = item.get("status", "")
+                        label = "✅ 命令完成" if status == "completed" else "❌ 命令失败"
+                        yield f"{CLI_STATUS_PREFIX}{label}"
+                    elif item_type == "agent_message":
+                        last_agent_text = item.get("text", "")
+                elif etype == "turn.completed":
+                    usage = event.get("usage", {})
+                    if meta is not None and usage:
+                        meta["prompt_tokens"] = usage.get("input_tokens", 0)
+                        meta["completion_tokens"] = usage.get("output_tokens", 0)
+                        meta["total_tokens"] = meta["prompt_tokens"] + meta["completion_tokens"]
+                        meta["raw"] = usage
+        if line_buf.strip():
             try:
-                event = json.loads(line)
+                event = json.loads(line_buf.strip())
             except json.JSONDecodeError:
-                continue
-
-            etype = event.get("type", "")
-            item = event.get("item", {})
-            item_type = item.get("type", "")
-
-            # 实时状态事件 → yield 状态标记（不会进入正文/TTS）
-            if etype == "item.started":
-                if item_type == "web_search":
-                    yield f"{CLI_STATUS_PREFIX}🔍 正在联网搜索…"
-                elif item_type == "command_execution":
-                    cmd_str = item.get("command", "")
-                    short_cmd = cmd_str[:60] + ("…" if len(cmd_str) > 60 else "") if cmd_str else ""
-                    yield f"{CLI_STATUS_PREFIX}⚙️ 正在执行命令{'：' + short_cmd if short_cmd else '…'}"
-            elif etype == "item.completed":
-                if item_type == "web_search":
-                    query = item.get("query", "")
-                    yield f"{CLI_STATUS_PREFIX}🔍 搜索完成{'：' + query[:50] if query else ''}"
-                elif item_type == "command_execution":
-                    status = item.get("status", "")
-                    label = "✅ 命令完成" if status == "completed" else "❌ 命令失败"
-                    yield f"{CLI_STATUS_PREFIX}{label}"
-                elif item_type == "agent_message":
+                event = None
+            if event:
+                etype = event.get("type", "")
+                item = event.get("item", {})
+                item_type = item.get("type", "")
+                if etype == "item.completed" and item_type == "agent_message":
                     last_agent_text = item.get("text", "")
-            elif etype == "turn.completed":
-                usage = event.get("usage", {})
-                if meta is not None and usage:
-                    meta["prompt_tokens"] = usage.get("input_tokens", 0)
-                    meta["completion_tokens"] = usage.get("output_tokens", 0)
-                    meta["total_tokens"] = meta["prompt_tokens"] + meta["completion_tokens"]
-                    meta["raw"] = usage
+                elif etype == "turn.completed":
+                    usage = event.get("usage", {})
+                    if meta is not None and usage:
+                        meta["prompt_tokens"] = usage.get("input_tokens", 0)
+                        meta["completion_tokens"] = usage.get("output_tokens", 0)
+                        meta["total_tokens"] = meta["prompt_tokens"] + meta["completion_tokens"]
+                        meta["raw"] = usage
 
         await proc.wait()
 

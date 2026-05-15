@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python *)",
       "WebFetch(domain:github.com)",
-      "PowerShell(git *)"
+      "PowerShell(git *)",
+      "PowerShell(git log *)"
     ]
   }
 }

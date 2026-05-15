@@ -114,6 +114,10 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
             pass
     full_text = await process_schedule_commands(full_text, None)
 
+    # ── 智能家居 ──
+    from routes.chat import _process_home_commands
+    full_text = await _process_home_commands(full_text)
+
     # ── 查岗 ──
     cam_triggered = CAM_CHECK_CMD in full_text
     if cam_triggered:

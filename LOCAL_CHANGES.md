@@ -1,166 +1,76 @@
 # 本地改动摘要
 
-记录本 fork 相对于 upstream (death34018-hue/AionsHome) 的主要改动，便于合并上游时快速定位冲突归属。
+记录本 fork 相对于 upstream (`death34018-hue/AionsHome`) 的主要差异，**供合并上游时快速判断冲突归属和处理策略**。
+
+上游同步进度：截止 `886874b`（2026-05-14），所有提交已评估/合并/跳过。
 
 ---
 
-## 核心模块
+## 合并速查：上游改了某文件时怎么办
 
-### ai_providers.py
-- 自定义 OpenAI 兼容端点 (custom provider) 支持
-- 图片转文本开关 + 无限上下文开关
-- DEFAULT_MODEL 可配置化
-- DashScope 哨兵调用路径
-
-### config.py
-- `get_key()` 新增 mimo / custom provider 分支
-- MODELS 字典新增 deepseek 自定义端点
-- skip-worktree 保护本地密钥不提交
-
-### main.py
-- sensor webhook channel 注册 + event loop 初始化
-- ntfy.sh 桥接启动
-- HTTP 缓存头优化
-- 启动时打印本机 IP
-- reading (朗读) 模块注册
-
-### routes/chat.py
-- Memory V2 系统集成 (recall、主动检索、前端 API)
-- 提示词拼接顺序重构 (时间+记忆末尾，最近对话置底)
-- Obsidian 日记工具
-- 背景思考 [THINK:] tag 解析 + 异步执行
-- 背景思考结果注入上下文
-- THINK_SCHEDULE 指令
-- 重连后补偿检查错过的通知
-
-### ws.py
-- 朗读 TTS WebSocket 流 (ReadingSession)
-- 心跳机制 (_last_pong, _heartbeat_task)
-
-### database.py
-- Memory V2 原子卡片表 (memory_cards, card_links, card_aggregates)
-- background_thoughts 表
-- schedules.repeat 字段
-- 情绪标注字段 (valence, arousal)
+| 上游改动的文件 | 处理策略 |
+|---|---|
+| `memory.py` | 我们重构过（Ebbinghaus 衰减 + numpy 缓存 + 原子卡片），且哨兵/向量调用已迁移到 `sentinel.py`。需逐段判断上游改动是否涉及我们已迁移的部分 |
+| `sentinel.py` | **我们独有**，上游没有此文件。上游的哨兵/向量改动（如 736d862）在我们这里对应 sentinel.py 的改动 |
+| `camera.py` | 我们已改为 `from sentinel import call_sentinel`。上游若改哨兵调用方式 → 跳过；改监控逻辑 → 正常合 |
+| `config.py` | 我们多了 `dashscope_key`、`custom_keys`。上游加 `get_sentinel_config()` / `get_embedding_config()` → 跳过（我们用 sentinel.py） |
+| `ai_providers.py` | 我们加了重试、日志、CLI provider。上游改动需逐段 review |
+| `routes/chat.py` | 双方都频繁改。我们多了 Memory V2、THINK、Obsidian、情绪标注。按"插槽"模式合（新指令加在管线对应位置） |
+| `chat.html/js/css` | 我们改过 bug（033a05b 去硬编码）、重构过 UI。上游 UI 改动需手动 resolve |
+| `routes/settings.py` | 我们多了 sentinel/embedding 配置字段、MiMo TTS、DEFAULT_MODEL。上游加新配置字段 → 正常加 |
+| `context_builder.py` | 我们独有，上游同名文件结构不同。上游改能力声明 → 在我们的 context_builder.py 里也加一份 |
 
 ---
 
-## 记忆系统 (Memory V2)
+## 核心架构差异
 
-### memory.py
-- 时间戳聚合切片
-- 语义判官 (flash-lite) 长段切分
-- 时间衰减 + 近期补充按重要度排序
-- DashScope 向量模型切换
-- 情绪标注 (Russell 环形模型)
-- 云端同步 (sync_to_cloud)
+### 哨兵 & 向量：sentinel.py（我们独有）
+- 上游：哨兵/向量调用散落在 memory.py、camera.py 等，硬编码 Gemini → 后改为可配置
+- 我们：统一抽成 `sentinel.py` 模块，走 DashScope OpenAI 兼容端点，前端 settings 可配置 base_url/api_key/model
+- **合并规则**：上游对哨兵/向量的改动直接跳过，我们在 sentinel.py 里独立演进
 
-### memory_cards.py — 全新文件
-- 原子卡片 CRUD
+### 记忆系统：Memory V2
+- 上游：memory.py 原版（简单 embedding + recall）
+- 我们：Ebbinghaus 衰减引擎 + numpy 向量缓存 + 原子卡片（memory_cards.py）+ digest_v2.py + active_recall.py
+- **合并规则**：逐段对比，区分"哨兵/向量调用改动"（已在 sentinel.py 实现）和"记忆逻辑改动"（需要手动融合）
 
-### digest_v2.py — 全新文件
-- V2 Digest 引擎，分层关键词提示词，并发化
-
-### active_recall.py — 全新文件
-- 主动记忆检索
+### TTS：MiMo 引擎
+- 上游：硅基流动 TTS
+- 我们：MiMo-V2.5 TTS + 朗读系统（reading.py、ReadingSession）
+- **合并规则**：上游 TTS 相关改动跳过
 
 ---
 
-## 传感器 & 位置
+## 我们独有的模块（上游没有）
 
-### sensor.py — 全新文件
-- 事件接收与缓冲区
-- 窗口到期分析 + Sentinel 集成
-- Core 唤醒 + 地理围栏位置更新
-- 事件去抖 (60s)
-- activity_log 写入
-
-### location.py
-- 围栏 state 标签支持
-- 关闭状态仍输出围栏数据
-- GPS 心跳不再覆盖围栏接管的位置状态
-- DashScope 切换
-
-### camera.py
-- DashScope 哨兵切换 (替换原 siliconflow)
-
----
-
-## TTS & 朗读
-
-### tts.py
-- MiMo-V2.5 TTS 引擎 (替换硅基流动)
-- 【】语气提示提取作为风格指令
-
-### reading.py — 全新文件
-- ReadingSession + SSE 朗读 API
-
-### book.py
-- PDF 导入支持
+- `sentinel.py` — 哨兵/向量统一调用
+- `memory_cards.py` — 原子卡片 CRUD
+- `digest_v2.py` — V2 Digest 引擎
+- `active_recall.py` — 主动记忆检索
+- `sensor.py` — 传感器事件驱动
+- `location.py` — 地理围栏（大幅重写）
+- `reading.py` — 朗读引擎
+- `obsidian.py` — 日记读取/搜索
+- `ghost_forest.py` — 鬼林（改用 DashScope）
+- `tts.py` — MiMo TTS
+- `ntfy_bridge.py` — ntfy.sh 中转
+- `webhook_ai.py` — AI 消息生成管道
+- `sync_to_cloud.py` — 云端同步
+- `routes/webhooks.py` — Webhook 端点
 
 ---
 
-## Webhook & 通知
+## 上游已合并的功能改动
 
-### routes/webhooks.py — 全新文件
-- MacroDroid webhook 接收端点
-- sensor webhook channel
-- ntfy.sh 桥接路由
-
-### webhook_ai.py — 全新文件
-- AI 消息生成管道 (夜间手机使用提醒等)
-
-### ntfy_bridge.py — 全新文件
-- ntfy.sh 公网中转桥接
+| 上游 commit | 内容 | 合并状态 |
+|---|---|---|
+| `2ecccaa` | Gemini CLI 工具调用开关 + GEMINI.md | ✅ 已合 |
+| `eb160ee` | 监控系统桌面截图 | ✅ 已合 |
+| `736d862` | 哨兵/向量可配置 + 钱包 + MODELS 更新 | ✅ 钱包已合；sentinel 用我们自己的方式实现；DEFAULT_MODEL 未跟（保持 gemini-3-flash） |
+| `5bc5dc3` | 小米智能家居 MCP | ✅ 已合 |
+| `b884eb2` | 群聊接入智能家居 | ✅ 已合 |
+| `886874b` | 阅读批注 bug 修复 | ⏭ 跳过（上游自己引入的问题，我们不受影响） |
 
 ---
 
-## 定时调度
-
-### schedule.py
-- Monitor 无摄像头时降级到传感器上下文
-- 定时思考调度
-- repeat 重复日程支持
-
----
-
-## 哨兵 & 向量
-
-### sentinel.py — 全新文件
-- 统一的哨兵调用封装 (DashScope)
-- 图片转文本支持
-
----
-
-## 其他
-
-### obsidian.py — 全新文件: 日记读取/搜索/摘要
-### ghost_forest.py: DashScope 切换
-### gift.py: 送礼流程改为后台异步
-### sync_to_cloud.py — 全新文件: 记忆/聊天记录云端同步
-### routes/settings.py: MiMo TTS 设置项, DEFAULT_MODEL 配置
-### routes/memories.py: V2 卡片 API
-### routes/book.py: 读书笔记记忆召回
-
----
-
-## 前端
-
-### static/chat.html: 朗读入口 UI
-### static/reading.html: 朗读播放页面
-### static/memory.html: V2 卡片管理界面
-### static/settings.html: DEFAULT_MODEL 配置 UI
-### static/theater.html: 朗读相关调整
-### static/common.js: 朗读相关工具函数
-
----
-
-## Android App
-
-### AionPushService.java: 重连后补偿检查通知
-### LauncherActivity.java: 启动页 IP 可编辑
-### WebViewActivity.java: IP 地址传递调整
-
----
-
-*最后更新: 2026-05-11*
+*最后更新: 2026-05-15*

@@ -11,14 +11,43 @@
 import asyncio, json, time, struct
 import httpx
 
-from config import get_key
+from config import get_key, SETTINGS
 
-# ── 常量 ──────────────────────────────────────────
-DASHSCOPE_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-SENTINEL_MODEL = "qwen-flash"
-SENTINEL_VL_MODEL = "qwen3-vl-flash"
-EMBEDDING_MODEL = "text-embedding-v4"
+# ── 默认值（可通过前端设置覆盖）────────────────────
+# 上游 736d862 的 sentinel/embedding 可配置化在此实现；未来合并可跳过上游对应部分。
+_DEFAULT_SENTINEL_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+_DEFAULT_SENTINEL_MODEL = "qwen-flash"
+_DEFAULT_SENTINEL_VL_MODEL = "qwen3-vl-flash"
+_DEFAULT_EMBEDDING_MODEL = "text-embedding-v4"
 EMBEDDING_DIMS = 1024
+
+
+def _sentinel_base() -> str:
+    return (SETTINGS.get("sentinel_base_url") or "").strip() or _DEFAULT_SENTINEL_BASE
+
+
+def _sentinel_model() -> str:
+    return (SETTINGS.get("sentinel_model") or "").strip() or _DEFAULT_SENTINEL_MODEL
+
+
+def _sentinel_vl_model() -> str:
+    return (SETTINGS.get("sentinel_vl_model") or "").strip() or _DEFAULT_SENTINEL_VL_MODEL
+
+
+def _sentinel_key() -> str:
+    return (SETTINGS.get("sentinel_api_key") or "").strip() or get_key("dashscope")
+
+
+def _embedding_base() -> str:
+    return (SETTINGS.get("embedding_base_url") or "").strip() or _DEFAULT_SENTINEL_BASE
+
+
+def _embedding_model() -> str:
+    return (SETTINGS.get("embedding_model") or "").strip() or _DEFAULT_EMBEDDING_MODEL
+
+
+def _embedding_key() -> str:
+    return (SETTINGS.get("embedding_api_key") or "").strip() or get_key("dashscope")
 
 _MIN_INTERVAL = 0.3  # 全局软节流；DashScope qwen-flash 共享 1200 RPM，0.3s 足够留边
 _LAST_CALL = 0.0
@@ -45,12 +74,12 @@ async def _throttle():
 
 async def _chat(messages: list, model: str, timeout: int, max_retries: int,
                 json_mode: bool) -> str | None:
-    """统一走 DashScope OpenAI 兼容 chat/completions；返回 assistant 文本或 None。"""
-    key = get_key("dashscope")
+    """统一走 OpenAI 兼容 chat/completions；返回 assistant 文本或 None。"""
+    key = _sentinel_key()
     if not key:
         return None
 
-    url = f"{DASHSCOPE_BASE}/chat/completions"
+    url = f"{_sentinel_base()}/chat/completions"
     headers = {"Authorization": f"Bearer {key}"}
     body = {"model": model, "messages": messages}
     if json_mode:
@@ -85,15 +114,17 @@ async def call_sentinel(
     *,
     timeout: int = 30,
     max_retries: int = 2,
-    model: str = SENTINEL_MODEL,
+    model: str | None = None,
     image_b64: str | None = None,
 ) -> dict | None:
     """调用哨兵，返回 JSON dict；失败返回 None。
-    若传入 image_b64，则自动切到视觉模型（qwen3-vl-flash）。
+    若传入 image_b64，则自动切到视觉模型。
     """
+    if model is None:
+        model = _sentinel_model()
     if image_b64:
-        if model == SENTINEL_MODEL:
-            model = SENTINEL_VL_MODEL
+        if model == _sentinel_model():
+            model = _sentinel_vl_model()
         messages = [{
             "role": "user",
             "content": [
@@ -129,12 +160,14 @@ async def call_sentinel_text(
     *,
     timeout: int = 30,
     max_retries: int = 2,
-    model: str = SENTINEL_MODEL,
+    model: str | None = None,
     system: str | None = None,
 ) -> str | None:
     """调用哨兵，返回纯文本；失败返回 None。
     prompt 可以是字符串或完整 messages 数组。
     """
+    if model is None:
+        model = _sentinel_model()
     if isinstance(prompt, list):
         messages = prompt
     else:
@@ -163,20 +196,20 @@ async def describe_image_b64(
              "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
         ],
     }]
-    text = await _chat(messages, SENTINEL_VL_MODEL, timeout, max_retries, json_mode=False)
+    text = await _chat(messages, _sentinel_vl_model(), timeout, max_retries, json_mode=False)
     return text.strip() if text else None
 
 
 # ── 对外：向量 ─────────────────────────────────
 async def get_embedding(text: str) -> list[float] | None:
-    """DashScope text-embedding-v4，固定 1024 维。"""
-    key = get_key("dashscope")
+    """向量模型调用，支持前端配置覆盖。"""
+    key = _embedding_key()
     if not key:
         return None
-    url = f"{DASHSCOPE_BASE}/embeddings"
+    url = f"{_embedding_base()}/embeddings"
     headers = {"Authorization": f"Bearer {key}"}
     body = {
-        "model": EMBEDDING_MODEL,
+        "model": _embedding_model(),
         "input": text,
         "dimensions": EMBEDDING_DIMS,
         "encoding_format": "float",

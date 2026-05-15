@@ -21,6 +21,7 @@ from camera import cam, CAM_CHECK_CMD, perform_cam_check
 from activity import is_activity_tracking_enabled, get_activity_summary_for_prompt
 from routes.files import export_conversation
 from routes.music import MUSIC_CMD_PATTERN
+from routes.wallet import record_transfer
 from tts import TTSStreamer
 
 HEART_CMD_PATTERN = re.compile(r'\[HEART:([^\]]+)\]')
@@ -31,6 +32,7 @@ MEM_EDIT_PATTERN = re.compile(r'\[MEM_EDIT:([^\]]+)\]')
 ACTIVITY_CHECK_PATTERN = re.compile(r'\[查看动态:(\d+)\]')
 SELFIE_CMD_PATTERN = re.compile(r'\[SELFIE:\s*([^\]]+)\]')
 DRAW_CMD_PATTERN = re.compile(r'\[DRAW:\s*([^\]]+)\]')
+TRANSFER_CMD_PATTERN = re.compile(r'\[转账[：:]\s*(-?\d+(?:\.\d+)?)\s*元\]')
 
 # ── 活跃生成任务（用于 abort 取消） ──
 active_generations: dict[str, asyncio.Event] = {}  # conv_id → cancel_event
@@ -44,6 +46,7 @@ _SYSTEM_MSG_CONTEXT_KEYWORDS = ('查看了监控', '搜索了', '点歌', '点�
 from context_builder import fetch_merged_timeline, render_merged_timeline
 from music import search_songs, get_audio_url
 from schedule import process_schedule_commands, get_active_schedules, build_schedule_prompt
+from mcp_client import mcp_manager
 
 
 def _process_voice_attachments_in_history(history: list, keep_idx: int = -1):
@@ -96,6 +99,7 @@ OBSIDIAN_RECENT_PATTERN = re.compile(r'\[OBSIDIAN_RECENT:(\d+)\]')
 OBSIDIAN_SEARCH_PATTERN = re.compile(r'\[OBSIDIAN_SEARCH:([^\]]+)\]')
 TOY_CMD_PATTERN = re.compile(r'\[TOY:((?:\d|STOP)|(?:mode=\d+(?:,speed=\d+)?(?:,speed_b=\d+)?))\]')
 PET_CMD_PATTERN = re.compile(r'\[PET:([a-z_\-]+)\]', re.IGNORECASE)
+HOME_CMD_PATTERN = re.compile(r'\[HOME:([^\]]+)\]', re.IGNORECASE)
 META_TAG_PATTERN = re.compile(r'\s*<meta>.*?</meta>', re.DOTALL)
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 _MD_IMAGE_PATTERN = re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
@@ -104,6 +108,139 @@ _BARE_HTTP_IMAGE_PATTERN = re.compile(r'(?<!["\'(])https?://[^\s<>"\']+\.(?:png|
 _BARE_LOCAL_IMAGE_PATTERN = re.compile(r'(?<![\w/])(?:[A-Za-z]:[\\/][^\s<>"\']+\.(?:png|jpe?g|gif|webp))', re.I)
 
 TOY_PRESET_NAMES = {1:'微风轻拂',2:'春水初生',3:'暗流涌动',4:'如梦似幻',5:'情潮渐涨',6:'烈焰焚身',7:'极乐之巅',8:'魂飞魄散',9:'失控'}
+
+HOME_ASSISTANT_SERVER_NAME = "Home Assistant"
+HOME_ALIASES_HINT = (
+    "所有灯、客厅灯、屁股灯、入户灯、餐边柜灯带、厨房灯带、智米空调、"
+    "浴霸灯"
+)
+HOME_ABILITY_TEXT = (
+    "[HOME:on/off/state|别名] 或 [HOME:climate|别名|mode=cool|temperature=26] "
+    f"控制智能家居，仅限明确要求。别名：{HOME_ALIASES_HINT}。"
+)
+
+
+def _parse_home_args(parts: list[str]) -> dict[str, str]:
+    args: dict[str, str] = {}
+    for part in parts:
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if key:
+            args[key] = value
+    return args
+
+
+def _decode_mcp_text(contents: Any) -> dict[str, Any]:
+    if not isinstance(contents, list):
+        return {"ok": False, "message": f"Unexpected MCP response: {contents!r}"}
+    for item in contents:
+        if not isinstance(item, dict) or item.get("type") != "text":
+            continue
+        text = item.get("text", "")
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            return {"ok": True, "message": text}
+    return {"ok": False, "message": "MCP response did not contain text JSON."}
+
+
+async def _call_home_tool(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    if not mcp_manager.is_connected(HOME_ASSISTANT_SERVER_NAME):
+        await mcp_manager.connect(HOME_ASSISTANT_SERVER_NAME)
+    contents = await mcp_manager.call_tool(HOME_ASSISTANT_SERVER_NAME, tool_name, arguments)
+    return _decode_mcp_text(contents)
+
+
+def _state_brief(entity: dict[str, Any]) -> str:
+    state = entity.get("state", "unknown")
+    attrs = entity.get("attributes") or {}
+    bits = [f"状态 {state}"]
+    temp = attrs.get("temperature")
+    current_temp = attrs.get("current_temperature")
+    unit = attrs.get("unit_of_measurement") or attrs.get("temperature_unit") or ""
+    if current_temp is not None:
+        bits.append(f"当前 {current_temp}{unit}")
+    if temp is not None:
+        bits.append(f"目标 {temp}{unit}")
+    return "，".join(bits)
+
+
+def _home_summary(action: str, alias: str, data: dict[str, Any]) -> str:
+    if not data.get("ok"):
+        return f"（智能家居：{alias} 操作失败：{data.get('message', '未知错误')}）"
+
+    group_aliases = data.get("group_aliases") if isinstance(data.get("group_aliases"), list) else None
+    entity = data.get("entity") if isinstance(data.get("entity"), dict) else None
+    if action in {"state", "status", "read", "查看", "查询"} and group_aliases:
+        return f"（智能家居：已读取 {alias}，共 {len(group_aliases)} 项。）"
+    if action in {"state", "status", "read", "查看", "查询"} and entity:
+        return f"（智能家居：{alias} 当前{_state_brief(entity)}。）"
+    if action in {"on", "turn_on", "open", "打开", "开启"}:
+        return f"（智能家居：已打开 {alias}。）"
+    if action in {"off", "turn_off", "close", "关闭", "关掉"}:
+        return f"（智能家居：已关闭 {alias}。）"
+    if action in {"climate", "temperature", "temp", "set", "空调", "温度"}:
+        if entity:
+            return f"（智能家居：已调整 {alias}，现在{_state_brief(entity)}。）"
+        return f"（智能家居：已调整 {alias}。）"
+    return f"（智能家居：已处理 {alias}。）"
+
+
+async def _process_home_commands(text: str) -> str:
+    matches = HOME_CMD_PATTERN.findall(text)
+    if not matches:
+        return text
+
+    cleaned = HOME_CMD_PATTERN.sub("", text).strip()
+    summaries: list[str] = []
+
+    for raw in matches:
+        parts = [part.strip() for part in raw.split("|") if part.strip()]
+        if len(parts) < 2:
+            summaries.append("（智能家居：指令格式不完整，需要像 [HOME:on|客厅灯] 这样写。）")
+            continue
+
+        action = parts[0].lower()
+        alias = parts[1]
+        args = _parse_home_args(parts[2:])
+
+        try:
+            if action in {"state", "status", "read", "查看", "查询"}:
+                data = await _call_home_tool("get_alias_state", {"alias": alias})
+            elif action in {"on", "turn_on", "open", "打开", "开启"}:
+                data = await _call_home_tool("turn_on_alias", {"alias": alias})
+            elif action in {"off", "turn_off", "close", "关闭", "关掉"}:
+                data = await _call_home_tool("turn_off_alias", {"alias": alias})
+            elif action in {"climate", "temperature", "temp", "set", "空调", "温度"}:
+                data = await _call_home_tool(
+                    "set_climate_alias",
+                    {
+                        "alias": alias,
+                        "hvac_mode": args.get("mode", args.get("hvac_mode", "")),
+                        "temperature": args.get("temperature", args.get("temp", "")),
+                        "fan_mode": args.get("fan_mode", args.get("fan", "")),
+                        "swing_mode": args.get("swing_mode", args.get("swing", "")),
+                    },
+                )
+            else:
+                data = {
+                    "ok": False,
+                    "message": f"不支持的智能家居动作：{parts[0]}",
+                }
+        except Exception as exc:
+            data = {"ok": False, "message": str(exc)}
+
+        summaries.append(_home_summary(action, alias, data))
+
+    if summaries:
+        cleaned = (cleaned + "\n\n" if cleaned else "") + "\n".join(summaries)
+    return cleaned.strip()
+
 
 def _is_pet_available() -> bool:
     return bool(SETTINGS.get("pet_enabled", False) and manager.has_active_pet())
@@ -698,6 +835,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     abilities.append("[REMINDER:YYYY-MM-DD|内容] — 设置日程提醒（不闹铃），你在合适时机自然提起即可。")
     abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了、是否在好好工作等，也可以当做下一次主动发送消息来使用，根据对话内容可以随时设定。日期时间用ISO格式。")
     abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
+    abilities.append(HOME_ABILITY_TEXT)
     if is_activity_tracking_enabled():
         abilities.append(f"[查看动态:n] — 查看{user_name}过去n×10分钟的设备使用动态（n为1~12的整数，例如[查看动态:2]查看过去20分钟，[查看动态:6]查看过去1小时）。当你好奇{user_name}最近在干什么、想了解{user_name}的设备使用情况时可以使用。使用后下条消息会收到动态摘要，查看前不要编造内容。")
     try:
@@ -727,6 +865,12 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     abilities.append(f"[ORGANIZE:关键词] — 当你发现记忆库中某个话题的记忆需要整理时使用。系统会自动合并和归类相关记忆。例：[ORGANIZE:培训]")
     # MEM_EDIT 能力暂不暴露给 bot，代码已就绪，待 bot 可靠后启用
     # abilities.append(f"[MEM_EDIT:卡片ID|操作|内容] — 修改记忆卡片。...")
+    try:
+        from routes.wallet import _get_balance
+        _wb = await _get_balance()
+        abilities.append(f"[转账：n元] — 给{user_name}转账（n为正整数），会从你的钱包余额中扣除。你的钱包当前余额：{_wb:.2f}元。余额不足时不要转账。")
+    except Exception:
+        pass
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     # CLI 模型专属：告知图片存储目录，使其能保存图片并返回路径
@@ -940,6 +1084,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                 full_text = DRAW_CMD_PATTERN.sub("", full_text).strip()
 
             full_text = await process_schedule_commands(full_text, conv_id)
+            full_text = await _process_home_commands(full_text)
 
             heart_matches = HEART_CMD_PATTERN.findall(full_text)
             if heart_matches:
@@ -1006,6 +1151,20 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                 for raw in mem_edit_matches:
                     result = await execute_mem_edit(raw)
                     print(f"[MEM_EDIT] {result}")
+
+            # 检测 [转账：N元] 指令 — AI 转账入账（不从 full_text 中剥离，前端渲染卡片需要）
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
+            for t_amount_str in transfer_matches:
+                try:
+                    t_val = float(t_amount_str)
+                    if t_val > 0:
+                        _a_n = wb.get('ai_name', 'AI')
+                        _u_n = wb.get('user_name', '用户')
+                        await record_transfer(-t_val, 'ai', f'{_a_n}转账给{_u_n} {t_val}元')
+                        await manager.broadcast({"type": "wallet_update"})
+                        print(f"[WALLET] AI 转账: -{t_val}元")
+                except (ValueError, Exception):
+                    pass
 
             full_text = META_TAG_PATTERN.sub("", full_text).strip()
 
@@ -1146,6 +1305,19 @@ async def send_message(conv_id: str, body: MsgCreate):
                 "created_at": now, "attachments": body.attachments}
     await manager.broadcast({"type": "msg_created", "data": user_msg})
 
+    # 检测用户消息中的 [转账：N元] → 入账
+    user_transfer_matches = TRANSFER_CMD_PATTERN.findall(body.content)
+    for t_amount_str in user_transfer_matches:
+        try:
+            t_val = float(t_amount_str)
+            _wb_t = load_worldbook()
+            _u_name = _wb_t.get('user_name', '用户')
+            await record_transfer(t_val, 'user', f'{_u_name}转账 {t_val}元')
+            await manager.broadcast({"type": "wallet_update"})
+            print(f"[WALLET] 用户转账: {t_val}元")
+        except (ValueError, Exception):
+            pass
+
     async with get_db() as db:
         db.row_factory = __import__('aiosqlite').Row
         cur = await db.execute("SELECT model FROM conversations WHERE id=?", (conv_id,))
@@ -1216,6 +1388,7 @@ async def send_message(conv_id: str, body: MsgCreate):
     abilities.append("[REMINDER:YYYY-MM-DD|内容] — 设置日程提醒（不闹铃），你在合适时机自然提起即可。")
     abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了、是否在好好工作等，也可以当做下一次主动发送消息来使用，根据对话内容可以随时设定。日期时间用ISO格式。")
     abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
+    abilities.append(HOME_ABILITY_TEXT)
     if is_activity_tracking_enabled():
         abilities.append(f"[查看动态:n] — 查看{user_name}过去n×10分钟的设备使用动态（n为1~12的整数，例如[查看动态:2]查看过去20分钟，[查看动态:6]查看过去1小时）。当你好奇{user_name}最近在干什么、想了解{user_name}的设备使用情况时可以使用。使用后下条消息会收到动态摘要，查看前不要编造内容。")
     # 位置相关能力
@@ -1248,6 +1421,12 @@ async def send_message(conv_id: str, body: MsgCreate):
     abilities.append("[THINK_SCHEDULE:HH:MM|daily|内容] — 设置每天定时思考。例：[THINK_SCHEDULE:22:00|daily|回顾今天的日记]")
     # MEM_EDIT 能力暂不暴露给 bot，代码已就绪，待 bot 可靠后启用
     # abilities.append(f"[MEM_EDIT:卡片ID|操作|内容] — 修改记忆卡片。...")
+    try:
+        from routes.wallet import _get_balance
+        _wb = await _get_balance()
+        abilities.append(f"[转账：n元] — 给{user_name}转账（n为正整数），会从你的钱包余额中扣除。你的钱包当前余额：{_wb:.2f}元。余额不足时不要转账。")
+    except Exception:
+        pass
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     # CLI 模型专属：告知图片存储目录
@@ -1556,6 +1735,7 @@ async def send_message(conv_id: str, body: MsgCreate):
 
             # 检测日程指令（[ALARM:...], [REMINDER:...], [Monitor:...], [SCHEDULE_DEL:...], [SCHEDULE_LIST]）
             full_text = await process_schedule_commands(full_text, conv_id)
+            full_text = await _process_home_commands(full_text)
 
             # 检测 [HEART:xxx] 心语指令
             heart_matches = HEART_CMD_PATTERN.findall(full_text)
@@ -1669,6 +1849,20 @@ async def send_message(conv_id: str, body: MsgCreate):
                             gf_save_session(ts)
                             theater_updates.append({"type": "item", "name": item_name})
                             print(f"[剧场] 道具赠送: {item_name}")
+
+            # 检测 [转账：N元] 指令 — AI 转账入账
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
+            for t_amount_str in transfer_matches:
+                try:
+                    t_val = float(t_amount_str)
+                    if t_val > 0:
+                        _a_n = wb.get('ai_name', 'AI')
+                        _u_n = wb.get('user_name', '用户')
+                        await record_transfer(-t_val, 'ai', f'{_a_n}转账给{_u_n} {t_val}元')
+                        await manager.broadcast({"type": "wallet_update"})
+                        print(f"[WALLET] AI 转账: -{t_val}元")
+                except (ValueError, Exception):
+                    pass
 
             # 清洗 AI 回复中模仿产生的 <meta> 标签
             full_text = META_TAG_PATTERN.sub("", full_text).strip()
@@ -2599,6 +2793,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     abilities.append("[REMINDER:YYYY-MM-DD|内容] — 设置日程提醒（不闹铃），你在合适时机自然提起即可。")
     abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监控。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了等，尤其是当{user_name}表示去工作或长时间做事，监督她隔一段时间起来活动一下。日期时间用ISO格式。")
     abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
+    abilities.append(HOME_ABILITY_TEXT)
     # 活动动态查看能力
     if is_activity_tracking_enabled():
         abilities.append(f"[查看动态:n] — 查看{user_name}过去n×10分钟的设备使用动态（n为1~12的整数，例如[查看动态:2]查看过去20分钟，[查看动态:6]查看过去1小时）。当你好奇{user_name}最近在干什么、想了解{user_name}的设备使用情况时可以使用。使用后下条消息会收到动态摘要，查看前不要编造内容。")
@@ -2630,6 +2825,12 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     abilities.append(f"[ORGANIZE:关键词] — 当你发现记忆库中某个话题的记忆需要整理时使用。系统会自动合并和归类相关记忆。例：[ORGANIZE:培训]")
     # MEM_EDIT 能力暂不暴露给 bot，代码已就绪，待 bot 可靠后启用
     # abilities.append(f"[MEM_EDIT:卡片ID|操作|内容] — 修改记忆卡片。...")
+    try:
+        from routes.wallet import _get_balance
+        _wb = await _get_balance()
+        abilities.append(f"[转账：n元] — 给{user_name}转账（n为正整数），会从你的钱包余额中扣除。你的钱包当前余额：{_wb:.2f}元。余额不足时不要转账。")
+    except Exception:
+        pass
     ability_block = "[系统能力] 你可以在回复中根据对话氛围，善用以下指令：\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(abilities))
     ability_block += "\n\n<meta>标签内为消息元数据，不是对话内容的一部分，你的回复中不要包含任何<meta>标签或时间信息。"
     # CLI 模型专属：告知图片存储目录
@@ -2872,6 +3073,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
 
             # 检测日程指令
             full_text = await process_schedule_commands(full_text, conv_id)
+            full_text = await _process_home_commands(full_text)
 
             # 检测 [HEART:xxx] 心语指令
             heart_matches = HEART_CMD_PATTERN.findall(full_text)
@@ -2941,6 +3143,20 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 for raw in mem_edit_matches:
                     result = await execute_mem_edit(raw)
                     print(f"[MEM_EDIT] {result}")
+
+            # 检测 [转账：N元] 指令 — AI 转账入账
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
+            for t_amount_str in transfer_matches:
+                try:
+                    t_val = float(t_amount_str)
+                    if t_val > 0:
+                        _a_n = wb.get('ai_name', 'AI')
+                        _u_n = wb.get('user_name', '用户')
+                        await record_transfer(-t_val, 'ai', f'{_a_n}转账给{_u_n} {t_val}元')
+                        await manager.broadcast({"type": "wallet_update"})
+                        print(f"[WALLET] AI 转账: -{t_val}元")
+                except (ValueError, Exception):
+                    pass
 
             # 清洗 AI 回复中模仿产生的 <meta> 标签
             full_text = META_TAG_PATTERN.sub("", full_text).strip()

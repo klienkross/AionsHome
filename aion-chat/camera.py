@@ -512,24 +512,53 @@ class CameraMonitor:
             # 监控活跃时 ~30fps，空闲时 ~10fps 减少 CPU
             time.sleep(0.033 if self.monitoring else 0.1)
 
+    def _capture_screen(self) -> np.ndarray | None:
+        """截取主屏幕画面，缩放到与摄像头同宽，返回 BGR numpy 数组"""
+        try:
+            from PIL import ImageGrab
+            img = ImageGrab.grab()  # 仅主屏幕
+            screen_np = np.array(img)
+            # PIL 返回 RGB，转 BGR 供 OpenCV 使用
+            screen_bgr = cv2.cvtColor(screen_np, cv2.COLOR_RGB2BGR)
+            return screen_bgr
+        except Exception as e:
+            print(f"[Camera] 屏幕截图失败: {e}")
+            return None
+
+    def _combine_with_screen(self, cam_frame: np.ndarray) -> np.ndarray:
+        """将摄像头画面（上）和主屏幕截图（下）上下拼接"""
+        screen = self._capture_screen()
+        if screen is None:
+            return cam_frame
+        cam_h, cam_w = cam_frame.shape[:2]
+        # 将屏幕截图缩放到与摄像头同宽
+        scr_h, scr_w = screen.shape[:2]
+        new_scr_h = int(cam_w / scr_w * scr_h)
+        screen_resized = cv2.resize(screen, (cam_w, new_scr_h), interpolation=cv2.INTER_AREA)
+        # 上下拼接
+        combined = np.vstack([cam_frame, screen_resized])
+        return combined
+
     def get_frame_jpeg(self) -> bytes | None:
         with self._lock:
             if self._latest_frame is None:
                 return None
             frame = self._apply_crop(self._latest_frame)
-            _, buf = cv2.imencode(".jpg", frame)
-            return buf.tobytes()
+        combined = self._combine_with_screen(frame)
+        _, buf = cv2.imencode(".jpg", combined)
+        return buf.tobytes()
 
     def save_screenshot(self) -> str | None:
         with self._lock:
             if self._latest_frame is None:
                 return None
             frame = self._apply_crop(self._latest_frame).copy()
+        combined = self._combine_with_screen(frame)
         SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         ts = time.strftime("%Y%m%d_%H%M%S")
         filename = f"cam_{ts}.jpg"
         filepath = SCREENSHOTS_DIR / filename
-        cv2.imwrite(str(filepath), frame)
+        cv2.imwrite(str(filepath), combined)
         self._cleanup()
         return filename
 
@@ -602,6 +631,15 @@ class CameraMonitor:
             if self._is_quiet_hours():
                 print("[Monitor] 当前处于静默时段，跳过截图")
                 continue
+            # 播放提示音，给用户5秒准备时间
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    manager.broadcast({"type": "monitor_alert", "data": {"content": "哨兵即将查看监控"}}),
+                    self._loop
+                )
+            time.sleep(5)
+            if not self.monitoring or not self.running:
+                break
             filename = self.save_screenshot()
             if filename and self._loop:
                 print(f"[Monitor] 截图已保存: {filename}, 开始 Sentinel 分析")
@@ -742,9 +780,9 @@ call_core判断依据：
         await manager.broadcast({"type": "monitor_log", "data": log_entry})
 
         if call_core:
-            await self._call_core(monitoring_log, last_user_ts, summary, core_reason, recent_logs)
+            await self._call_core(monitoring_log, last_user_ts, summary, core_reason, recent_logs, screenshot_filename)
 
-    async def _call_core(self, trigger_log: str, last_user_ts: float, summary: str = "", core_reason: str = "", cached_logs: list = None):
+    async def _call_core(self, trigger_log: str, last_user_ts: float, summary: str = "", core_reason: str = "", cached_logs: list = None, screenshot_filename: str = ""):
         wb = load_worldbook()
         user_name = wb.get("user_name", "你")
         ai_name = wb.get("ai_name", "AI")
@@ -816,20 +854,17 @@ call_core判断依据：
                 {"role": "assistant", "content": "收到，我会自然地参考这些记忆。"}
             ]
 
-        # 播放提示音 + 5秒延迟，给用户准备时间，然后重新截图
-        await manager.broadcast({"type": "monitor_alert", "data": {"content": f"哨兵唤醒了{ai_name}查看监控"}})
-        await asyncio.sleep(5)
-
-        # 重新截图：5秒后的画面才是用户准备好的状态
+        # 直接使用哨兵已截取的画面（提示音已在截图前播放）
         fresh_fname = ""
-        fresh_jpg = self.get_frame_jpeg() if self.running else None
-        if fresh_jpg:
+        if screenshot_filename:
             from config import UPLOADS_DIR
-            ts_str = time.strftime("%Y%m%d_%H%M%S")
-            fresh_fname = f"core_wake_{ts_str}.jpg"
-            (UPLOADS_DIR / fresh_fname).write_bytes(fresh_jpg)
-            SCREENSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-            (SCREENSHOTS_DIR / fresh_fname).write_bytes(fresh_jpg)
+            src_path = SCREENSHOTS_DIR / screenshot_filename
+            if src_path.exists():
+                fresh_fname = screenshot_filename
+                dst_path = UPLOADS_DIR / screenshot_filename
+                if not dst_path.exists():
+                    import shutil
+                    shutil.copy2(src_path, dst_path)
 
         last_msg = {"role": "user", "content": core_prompt}
         if fresh_fname:

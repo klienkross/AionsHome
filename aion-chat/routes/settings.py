@@ -30,6 +30,13 @@ class SettingsUpdate(BaseModel):
     aipro_key: Optional[str] = None
     netease_music_u: Optional[str] = None
     default_model: Optional[str] = None
+    sentinel_base_url: Optional[str] = None
+    sentinel_api_key: Optional[str] = None
+    sentinel_model: Optional[str] = None
+    sentinel_vl_model: Optional[str] = None
+    embedding_base_url: Optional[str] = None
+    embedding_api_key: Optional[str] = None
+    embedding_model: Optional[str] = None
 
 @router.get("/api/settings")
 async def get_settings():
@@ -49,6 +56,15 @@ async def get_settings():
         "gemini_free_key_masked": mask(SETTINGS.get("gemini_free_key", "")),
         "aipro_key_masked": mask(SETTINGS.get("aipro_key", "")),
         "netease_music_u_masked": mask(SETTINGS.get("netease_music_u", "")),
+        "sentinel_base_url": SETTINGS.get("sentinel_base_url", ""),
+        "sentinel_api_key": SETTINGS.get("sentinel_api_key", ""),
+        "sentinel_api_key_masked": mask(SETTINGS.get("sentinel_api_key", "")),
+        "sentinel_model": SETTINGS.get("sentinel_model", ""),
+        "sentinel_vl_model": SETTINGS.get("sentinel_vl_model", ""),
+        "embedding_base_url": SETTINGS.get("embedding_base_url", ""),
+        "embedding_api_key": SETTINGS.get("embedding_api_key", ""),
+        "embedding_api_key_masked": mask(SETTINGS.get("embedding_api_key", "")),
+        "embedding_model": SETTINGS.get("embedding_model", ""),
     }
 
 @router.put("/api/settings")
@@ -74,6 +90,12 @@ async def update_settings(body: SettingsUpdate):
     if body.default_model is not None and body.default_model in MODELS:
         SETTINGS["default_model"] = body.default_model
         config.DEFAULT_MODEL = body.default_model
+    for key in ("sentinel_base_url", "sentinel_api_key", "sentinel_model",
+                "sentinel_vl_model", "embedding_base_url", "embedding_api_key",
+                "embedding_model"):
+        val = getattr(body, key, None)
+        if val is not None:
+            SETTINGS[key] = val
     save_settings(SETTINGS)
     return {"ok": True}
 
@@ -114,6 +136,20 @@ async def update_image_gen_setting(body: ImageGenToggle):
     SETTINGS["image_gen_enabled"] = body.enabled
     save_settings(SETTINGS)
     return {"ok": True, "image_gen_enabled": body.enabled}
+
+# ── Gemini CLI 工具调用开关 ─────────────────────────
+@router.get("/api/settings/gemini-cli-tools")
+async def get_gemini_cli_tools_setting():
+    return {"gemini_cli_tools_enabled": SETTINGS.get("gemini_cli_tools_enabled", False)}
+
+class GeminiCliToolsToggle(BaseModel):
+    enabled: bool
+
+@router.put("/api/settings/gemini-cli-tools")
+async def update_gemini_cli_tools_setting(body: GeminiCliToolsToggle):
+    SETTINGS["gemini_cli_tools_enabled"] = body.enabled
+    save_settings(SETTINGS)
+    return {"ok": True, "gemini_cli_tools_enabled": body.enabled}
 
 # ── 桌宠开关 ──────────────────────────────────────
 @router.get("/api/settings/pet")

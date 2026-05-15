@@ -108,15 +108,27 @@ function escHtml(s) { const d = document.createElement("div"); d.textContent = s
 function formatMsg(s) {
   // 先转义 HTML，再将 [[image:path]] 标记渲染为 <img>
   const escaped = escHtml(s);
+  // 渲染 [转账：N元] 为转账卡片
+  const transferRe = /\[转账[：:]\s*(-?\d+(?:\.\d+)?)\s*元\]/g;
+  let processed = escaped.replace(transferRe, (match, amount) => {
+    const val = parseFloat(amount);
+    const isNeg = val < 0;
+    const absVal = Math.abs(val);
+    if (isNeg) {
+      return `<div class="transfer-card deduct"><div class="transfer-card-body"><div class="transfer-card-amount">¥${absVal}</div><div class="transfer-card-desc">钱包扣除</div></div><div class="transfer-card-footer">扣除</div></div>`;
+    } else {
+      return `<div class="transfer-card"><div class="transfer-card-body"><div class="transfer-card-amount">¥${absVal}</div><div class="transfer-card-desc">发起了一笔转账</div></div><div class="transfer-card-footer">转账</div></div>`;
+    }
+  });
   const imgRe = /\[\[image:(\S+?)\]\]/g;
   let result = '', lastIdx = 0, match;
-  while ((match = imgRe.exec(escaped)) !== null) {
-    result += escaped.slice(lastIdx, match.index).replace(/\n/g, '<br>');
+  while ((match = imgRe.exec(processed)) !== null) {
+    result += processed.slice(lastIdx, match.index).replace(/\n/g, '<br>');
     const safeUrl = match[1];
     result += `<img class="cr-inline-img" src="${safeUrl}" onclick="openImageViewer && openImageViewer(this.src)" loading="lazy" style="max-width:100%;border-radius:8px;cursor:pointer;margin:4px 0">`;
     lastIdx = imgRe.lastIndex;
   }
-  result += escaped.slice(lastIdx).replace(/\n/g, '<br>');
+  result += processed.slice(lastIdx).replace(/\n/g, '<br>');
   return result;
 }
 
@@ -712,12 +724,13 @@ async function toggleVideoCallEnabled() {
 
 // ── AI 生图开关 ──
 async function toggleImageGenEnabled() {
-  const enabled = $('imageGenToggle').checked;
+  const el = $('imageGenToggle');
+  if (!el) return;
   try {
     await fetch('/api/settings/image-gen', {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ enabled })
+      body: JSON.stringify({ enabled: el.checked })
     });
   } catch(e) { console.warn('保存生图设置失败', e); }
 }
@@ -725,7 +738,27 @@ async function toggleImageGenEnabled() {
   try {
     const r = await fetch('/api/settings/image-gen');
     const d = await r.json();
-    $('imageGenToggle').checked = !!d.image_gen_enabled;
+    const el = $('imageGenToggle');
+    if (el) el.checked = !!d.image_gen_enabled;
+  } catch(e) {}
+})();
+
+// ── Gemini CLI 工具调用开关 ──
+async function toggleGeminiCliTools() {
+  const enabled = $('geminiCliToolsToggle').checked;
+  try {
+    await fetch('/api/settings/gemini-cli-tools', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ enabled })
+    });
+  } catch(e) { console.warn('保存 Gemini CLI 工具设置失败', e); }
+}
+(async function initGeminiCliToolsToggle() {
+  try {
+    const r = await fetch('/api/settings/gemini-cli-tools');
+    const d = await r.json();
+    $('geminiCliToolsToggle').checked = !!d.gemini_cli_tools_enabled;
   } catch(e) {}
 })();
 
@@ -1150,6 +1183,8 @@ function handleSync(msg) {
   } else if (type === "gift_pending") {
     // 礼物通知
     _showGiftPopup(data);
+  } else if (type === "wallet_update") {
+    if ($('walletModal').classList.contains('show')) openWalletPanel();
   }
 }
 
@@ -1560,12 +1595,13 @@ async function openStarredPanel() {
     const items = await api("GET", "/api/starred-messages");
     renderStarredList(items);
   } catch(e) { console.error('加载星标失败:', e); }
-  $("starredModal").classList.add("show");
+  const _sm = $("starredModal"); if (_sm) _sm.classList.add("show");
 }
-function closeStarredPanel() { $("starredModal").classList.remove("show"); }
+function closeStarredPanel() { const m = $("starredModal"); if (m) m.classList.remove("show"); }
 
 function renderStarredList(items) {
   const el = $("starredList");
+  if (!el) return;
   if (!items || items.length === 0) {
     el.innerHTML = '<div class="starred-empty">暂无星标消息</div>';
     return;
@@ -1884,7 +1920,9 @@ async function stopGeneration() {
 }
 
 function _getMaxTokens() {
-  const v = parseInt($("maxTokensSlider").value) || 0;
+  const el = $("maxTokensSlider");
+  if (!el) return null;
+  const v = parseInt(el.value) || 0;
   return v > 0 ? v : null;
 }
 
@@ -2757,7 +2795,8 @@ function togglePlusMenu() {
   else positionPlusMenu();
 }
 function closePlusMenu() {
-  $('plusMenu').classList.remove('show');
+  const m = $('plusMenu');
+  if (m) m.classList.remove('show');
 }
 document.addEventListener('click', e => {
   const wrap = document.querySelector('.plus-menu-wrap');
@@ -2961,6 +3000,7 @@ function toggleVoiceMode() {
   _voiceMode = !_voiceMode;
   const inputRow = $('inputRow');
   const voiceRow = $('voiceModeRow');
+  if (!inputRow || !voiceRow) return;
   if (_voiceMode) {
     inputRow.classList.add('voice-hidden');
     voiceRow.classList.add('active');
@@ -2973,7 +3013,7 @@ function toggleVoiceMode() {
 
 function _initVoiceHoldBtn() {
   const btn = $('voiceHoldBtn');
-  if (btn._voiceInited) return;
+  if (!btn || btn._voiceInited) return;
   btn._voiceInited = true;
 
   // 鼠标事件（PC端）
@@ -3017,8 +3057,8 @@ async function _voiceStartRecord(evt) {
   }, 200);
 
   // 按钮状态
-  $('voiceHoldBtn').classList.add('recording');
-  $('voiceHoldBtn').textContent = '松开 发送';
+  const _vhb1 = $('voiceHoldBtn');
+  if (_vhb1) { _vhb1.classList.add('recording'); _vhb1.textContent = '松开 发送'; }
 
   // 开始录音
   _voiceUseNative = false;
@@ -3635,6 +3675,68 @@ async function toyAdvLoadConfig() {
   }
 }
 
+// ── 转账 ──
+async function confirmTransfer() {
+  const val = $('transferAmountInput').value.trim();
+  if (!val || isNaN(Number(val)) || Number(val) <= 0) return;
+  const n = Number(val);
+  const uName = (worldBook && worldBook.user_name) || '用户';
+  const aiName = (worldBook && worldBook.ai_name) || 'AI';
+  try {
+    const res = await api('POST', '/api/wallet/transfer', {
+      amount: n, source: 'user', description: `${uName}转账给${aiName} ${n}元`
+    });
+    if (res.ok) {
+      const sysMsg = {id: `sys_wt_${Date.now()}`, conv_id: currentConvId, role: 'system', content: `💰 ${uName}向${aiName}转账 ${n}元`, created_at: Date.now()/1000};
+      currentMessages.push(sysMsg);
+      renderMessages();
+      $('transferAmountInput').value = '';
+      openWalletPanel();
+    }
+  } catch(e) {
+    console.error('转账失败:', e);
+  }
+}
+
+// ── 钱包面板 ──
+async function openWalletPanel() {
+  const aiName = (worldBook && worldBook.ai_name) || 'AI';
+  $('walletTransferTitle').textContent = `给【${aiName}】转账`;
+  $('transferAmountInput').value = '';
+  $('walletModal').classList.add('show');
+  history.pushState({walletPanel: true}, '', '/chat');
+  closeSidebar();
+  try {
+    const [balRes, txRes] = await Promise.all([
+      api('GET', '/api/wallet/balance'),
+      api('GET', '/api/wallet/transactions?limit=50')
+    ]);
+    $('walletBalanceValue').textContent = `¥${(balRes.balance || 0).toFixed(2)}`;
+    const list = $('walletTxList');
+    if (!txRes || txRes.length === 0) {
+      list.innerHTML = '<div class="wallet-tx-empty">暂无转账记录</div>';
+    } else {
+      list.innerHTML = txRes.map(tx => {
+        const isAi = tx.record_type === 'wallet_ai';
+        const d = new Date(tx.created_at * 1000);
+        const timeStr = `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        const sign = tx.amount >= 0 ? '+' : '';
+        const cls = tx.amount >= 0 ? 'positive' : 'negative';
+        const aName = (worldBook && worldBook.ai_name) || 'AI';
+        const uName = (worldBook && worldBook.user_name) || '用户';
+        let desc = tx.description || (isAi ? `${aName}转账` : `${uName}转账`);
+        return `<div class="wallet-tx-item"><div><div class="wallet-tx-desc">${escHtml(desc)}</div><div class="wallet-tx-time">${timeStr}</div></div><div class="wallet-tx-amount ${cls}">${sign}${tx.amount.toFixed(2)}</div></div>`;
+      }).join('');
+    }
+  } catch(e) {
+    $('walletTxList').innerHTML = '<div class="wallet-tx-empty">加载失败</div>';
+  }
+}
+function closeWalletPanel() {
+  if (!$('walletModal').classList.contains('show')) return;
+  $('walletModal').classList.remove('show');
+}
+
 async function toyAdvSaveConfig() {
   try {
     const model = $('toyAdvModel')?.value || 'K134';
@@ -3899,5 +4001,6 @@ function closeSubPage() {
   }
 }
 window.addEventListener('popstate', function(e) {
+  if ($('walletModal').classList.contains('show')) { closeWalletPanel(); return; }
   if ($('subPageOverlay').classList.contains('show')) { closeSubPage(); }
 });

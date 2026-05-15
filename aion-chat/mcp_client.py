@@ -62,6 +62,8 @@ class MCPManager:
         cfg = _load_config()
         result = []
         for s in cfg.get("servers", []):
+            if s.get("visible", True) is False:
+                continue
             result.append({
                 "name": s["name"],
                 "type": s.get("type", "http"),

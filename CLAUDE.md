@@ -20,3 +20,7 @@ type 用英文（feat / fix / docs / chore / refactor），简述用中文，不
 ## 分支合并
 
 feature 分支合并到 main 前先 squash，保持提交历史整洁。
+
+## 上游合并
+
+合并 upstream 前**必读** `LOCAL_CHANGES.md`，里面有每个文件的冲突归属和处理策略速查表。

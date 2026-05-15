@@ -30,6 +30,7 @@ echo     - .vscode 配置
 echo     - 聊天室配置 + 聊天室图片
 echo     - 基金配置 + 基金缓存
 echo     - MCP 服务配置
+echo     - Home Assistant 配置 + 令牌 + 设备别名
 echo     - 壁纸配置
 echo     - SSL 证书
 echo     - Gemini CLI 调试日志 (cli_debug/)
@@ -97,6 +98,11 @@ if exist "aion-chat\data\fund_cache.json" del /q "aion-chat\data\fund_cache.json
 
 :: ── 清理 MCP 服务配置 ──
 if exist "aion-chat\data\mcp_servers.json" del /q "aion-chat\data\mcp_servers.json"
+
+:: ── 清理 Home Assistant / 智能家居配置 ──
+if exist "aion-chat\data\home_assistant_mcp.json" del /q "aion-chat\data\home_assistant_mcp.json"
+if exist "aion-chat\data\home_assistant_aliases.json" del /q "aion-chat\data\home_assistant_aliases.json"
+if exist "aion-chat\data\homeassistant-config" rmdir /s /q "aion-chat\data\homeassistant-config"
 
 :: ── 清理 Gemini CLI 调试日志 ──
 if exist "aion-chat\data\cli_debug" rmdir /s /q "aion-chat\data\cli_debug"

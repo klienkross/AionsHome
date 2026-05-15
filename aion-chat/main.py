@@ -46,6 +46,7 @@ from routes import fund as fund_routes
 from routes import wallpaper as wallpaper_routes
 from routes import playground as playground_routes
 from routes import chatroom as chatroom_routes
+from routes import wallet as wallet_routes
 from routes import toy_adv as toy_adv_routes
 from activity import pc_tracker
 # from memory import auto_digest  # V1
@@ -217,6 +218,7 @@ app.include_router(fund_routes.router)
 app.include_router(wallpaper_routes.router)
 app.include_router(playground_routes.router)
 app.include_router(chatroom_routes.router)
+app.include_router(wallet_routes.router)
 app.include_router(toy_adv_routes.router)
 
 # ── reading 辅助函数 ──────────────────────────────
