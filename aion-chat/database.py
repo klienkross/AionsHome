@@ -39,6 +39,11 @@ async def init_db():
         # 性能索引
         await db.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_id ON messages(conv_id, created_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)")
+        # messages 表新增字段
+        try:
+            await db.execute("ALTER TABLE messages ADD COLUMN surfaced_memory_ids TEXT")
+        except:
+            pass
         await db.execute("""
             CREATE TABLE IF NOT EXISTS memories (
                 id TEXT PRIMARY KEY,
@@ -213,6 +218,22 @@ async def init_db():
         await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_cards_status ON memory_cards(status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_cards_created ON memory_cards(created_at DESC)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_memory_cards_type ON memory_cards(type)")
+        # Memory Evolution: 新增字段
+        for col, defn in [
+            ("activation_count", "INTEGER DEFAULT 0"),
+            ("last_activated", "REAL"),
+            ("source", "TEXT DEFAULT 'both'"),
+            ("verified", "INTEGER DEFAULT 1"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE memory_cards ADD COLUMN {col} {defn}")
+            except:
+                pass
+        # 初始化已有行的 last_activated 字段
+        await db.execute(
+            "UPDATE memory_cards SET last_activated = created_at "
+            "WHERE last_activated IS NULL"
+        )
         # ── Memory V2: 卡片关联表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS memory_links (

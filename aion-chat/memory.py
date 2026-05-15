@@ -54,38 +54,58 @@ def _keyword_match_score(query_keywords: list[str], mem_keywords_json: str) -> f
 
 # ── 记忆召回（向量 + 关键词 + 重要度 综合评分）────
 async def recall_memories(query_text: str, query_keywords: list[str] = None,
-                          top_k: int = 5, threshold: float = 0.45) -> tuple[list[dict], list[dict]]:
+                          top_k: int = 5, threshold: float = 0.35) -> tuple[list[dict], list[dict]]:
     """
-    综合评分 = 关键词命中率×0.7 + 向量相似度×0.15 + 重要度×0.15
-    threshold 为最终得分门槛。
-    返回 (matched, debug_top6): matched 为达标结果, debug_top6 为得分最高的前6条（含未达标）
+    新公式：base_score = kw×0.5 + vec×0.3 + importance×0.2, final = base × vitality
+    命中的卡片 activation_count += 1
     """
+    import time as _time
+    from decay_engine import compute_vitality
+    import embedding_cache
+
+    _t0 = _time.perf_counter()
     query_vec = await get_embedding(query_text)
     if not query_vec:
         return [], []
     if query_keywords is None:
         query_keywords = []
+
+    # numpy 批量余弦
+    vec_scores = {}
+    if embedding_cache.is_loaded():
+        for cid, score in embedding_cache.batch_cosine(query_vec):
+            vec_scores[cid] = score
+
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT c.id, c.content, c.type, c.created_at, c.embedding, c.keywords, "
-            "c.importance, c.source_start_ts, c.source_end_ts, c.unresolved, c.status, c.intensity_score "
-            "FROM memory_cards c "
-            "WHERE c.embedding IS NOT NULL "
+            "SELECT id, content, type, created_at, keywords, "
+            "importance, source_start_ts, source_end_ts, unresolved, status, "
+            "intensity_score, activation_count, last_activated, valence, arousal "
+            "FROM memory_cards "
+            "WHERE status IN ('open', 'closed') AND embedding IS NOT NULL"
         )
         rows = await cur.fetchall()
+
     now_ts = time.time()
     all_scored = []
     for row in rows:
-        mem_vec = _unpack_embedding(row["embedding"])
-        vec_sim = cosine_similarity(query_vec, mem_vec)
+        vec_sim = vec_scores.get(row["id"], 0.0)
         kw_score = _keyword_match_score(query_keywords, row["keywords"]) if query_keywords else 0.0
         importance = float(row["importance"] or 0.5)
-        base_score = kw_score * 0.7 + vec_sim * 0.15 + importance * 0.15
-        days = max(0.0, (now_ts - float(row["created_at"])) / 86400.0)
-        decay = 1.0 if row["unresolved"] else math.exp(-0.02 * days)
-        status_weight = 0.3 if row["status"] in ("closed", "merged") else 1.0
-        final_score = base_score * decay * status_weight
+        base_score = kw_score * 0.5 + vec_sim * 0.3 + importance * 0.2
+
+        vitality = compute_vitality(
+            importance=importance,
+            activation_count=row["activation_count"] or 0,
+            last_activated=row["last_activated"] or row["created_at"],
+            valence=row["valence"] or 0.0,
+            arousal=row["arousal"] or 0.0,
+            unresolved=row["unresolved"] or 0,
+            now=now_ts,
+        )
+        final_score = base_score * vitality
+
         item = {
             "id": row["id"], "content": row["content"], "type": row["type"],
             "created_at": row["created_at"],
@@ -93,14 +113,30 @@ async def recall_memories(query_text: str, query_keywords: list[str] = None,
             "vec_sim": round(vec_sim, 4),
             "kw_score": round(kw_score, 4),
             "importance": round(importance, 2),
+            "vitality": round(vitality, 4),
             "keywords": row["keywords"] or "",
             "source_start_ts": row["source_start_ts"],
             "source_end_ts": row["source_end_ts"],
         }
         all_scored.append(item)
+
     all_scored.sort(key=lambda x: x["score"], reverse=True)
     debug_top6 = all_scored[:6]
     matched = [r for r in all_scored if r["score"] >= threshold][:top_k]
+
+    # activation_count += 1 for matched
+    if matched:
+        async with get_db() as db:
+            for m in matched:
+                await db.execute(
+                    "UPDATE memory_cards SET activation_count = activation_count + 1, "
+                    "last_activated = ? WHERE id = ?",
+                    (now_ts, m["id"]),
+                )
+            await db.commit()
+
+    _elapsed = (_time.perf_counter() - _t0) * 1000
+    print(f"[memory] recall: q='{query_text[:40]}' kws={query_keywords} → {len(matched)}/{len(all_scored)} cards, {_elapsed:.0f}ms")
     return matched, debug_top6
 
 
@@ -189,30 +225,31 @@ async def build_surfacing_memories(topic: str = "", keywords: list[str] = None,
 
     # 2. 话题相关浮现
     if topic and topic.strip() and len(result) < max_total:
+        import embedding_cache
         topic_vec = await get_embedding(topic)
-        if topic_vec:
-            async with get_db() as db:
-                db.row_factory = aiosqlite.Row
-                cur = await db.execute(
-                    "SELECT id, content, type, created_at, embedding, keywords, importance "
-                    "FROM memory_cards WHERE embedding IS NOT NULL "
-                    "ORDER BY (CASE WHEN type='aggregate' THEN 0 ELSE 1 END)"
-                )
-                rows = await cur.fetchall()
+        if topic_vec and embedding_cache.is_loaded():
+            all_sims = embedding_cache.batch_cosine(topic_vec)
             scored = []
-            for row in rows:
-                if row["id"] in surfaced_ids:
-                    continue
-                mem_vec = _unpack_embedding(row["embedding"])
-                sim = cosine_similarity(topic_vec, mem_vec)
-                if sim >= 0.50:
-                    scored.append({"id": row["id"], "content": row["content"], "sim": sim, "unresolved": False})
-            scored.sort(key=lambda x: x["sim"], reverse=True)
-            for item in scored[:3]:
-                if len(result) >= max_total:
-                    break
-                result.append(item)
-                surfaced_ids.add(item["id"])
+            for cid, sim in all_sims:
+                if cid not in surfaced_ids and sim >= 0.50:
+                    scored.append((cid, sim))
+            scored.sort(key=lambda x: x[1], reverse=True)
+            if scored:
+                top_ids = [cid for cid, _ in scored[:3]]
+                async with get_db() as db:
+                    db.row_factory = aiosqlite.Row
+                    placeholders = ",".join("?" * len(top_ids))
+                    cur = await db.execute(
+                        f"SELECT id, content FROM memory_cards WHERE id IN ({placeholders})",
+                        top_ids,
+                    )
+                    card_map = {row["id"]: row["content"] for row in await cur.fetchall()}
+                for cid, sim in scored[:3]:
+                    if len(result) >= max_total:
+                        break
+                    if cid in card_map:
+                        result.append({"id": cid, "content": card_map[cid], "sim": sim, "unresolved": False})
+                        surfaced_ids.add(cid)
 
     # 3. 近期补充（最近 3 天）
     if len(result) < max_total:

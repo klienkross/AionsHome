@@ -760,6 +760,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     debug_top6 = []
     debug_top6_data = []
     debug_recalled = []
+    _surfaced_ids_json = ""
 
     digest_result = await instant_digest(actual_recent)
     recall_keywords = digest_result.get("keywords", [])
@@ -780,6 +781,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     (surfaced, surfaced_ids), (_, debug_top6) = await asyncio.gather(
         _do_surfacing(), _do_recall()
     )
+    _surfaced_ids_json = json.dumps(list(surfaced_ids)) if surfaced_ids else ""
 
     now_str = datetime.now().strftime("%Y年%m月%d日  %H:%M:%S")
     bg_block = f"系统当前的准确时间是 {now_str}"
@@ -1015,8 +1017,8 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
             now2 = time.time()
             async with get_db() as db2:
                 await db2.execute(
-                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json)
+                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, surfaced_memory_ids) VALUES (?,?,?,?,?,?,?)",
+                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json, _surfaced_ids_json)
                 )
                 await db2.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
                 await db2.commit()
@@ -1337,6 +1339,8 @@ async def send_message(conv_id: str, body: MsgCreate):
         recent_tail = history[i:]
         history = history[:i]
 
+    _surfaced_ids_json = ""
+
     if body.fast_mode:
         # ── 快速模式：仅注入当前时间，跳过哨兵和记忆 ──
         now_str = datetime.now().strftime("%Y年%m月%d日  %H:%M:%S")
@@ -1366,6 +1370,7 @@ async def send_message(conv_id: str, body: MsgCreate):
         (surfaced, surfaced_ids), (_, debug_top6) = await asyncio.gather(
             _do_surfacing(), _do_recall()
         )
+        _surfaced_ids_json = json.dumps(list(surfaced_ids)) if surfaced_ids else ""
 
         # 构建当前时间 + 背景记忆（动态内容）
         now_str = datetime.now().strftime("%Y年%m月%d日  %H:%M:%S")
@@ -1677,8 +1682,8 @@ async def send_message(conv_id: str, body: MsgCreate):
             now2 = time.time()
             async with get_db() as db2:
                 await db2.execute(
-                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json)
+                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, surfaced_memory_ids) VALUES (?,?,?,?,?,?,?)",
+                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json, _surfaced_ids_json)
                 )
                 await db2.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
                 await db2.commit()
@@ -2760,6 +2765,8 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
         regen_tts = TTSStreamer(ai_msg_id, tts_voice, manager)
     manager.set_tts_fallback(tts_enabled, tts_voice)
 
+    _surfaced_ids_json = ""
+
     async def _bg_generate():
         """后台任务：AI 流式生成 → 后处理 → 存 DB → WS 广播。始终运行到结束。"""
         full_text = ""
@@ -2947,8 +2954,8 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
             now2 = time.time()
             async with get_db() as db2:
                 await db2.execute(
-                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json)
+                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, surfaced_memory_ids) VALUES (?,?,?,?,?,?,?)",
+                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json, _surfaced_ids_json)
                 )
                 await db2.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
                 await db2.commit()

@@ -8,20 +8,23 @@ import time
 from datetime import datetime
 
 
-def _parse_atomic_cards(raw: str) -> list[dict]:
-    """Parse Agent A output: a JSON array of atomic cards."""
+def _parse_atomic_cards(raw) -> list[dict]:
+    """Parse AI output: extract JSON array, with or without markdown code blocks."""
+    if not raw:
+        return []
     if isinstance(raw, list):
         items = raw
     else:
-        raw = raw.strip()
-        if "```" in raw:
-            start = raw.find("[")
-            end = raw.rfind("]") + 1
-            if start >= 0 and end > start:
-                raw = raw[start:end]
+        text = raw.strip()
+        # 尝试提取 [ ... ] 区间（处理 AI 在 JSON 前后附加文字的情况）
+        start = text.find("[")
+        end = text.rfind("]") + 1
+        if start >= 0 and end > start:
+            text = text[start:end]
         try:
-            items = json.loads(raw)
+            items = json.loads(text)
         except (json.JSONDecodeError, ValueError):
+            print(f"[digest_v2] JSON parse failed, raw[:200]: {str(raw)[:200]}")
             return []
     if not isinstance(items, list):
         return []
@@ -36,6 +39,7 @@ def _parse_atomic_cards(raw: str) -> list[dict]:
                 "unresolved": 1 if item.get("unresolved", False) else 0,
                 "valence": float(item.get("valence", 0.0)),
                 "arousal": float(item.get("arousal", 0.0)),
+                "source": item.get("source", "both"),
             })
     return valid
 
@@ -155,27 +159,41 @@ def _build_agent_b_prompt(card_contents: list[str], messages_text: str) -> str:
 
 
 def _build_unified_prompt(messages_text: str, user_name: str, ai_name: str, persona_block: str) -> str:
-    """Build a single prompt that does atomic split + emotion in one call."""
     return (
         f"{persona_block}"
-        f"你是一个记忆拆分专家。请将下面的对话拆分成独立的原子记忆卡片，每张卡片只记录一件事。\n\n"
-        f"规则：\n"
-        f"- 每张卡片的 content 应是一个完整的陈述句，包含日期和必要上下文\n"
-        f"- 使用 \"{user_name}\" 和 \"{ai_name}\" 指代双方\n"
+        f"你是一个记忆整理专家。请将下面的对话整理成独立的记忆卡片。\n\n"
+        f"【整理规则】\n"
+        f"1. 每张卡片记录一件独立的事实/事件/情感/计划\n"
+        f"2. content 是完整陈述句，包含日期和上下文，不少于30字\n"
+        f"3. 同一主题的零散信息合并为一个卡片，不要过度碎片化\n"
+        f"4. 每组对话生成 2~8 张卡片\n"
+        f"5. 使用 \"{user_name}\" 和 \"{ai_name}\" 指代双方\n"
+        f"6. 去除口水话、打招呼、重复信息、无实质内容的寒暄\n"
+        f"7. 如果 {ai_name} 提到过去的事但 {user_name} 没有确认或补充，不要提取为卡片（可能是 AI 编造的）\n"
+        f"8. 如果 {ai_name} 回忆/复述已知的旧事件且没有新信息，不要提取\n\n"
+        f"【字段说明】\n"
         f"- type: event/preference/emotion/promise/plan/fact\n"
-        f"- keywords: 3-6 个关键词，分两层：\n"
-        f"  · 领域词（1-2个）：大类，如 阅读、技术开发、日常起居、社交、情绪、创作、游戏\n"
-        f"  · 实体词（2-4个）：具体人事物地名\n"
-        f"  领域词在前，实体词在后，每个关键词是数组中独立的字符串。\n"
-        f"  禁止人名（{user_name}, {ai_name}）和泛指词（提醒、建议、完成、计划、测试、观察、休息、未完成、担忧、偏好）\n"
-        f"- importance: 0.0-1.0，默认 0.3\n"
-        f"- unresolved: 未完成=true，已发生=false\n"
+        f"- keywords: 3~6个，分两层：\n"
+        f"  · 领域词（1-2个）：这件事属于什么大类。例：阅读、技术开发、日常起居、社交、情绪、创作、游戏\n"
+        f"  · 实体词（2-4个）：具体的人事物地名。例：中亚史、阿里云、提拉米苏\n"
+        f"  领域词放前面，实体词放后面。每个关键词是数组中独立的字符串。\n"
+        f"  【严禁】人名（{user_name}, {ai_name} 等）、泛指词（提醒、建议、完成、计划、测试、观察、休息、未完成、担忧、偏好）\n"
+        f"  示例：\"阅读中亚史时对战车提出疑问\" → [\"阅读\", \"中亚史\", \"战车\", \"骑兵\"]\n"
+        f"  示例：\"提醒喝咖啡不要太快\" → [\"日常起居\", \"喝咖啡\", \"胃\"]\n"
+        f"  示例：\"表达想养蜘蛛的冲动\" → [\"日常起居\", \"养蜘蛛\", \"冲动\"]\n"
+        f"- importance: 0.0~1.0，默认0.3，重大事实才给0.7+\n"
+        f"- unresolved: 未完成的计划/承诺为true\n"
         f"- valence: -1.0~1.0（正=正面情绪，负=负面）\n"
-        f"- arousal: -1.0~1.0（正=高能量，负=低能量）\n\n"
-        f"输出 JSON 数组，每个元素：\n"
-        f'{{"content":"...","type":"...","keywords":[...],"importance":0.X,"unresolved":false,"valence":0.X,"arousal":0.X}}\n\n'
+        f"- arousal: -1.0~1.0（正=高能量，负=低能量）\n"
+        f"- source: 信息主要来自谁\n"
+        f"  \"user\" = {user_name}亲口说的/做的\n"
+        f"  \"ai\" = {ai_name}单方面声称或推测的\n"
+        f"  \"both\" = 双方共同参与确认的\n\n"
+        f"【输出格式】JSON 数组，每个元素：\n"
+        f'{{"content":"...","type":"...","keywords":[...],"importance":0.X,"unresolved":false,'
+        f'"valence":0.X,"arousal":0.X,"source":"user|ai|both"}}\n\n'
         f"严格只输出 JSON 数组。\n\n"
-        f"【对话记录】：\n{messages_text}"
+        f"【对话记录】\n{messages_text}"
     )
 
 
@@ -244,26 +262,105 @@ async def _find_matching_open_cards(new_card_content: str, new_card_embedding: l
 
 async def _dedup_against_realtime(card_content: str, card_embedding: list[float],
                                    source_conv: str, threshold: float = 0.85) -> str | None:
-    import aiosqlite
+    """全局近 7 天去重（替代原来的同 conversation 去重）"""
+    import embedding_cache
     from database import get_db
-    from sentinel import _unpack_embedding
-    from memory import cosine_similarity
+    import time as _time
 
-    if not card_embedding or not source_conv:
+    if not card_embedding or not embedding_cache.is_loaded():
         return None
+
+    cutoff = _time.time() - 7 * 86400
+    all_sims = embedding_cache.batch_cosine(card_embedding)
+
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
-            "SELECT id, embedding FROM memory_cards WHERE source_conv=? AND embedding IS NOT NULL",
-            (source_conv,),
+            "SELECT id FROM memory_cards WHERE created_at > ? AND status IN ('open','closed')",
+            (cutoff,),
         )
-        rows = await cur.fetchall()
-    for row in rows:
-        mem_vec = _unpack_embedding(row["embedding"])
-        sim = cosine_similarity(card_embedding, mem_vec)
-        if sim >= threshold:
-            return row["id"]
+        recent_ids = {row["id"] for row in await cur.fetchall()}
+
+    for cid, sim in all_sims:
+        if cid in recent_ids and sim >= threshold:
+            return cid
+
     return None
+
+
+async def _verify_ai_claims(card: dict, source_start_ts: float) -> bool:
+    """对 source='ai' 的卡片做事实核查。返回 True=保留, False=丢弃。
+
+    策略：
+    - emotion：AI 自己的情绪直接放行，声称「你感到XX」则核查
+    - kw ≥ 2 命中 → 直接放行
+    - 否则 → sentinel 判断
+    """
+    if card.get("source") != "ai":
+        return True
+
+    card_type = card.get("type", "event")
+    keywords = card.get("keywords", [])
+    content = card.get("content", "")
+
+    if not keywords:
+        return True
+
+    # emotion 类型：区分 AI 自己 vs 声称用户
+    if card_type == "emotion":
+        from config import load_worldbook
+        wb = load_worldbook()
+        user_name = wb.get("user_name", "用户")
+        # 内容中提到用户 → AI 在声称用户的情绪，需要核查
+        if user_name in content:
+            print(f"[digest_v2] emotion about user, verifying: {content[:50]}")
+        else:
+            print(f"[digest_v2] ✓ emotion (AI self): {content[:50]}")
+            return True
+
+    import aiosqlite
+    from database import get_db
+
+    # 在 messages 中搜索关键词（往前 14 天）
+    cutoff = source_start_ts - 14 * 86400
+    async with get_db() as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute(
+            "SELECT content FROM messages WHERE role='user' AND created_at > ? AND created_at < ?",
+            (cutoff, source_start_ts),
+        )
+        user_msgs = [row["content"] for row in await cur.fetchall()]
+
+    # 关键词匹配：至少 2 个实体词
+    kw_hits = 0
+    for kw in keywords:
+        if any(kw in msg for msg in user_msgs):
+            kw_hits += 1
+    if kw_hits >= 2:
+        print(f"[digest_v2] ✓ verify pass ({card_type}): {kw_hits} kw hit(s)")
+        return True
+
+    # kw < 2 → sentinel 判断
+    from sentinel import call_sentinel
+    context_sample = "\n".join(user_msgs[-20:])[:2000] if user_msgs else "(无历史消息)"
+    prompt = (
+        f"判断这条记忆描述的事件在历史对话中是否有用户亲自提到过。\n"
+        f"注意：如果是 AI 自己单方面推测、总结、或编造的内容，应该判定为无依据。\n\n"
+        f"记忆内容：{content}\n\n"
+        f"历史用户消息（最近20条）：\n{context_sample}\n\n"
+        f"输出 JSON：{{\"has_evidence\": true/false, \"reason\": \"简短理由\"}}"
+    )
+    try:
+        result = await call_sentinel(prompt)
+        if isinstance(result, dict):
+            has = result.get("has_evidence", True)
+            if not has:
+                print(f"[digest_v2] ✗ sentinel reject: {content[:60]}")
+            return has
+    except Exception as e:
+        print(f"[digest_v2] verify sentinel error: {e}")
+
+    return True  # 核查失败时保守保留
 
 
 async def _do_digest_v2(min_messages: int = 0) -> dict:
@@ -278,7 +375,7 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
     from memory import _split_into_groups_smart, _get_active_model_and_conv
 
     settings = load_settings()
-    split_mode = settings.get("digest_agents", {}).get("split_mode", "separate")
+    split_mode = "unified"
     auto_threshold = settings.get("digest_matching", {}).get("auto_threshold", 0.85)
     ask_threshold = settings.get("digest_matching", {}).get("ask_threshold", 0.65)
 
@@ -295,10 +392,14 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
         new_msgs = [dict(r) for r in await cur.fetchall()]
 
     if not new_msgs:
+        print(f"[digest_v2] 触发但无新消息 (anchor={anchor_ts})")
         return {"ok": True, "message": "没有新消息需要总结", "new_cards_count": 0, "processed_messages": 0}
 
     if min_messages > 0 and len(new_msgs) < min_messages:
+        print(f"[digest_v2] 消息不足: {len(new_msgs)} < {min_messages}, 跳过")
         return {"ok": True, "message": f"消息不足 {min_messages} 条，跳过", "new_cards_count": 0, "processed_messages": 0}
+
+    print(f"[digest_v2] ═══ digest 启动: {len(new_msgs)} 条新消息, {min_messages=} ═══")
 
     wb = load_worldbook()
     user_name = wb.get("user_name", "用户")
@@ -322,6 +423,7 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
         pending_closes = []
         group_start = datetime.fromtimestamp(group[0]["created_at"]).strftime("%Y年%m月%d日 %H:%M")
         group_end = datetime.fromtimestamp(group[-1]["created_at"]).strftime("%Y年%m月%d日 %H:%M")
+        print(f"[digest_v2] ── 处理消息组: {group_start} ~ {group_end}, {len(group)} 条 ──")
         date_header = f"[对话时间范围: {group_start} ~ {group_end}]\n"
         messages_text = date_header + "\n".join([
             f"[{datetime.fromtimestamp(m['created_at']).strftime('%m-%d %H:%M')}] "
@@ -334,19 +436,25 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
         source_conv_id = group[0].get("conv_id")
 
         if split_mode == "unified":
-            # Single call: split + emotion
             unified_prompt = _build_unified_prompt(messages_text, user_name, ai_name, persona_block)
+            print(f"[digest_v2] → 调用 sentinel (prompt {len(unified_prompt)} chars)...")
             try:
                 raw_u = await simple_ai_call([{"role": "user", "content": unified_prompt}], model_key)
             except Exception as e:
-                print(f"[digest_v2] Unified agent failed: {e}")
+                print(f"[digest_v2] ✗ Unified agent exception: {e}")
                 save_digest_anchor(source_end_ts)
                 continue
+            if not raw_u:
+                print(f"[digest_v2] ✗ Unified agent returned empty/None")
+                save_digest_anchor(source_end_ts)
+                continue
+            print(f"[digest_v2] ← sentinel 返回 {len(raw_u)} chars: {str(raw_u)[:150]}")
             atomic_cards = _parse_atomic_cards(raw_u)
             if not atomic_cards:
-                print(f"[digest_v2] Unified agent returned no valid cards for group {group_start}")
+                print(f"[digest_v2] ✗ 解析后无有效卡片 (raw[:300]): {str(raw_u)[:300]}")
                 save_digest_anchor(source_end_ts)
                 continue
+            print(f"[digest_v2] ✓ 解析出 {len(atomic_cards)} 张卡片, sources: {[ac.get('source','?') for ac in atomic_cards]}")
             emotions = []
             for ac in atomic_cards:
                 emotions.append({
@@ -387,33 +495,53 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
         vectors = await asyncio.gather(*embed_tasks, return_exceptions=True)
         vectors = [v if not isinstance(v, Exception) else None for v in vectors]
 
-        # ── Phase 2: 并发 dedup ──
-        keep_indices = []
-        if source_conv_id:
-            async def _noop():
-                return None
-            dedup_tasks = []
-            for i, ac in enumerate(atomic_cards):
-                if vectors[i]:
-                    dedup_tasks.append(_dedup_against_realtime(
-                        ac["content"], vectors[i], source_conv_id, auto_threshold
-                    ))
-                else:
-                    dedup_tasks.append(_noop())
-            dedup_results = await asyncio.gather(*dedup_tasks, return_exceptions=True)
-            for i, result in enumerate(dedup_results):
-                if isinstance(result, Exception) or result:
-                    if not isinstance(result, Exception):
-                        print(f"[digest_v2] Skipping duplicate of {result}: {atomic_cards[i]['content'][:40]}")
-                    continue
-                keep_indices.append(i)
-        else:
-            keep_indices = list(range(len(atomic_cards)))
+        # ── Phase 2: 跳过向量去重（余弦相似度作为判据不可靠）──
+        keep_indices = list(range(len(atomic_cards)))
 
+        # 读取本组时间范围内的 surfaced memory ids
+        surfaced_set = set()
+        async with get_db() as db:
+            db.row_factory = aiosqlite.Row
+            cur = await db.execute(
+                "SELECT surfaced_memory_ids FROM messages "
+                "WHERE created_at >= ? AND created_at <= ? "
+                "AND surfaced_memory_ids IS NOT NULL AND surfaced_memory_ids != ''",
+                (source_start_ts, source_end_ts),
+            )
+            for row in await cur.fetchall():
+                try:
+                    ids = json.loads(row["surfaced_memory_ids"])
+                    surfaced_set.update(ids)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        surf_skip = 0
+        fact_skip = 0
         # ── Phase 3: 建卡 + 并发 lifecycle 判断 ──
         for i in keep_indices:
             ac = atomic_cards[i]
             vec = vectors[i]
+
+            # surfaced 去重
+            if surfaced_set and vec:
+                import embedding_cache
+                surfaced_sims = embedding_cache.batch_cosine_filtered(vec, surfaced_set)
+                best_surfaced = max((s for _, s in surfaced_sims), default=0.0)
+                if best_surfaced >= 0.85:
+                    print(f"[digest_v2] ⊗ surfaced dup (sim={best_surfaced:.3f}): {ac['content'][:50]}")
+                    surf_skip += 1
+                    continue
+
+            # 事实核查（仅 source=ai）
+            if ac.get("source") == "ai":
+                keep = await _verify_ai_claims(
+                    {"content": ac["content"], "keywords": ac.get("keywords", []), "source": "ai"},
+                    source_start_ts,
+                )
+                if not keep:
+                    print(f"[digest_v2] ⊗ fact-check reject: {ac['content'][:50]}")
+                    fact_skip += 1
+                    continue
 
             card = await create_card(
                 content=ac["content"],
@@ -428,6 +556,7 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
                 intensity_score=intensity,
                 unresolved=ac["unresolved"],
                 embed=False,
+                source=ac.get("source", "both"),
             )
             if vec:
                 async with get_db() as db:
@@ -483,6 +612,7 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
             total_new += 1
             all_summaries.append(ac["content"])
 
+        print(f"[digest_v2] ── 本组结束: surf_dup={surf_skip} fact_rej={fact_skip}, 总新卡={total_new} ──")
         save_digest_anchor(source_end_ts)
 
     # Check for chains that need aggregate generation
@@ -514,29 +644,6 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
             agg_card = await create_aggregate_for_chain(chain, agg_summary)
             processed_chains.update(c["id"] for c in chain)
             print(f"[digest_v2] Created aggregate: {agg_summary[:60]}")
-
-    # Auto-close stale open cards by type
-    now_ts = time.time()
-    close_rules = [
-        ("type='event' AND importance <= 0.4", 24 * 3600),
-        ("type='event' AND importance > 0.4", 3 * 86400),
-        ("type IN ('emotion','fact')", 3 * 86400),
-        ("type IN ('plan','promise')", 7 * 86400),
-        ("type='preference'", 14 * 86400),
-    ]
-    async with get_db() as db:
-        total_closed = 0
-        for condition, max_age in close_rules:
-            cutoff = now_ts - max_age
-            cur = await db.execute(
-                f"UPDATE memory_cards SET status='closed', updated_at=? "
-                f"WHERE {condition} AND status='open' AND created_at < ?",
-                (now_ts, cutoff)
-            )
-            total_closed += cur.rowcount
-        if total_closed > 0:
-            await db.commit()
-            print(f"[digest_v2] Auto-closed {total_closed} stale open cards")
 
     # AI reflection + gift
     if conv_id and total_new > 0 and all_summaries:
@@ -621,9 +728,11 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
         except Exception as e:
             print(f"[digest_v2] Gift judgment failed: {e}")
 
+    msg = f"V2总结完成：处理 {len(new_msgs)} 条消息（{len(groups)} 组），生成 {total_new} 张卡片"
+    print(f"[digest_v2] {msg}")
     return {
         "ok": True,
-        "message": f"V2总结完成：处理 {len(new_msgs)} 条消息（{len(groups)} 组），生成 {total_new} 张卡片",
+        "message": msg,
         "new_cards_count": total_new,
         "processed_messages": len(new_msgs),
     }

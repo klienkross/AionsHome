@@ -12,7 +12,7 @@ from database import get_db
 from sentinel import get_embedding, _pack_embedding, _unpack_embedding
 
 VALID_TYPES = {"event", "preference", "emotion", "promise", "plan", "fact", "aggregate"}
-VALID_STATUSES = {"open", "closed", "merged"}
+VALID_STATUSES = {"open", "closed", "merged", "archived"}
 VALID_RELATIONS = {"follow_up", "derived_from", "aggregated_into", "related"}
 
 
@@ -35,10 +35,12 @@ async def create_card(
     intensity_score: float = None,
     unresolved: int = 0,
     embed: bool = True,
+    source: str = "both",
 ) -> dict:
     card_id = _make_card_id(content)
     now = time.time()
     keywords_json = json.dumps(keywords or [], ensure_ascii=False)
+    verified = 1 if source != "ai" else 0
 
     vec = None
     if embed:
@@ -49,14 +51,21 @@ async def create_card(
             "INSERT INTO memory_cards "
             "(id, content, type, status, created_at, updated_at, source_conv, "
             "source_start_ts, source_end_ts, embedding, keywords, importance, "
-            "unresolved, valence, arousal, intensity_score) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "unresolved, valence, arousal, intensity_score, "
+            "source, verified, activation_count, last_activated) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (card_id, content, card_type, "open", now, now, source_conv,
              source_start_ts, source_end_ts,
              _pack_embedding(vec) if vec else None,
-             keywords_json, importance, unresolved, valence, arousal, intensity_score),
+             keywords_json, importance, unresolved, valence, arousal, intensity_score,
+             source, verified, 0, now),
         )
         await db.commit()
+
+    # 追加到 embedding cache
+    if vec:
+        import embedding_cache
+        embedding_cache.add(card_id, vec)
 
     return {
         "id": card_id, "content": content, "type": card_type, "status": "open",
@@ -64,6 +73,7 @@ async def create_card(
         "importance": importance, "unresolved": unresolved,
         "source_start_ts": source_start_ts, "source_end_ts": source_end_ts,
         "valence": valence, "arousal": arousal, "intensity_score": intensity_score,
+        "source": source, "verified": verified,
     }
 
 
@@ -94,7 +104,8 @@ async def update_card_status(card_id: str, status: str) -> bool:
 
 async def update_card(card_id: str, **fields) -> bool:
     allowed = {"content", "type", "keywords", "importance", "unresolved",
-               "valence", "arousal", "intensity_score", "status"}
+               "valence", "arousal", "intensity_score", "status",
+               "activation_count", "last_activated", "source", "verified"}
     updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
     if not updates:
         return False

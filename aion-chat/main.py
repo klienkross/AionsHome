@@ -106,6 +106,10 @@ def _print_local_ips():
 async def lifespan(app: FastAPI):
     _print_local_ips()
     await init_db()
+    # 初始化 embedding 矩阵缓存
+    import embedding_cache
+    await embedding_cache.load()
+    print(f"[embedding_cache] Loaded {embedding_cache.count()} vectors")
     loop = asyncio.get_event_loop()
     cam.set_event_loop(loop)
     cam_cfg = load_cam_config()
@@ -141,9 +145,13 @@ async def lifespan(app: FastAPI):
     # WS 心跳清理
     manager.start_heartbeat()
     cr_digest_task = asyncio.create_task(_connor_1v1_auto_digest_loop())
+    # 遗忘曲线后台衰减任务
+    from decay_engine import decay_loop
+    decay_task = asyncio.create_task(decay_loop())
     yield
     cr_digest_task.cancel()
     digest_task.cancel()
+    decay_task.cancel()
     ntfy_bridge.stop()
     fund_scheduler.stop()
     pc_tracker.stop()

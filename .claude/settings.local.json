@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python *)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "PowerShell(git *)"
     ]
   }
 }
