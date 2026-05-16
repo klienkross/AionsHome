@@ -616,6 +616,36 @@ async def list_messages(conv_id: str, limit: int = Query(50, ge=1, le=500), befo
             result.append(d)
         return result
 
+@router.get("/api/conversations/{conv_id}/hash")
+async def get_conv_hash(conv_id: str):
+    async with get_db() as db:
+        hash_row = await db.execute_fetchone(
+            "SELECT chain_hash FROM messages WHERE conv_id = ? ORDER BY created_at DESC LIMIT 1",
+            (conv_id,)
+        )
+        count_row = await db.execute_fetchone(
+            "SELECT COUNT(*) FROM messages WHERE conv_id = ?",
+            (conv_id,)
+        )
+        return {
+            "chain_hash": hash_row[0] if hash_row and hash_row[0] else "00000000",
+            "count": count_row[0] if count_row else 0
+        }
+
+@router.post("/api/conversations/{conv_id}/hash/verify")
+async def verify_conv_hashes(conv_id: str, body: dict):
+    client_hashes = body.get("hashes", [])
+    async with get_db() as db:
+        for item in client_hashes:
+            row = await db.execute_fetchone(
+                "SELECT chain_hash FROM messages WHERE id = ?",
+                (item["id"],)
+            )
+            server_hash = row[0] if row else None
+            if server_hash != item.get("chain_hash"):
+                return {"match": False, "diverge_at": item["id"]}
+        return {"match": True}
+
 @router.delete("/api/messages/{msg_id}")
 async def delete_message(msg_id: str):
     conv_id = None

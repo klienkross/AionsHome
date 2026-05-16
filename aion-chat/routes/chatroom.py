@@ -741,6 +741,23 @@ async def list_messages(room_id: str, limit: int = Query(50, ge=1, le=500), befo
         return result
 
 
+@router.get("/rooms/{room_id}/hash")
+async def get_room_hash(room_id: str):
+    async with get_db() as db:
+        hash_row = await db.execute_fetchone(
+            "SELECT chain_hash FROM chatroom_messages WHERE room_id = ? ORDER BY created_at DESC LIMIT 1",
+            (room_id,)
+        )
+        count_row = await db.execute_fetchone(
+            "SELECT COUNT(*) FROM chatroom_messages WHERE room_id = ?",
+            (room_id,)
+        )
+        return {
+            "chain_hash": hash_row[0] if hash_row and hash_row[0] else "00000000",
+            "count": count_row[0] if count_row else 0
+        }
+
+
 @router.delete("/messages/{msg_id}")
 async def delete_message(msg_id: str):
     async with get_db() as db:
