@@ -16,12 +16,6 @@ const AVATARS = {
 
 let NAMES = { user: '我', aion: 'Aion', connor: 'Connor' };
 
-// ── 音效 ──
-const sndSend = new Audio('/public/发送消息.mp3');
-const sndRecv = new Audio('/public/收到消息.mp3');
-function playSend() { sndSend.currentTime = 0; sndSend.play().catch(() => {}); }
-function playRecv() { sndRecv.currentTime = 0; sndRecv.play().catch(() => {}); }
-
 // ── TTS 语音合成 ──
 let crTtsEnabled = localStorage.getItem('chatroom_tts_enabled') === 'true';
 let crTtsAionVoice = localStorage.getItem('chatroom_tts_aion_voice') || '';
