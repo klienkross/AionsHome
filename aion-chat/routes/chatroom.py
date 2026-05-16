@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from config import DEFAULT_MODEL, DATA_DIR, CODEX_UPLOADS_DIR, SETTINGS
 from database import get_db
+from chain_hash import compute_chain_hash
 from ws import manager
 from ai_providers import stream_ai, CLI_STATUS_PREFIX
 from tts import TTSStreamer
@@ -39,6 +40,20 @@ from camera import cam, CAM_CHECK_CMD
 router = APIRouter(prefix="/api/chatroom", tags=["chatroom"])
 
 
+async def _insert_cr_msg(db, msg_id, room_id, sender, content, created_at, attachments="[]"):
+    row = await db.execute_fetchone(
+        "SELECT chain_hash FROM chatroom_messages WHERE room_id = ? ORDER BY created_at DESC LIMIT 1",
+        (room_id,)
+    )
+    prev_hash = row[0] if row and row[0] else '00000000'
+    chain_hash = compute_chain_hash(prev_hash, msg_id, content or '', created_at)
+    await db.execute(
+        "INSERT INTO chatroom_messages (id, room_id, sender, content, attachments, created_at, chain_hash) VALUES (?,?,?,?,?,?,?)",
+        (msg_id, room_id, sender, content, attachments, created_at, chain_hash)
+    )
+    return chain_hash
+
+
 # ══════════════════════════════════════════════════
 #  群聊工具指令处理
 # ══════════════════════════════════════════════════
@@ -48,10 +63,7 @@ async def _chatroom_sys_msg(room_id: str, text: str, _q: asyncio.Queue):
     now = time.time()
     msg_id = f"cm_{int(now * 1000)}_sys"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO chatroom_messages (id, room_id, sender, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, room_id, "system", text, now, "[]"),
-        )
+        await _insert_cr_msg(db, msg_id, room_id, "system", text, now, "[]")
         await db.commit()
     msg = {"id": msg_id, "room_id": room_id, "sender": "system", "content": text, "created_at": now, "attachments": []}
     await _q.put({"type": "system_msg", "message": msg})
@@ -754,10 +766,7 @@ async def _save_msg(room_id: str, sender: str, content: str, msg_id: str = None,
     att_list = attachments or []
     att_json = json.dumps(att_list, ensure_ascii=False) if att_list else "[]"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO chatroom_messages (id, room_id, sender, content, attachments, created_at) VALUES (?,?,?,?,?,?)",
-            (msg_id, room_id, sender, content, att_json, now),
-        )
+        ch = await _insert_cr_msg(db, msg_id, room_id, sender, content, now, att_json)
         await db.execute("UPDATE chatroom_rooms SET updated_at=? WHERE id=?", (now, room_id))
         await db.commit()
     msg = {"id": msg_id, "room_id": room_id, "sender": sender, "content": content,
