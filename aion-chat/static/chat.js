@@ -18,7 +18,7 @@ const _clientId = localStorage.getItem('aion_client_id') || (() => {
   localStorage.setItem('aion_client_id', id); return id;
 })();
 let ws = null;
-let pendingAttachments = [];  // [{url, type, name}]
+const attachments = AionChat.createAttachmentManager('/api/upload', 'previewArea');
 let worldBook = { ai_persona: "", user_persona: "", ai_name: "AI", user_name: "你" };
 let msgDebugData = {};  // { msgId: { model, recalled_memories, prompt_messages, prompt_count, usage } }
 let systemLogs = [];    // 系统日志（会话级，刷新清空）
@@ -29,47 +29,6 @@ let _suppressScrollBottom = false; // 星标跳转时抑制自动滚底
 const MSG_PAGE_SIZE = 50;
 const $ = id => document.getElementById(id);
 
-// ── 收发消息音效 ──
-const sndSend = new Audio('/public/发送消息.mp3');
-const sndRecv = new Audio('/public/收到消息.mp3');
-sndSend.preload = 'auto';
-sndRecv.preload = 'auto';
-// 在首次用户交互时解锁音频（部分浏览器/WebView 要求）
-let _audioUnlocked = false;
-function _unlockAudio() {
-  if (_audioUnlocked) return;
-  _audioUnlocked = true;
-  sndSend.load();
-  sndRecv.load();
-  // 播放静音片段解锁
-  sndSend.volume = 0; sndSend.play().then(() => { sndSend.pause(); sndSend.currentTime = 0; sndSend.volume = 1; }).catch(() => { sndSend.volume = 1; });
-  sndRecv.volume = 0; sndRecv.play().then(() => { sndRecv.pause(); sndRecv.currentTime = 0; sndRecv.volume = 1; }).catch(() => { sndRecv.volume = 1; });
-  document.removeEventListener('click', _unlockAudio);
-  document.removeEventListener('touchstart', _unlockAudio);
-}
-document.addEventListener('click', _unlockAudio);
-document.addEventListener('touchstart', _unlockAudio);
-function playSend() { sndSend.currentTime = 0; sndSend.play().catch(() => {}); }
-function playRecv() { sndRecv.currentTime = 0; sndRecv.play().catch(() => {}); }
-
-function applyAionTheme(theme) {
-  const next = theme === 'light' ? 'light' : 'dark';
-  document.body.dataset.theme = next;
-  localStorage.setItem('aion_chat_theme', next);
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', next === 'dark' ? '#050923' : '#eef3ff');
-  // 通知原生 App 切换状态栏图标颜色
-  if (window.AionStatusBar) window.AionStatusBar.setBarStyle(next);
-}
-
-function toggleAionTheme() {
-  applyAionTheme(document.body.dataset.theme === 'light' ? 'dark' : 'light');
-}
-
-applyAionTheme(localStorage.getItem('aion_chat_theme') || 'dark');
-window.addEventListener('storage', e => {
-  if (e.key === 'aion_chat_theme') applyAionTheme(e.newValue || 'dark');
-});
 
 // ── 初始化 ──
 async function init() {
@@ -104,33 +63,6 @@ async function init() {
   }
 }
 
-function escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-function formatMsg(s) {
-  // 先转义 HTML，再将 [[image:path]] 标记渲染为 <img>
-  const escaped = escHtml(s);
-  // 渲染 [转账：N元] 为转账卡片
-  const transferRe = /\[转账[：:]\s*(-?\d+(?:\.\d+)?)\s*元\]/g;
-  let processed = escaped.replace(transferRe, (match, amount) => {
-    const val = parseFloat(amount);
-    const isNeg = val < 0;
-    const absVal = Math.abs(val);
-    if (isNeg) {
-      return `<div class="transfer-card deduct"><div class="transfer-card-body"><div class="transfer-card-amount">¥${absVal}</div><div class="transfer-card-desc">钱包扣除</div></div><div class="transfer-card-footer">扣除</div></div>`;
-    } else {
-      return `<div class="transfer-card"><div class="transfer-card-body"><div class="transfer-card-amount">¥${absVal}</div><div class="transfer-card-desc">发起了一笔转账</div></div><div class="transfer-card-footer">转账</div></div>`;
-    }
-  });
-  const imgRe = /\[\[image:(\S+?)\]\]/g;
-  let result = '', lastIdx = 0, match;
-  while ((match = imgRe.exec(processed)) !== null) {
-    result += processed.slice(lastIdx, match.index).replace(/\n/g, '<br>');
-    const safeUrl = match[1];
-    result += `<img class="cr-inline-img" src="${safeUrl}" onclick="openImageViewer && openImageViewer(this.src)" loading="lazy" style="max-width:100%;border-radius:8px;cursor:pointer;margin:4px 0">`;
-    lastIdx = imgRe.lastIndex;
-  }
-  result += processed.slice(lastIdx).replace(/\n/g, '<br>');
-  return result;
-}
 
 // ── 配置弹窗 ──
 function toggleConfig(e) {
@@ -1018,10 +950,25 @@ async function api(method, url, body) {
 }
 
 // ── WebSocket 同步 ──
+async function checkSyncIntegrity() {
+  if (!currentConvId || !currentMessages.length) return;
+  const lastMsg = currentMessages[currentMessages.length - 1];
+  if (!lastMsg.chain_hash) return;
+  try {
+    const resp = await api("GET", `/api/conversations/${currentConvId}/hash`);
+    if (resp.chain_hash !== lastMsg.chain_hash) {
+      console.warn('[Sync] 哈希不一致，重新加载消息');
+      const msgs = await api("GET", `/api/conversations/${currentConvId}/messages?limit=${MSG_PAGE_SIZE}`);
+      currentMessages = msgs;
+      renderMessages();
+    }
+  } catch {}
+}
+
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${proto}//${location.host}/ws`);
-  ws.onopen = () => { _sendTTSState(); ws.send(JSON.stringify({type:'register_client',client_id:_clientId})); };
+  ws.onopen = () => { _sendTTSState(); ws.send(JSON.stringify({type:'register_client',client_id:_clientId})); checkSyncIntegrity(); };
   ws.onmessage = e => handleSync(JSON.parse(e.data));
   ws.onclose = () => setTimeout(connectWS, 2000);
 }
@@ -1907,7 +1854,7 @@ function _showSendBtn() {
 function _updateSendBtnState() {
   if (sending) return;
   const btn = $("sendBtn");
-  btn.disabled = !$("input").value.trim() && !pendingAttachments.length;
+  btn.disabled = !$("input").value.trim() && !attachments.hasPending();
 }
 
 async function stopGeneration() {
@@ -1930,19 +1877,17 @@ function _getMaxTokens() {
 async function send() {
   const input = $("input");
   const text = input.value.trim();
-  if ((!text && !pendingAttachments.length) || !currentConvId || sending) return;
+  if ((!text && !attachments.hasPending()) || !currentConvId || sending) return;
 
   sending = true;
   _showStopBtn();
   input.value = "";
   autoResize(input);
-  const attachments = pendingAttachments.map(a => a.url);
-  pendingAttachments = [];
-  renderPreview();
+  const attachUrls = attachments.flush();
 
   // 立即显示用户消息（乐观更新）
   playSend();
-  const tempUserMsg = { id: "temp_user", conv_id: currentConvId, role: "user", content: text, created_at: Date.now()/1000, attachments };
+  const tempUserMsg = { id: "temp_user", conv_id: currentConvId, role: "user", content: text, created_at: Date.now()/1000, attachments: attachUrls };
   currentMessages.push(tempUserMsg);
   renderMessages();
 
@@ -1954,7 +1899,7 @@ async function send() {
     const res = await fetch(`/api/conversations/${currentConvId}/send`, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ content: text, context_limit: contextLimit, attachments, whisper_mode: whisperMode, temperature, max_tokens: maxTokens, tts_enabled: ttsEnabled, tts_voice: ttsVoiceId, client_id: _clientId }),
+      body: JSON.stringify({ content: text, context_limit: contextLimit, attachments: attachUrls, whisper_mode: whisperMode, temperature, max_tokens: maxTokens, tts_enabled: ttsEnabled, tts_voice: ttsVoiceId, client_id: _clientId }),
       signal: _abortController.signal
     });
 
@@ -2514,22 +2459,6 @@ function handleImageGenStart(data) {
   imageGenSafetyTimer = setTimeout(() => dismissImageGenIndicator(), 120000);
 }
 
-// ── 图片查看器（Lightbox） ──
-function openImageViewer(url) {
-  const overlay = document.createElement('div');
-  overlay.className = 'image-viewer-overlay';
-  overlay.innerHTML = `
-    <button class="image-viewer-close" onclick="this.parentElement.remove()">&times;</button>
-    <img src="${url}" alt="图片">
-    <div class="image-viewer-actions">
-      <button onclick="saveImage('${url}')">💾 保存图片</button>
-      <button onclick="this.closest('.image-viewer-overlay').remove()">关闭</button>
-    </div>
-  `;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
-  requestAnimationFrame(() => overlay.classList.add('active'));
-}
 function saveImage(url) {
   fetch(url)
     .then(r => r.blob())
@@ -2722,56 +2651,14 @@ function renderAttachments(atts) {
   return html;
 }
 
-async function handleFileSelect(input) {
-  for (const file of input.files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await fetch('/api/upload', {method:'POST', body: fd});
-    const data = await res.json();
-    if (data.error) { alert(data.error); continue; }
-    pendingAttachments.push(data);
-  }
-  input.value = '';
-  renderPreview();
-}
+function handleFileSelect(input) { attachments.handleFiles(input); }
 
-// 粘贴图片到输入框
 document.addEventListener('DOMContentLoaded', () => {
   const input = $('input');
-  if (input) input.addEventListener('paste', async (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    for (const item of items) {
-      if (!item.type.startsWith('image/')) continue;
-      e.preventDefault();
-      const file = item.getAsFile();
-      if (!file) continue;
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/upload', {method:'POST', body: fd});
-      const data = await res.json();
-      if (data.error) { alert(data.error); continue; }
-      pendingAttachments.push(data);
-      renderPreview();
-    }
-  });
+  if (input) input.addEventListener('paste', e => attachments.handlePaste(e));
 });
 
-function renderPreview() {
-  const area = $('previewArea');
-  if (!pendingAttachments.length) { area.className = 'preview-area'; area.innerHTML = ''; return; }
-  area.className = 'preview-area has-files';
-  area.innerHTML = pendingAttachments.map((a, i) => {
-    const isVid = a.type && a.type.startsWith('video/');
-    const media = isVid ? `<video src="${a.url}" muted></video>` : `<img src="${a.url}">`;
-    return `<div class="preview-item">${media}<button class="preview-remove" onclick="removeAttachment(${i})">✕</button></div>`;
-  }).join('');
-}
-
-function removeAttachment(i) {
-  pendingAttachments.splice(i, 1);
-  renderPreview();
-}
+function removeAttachment(i) { attachments.remove(i); }
 
 // ── 附加功能菜单 ──
 function positionPlusMenu() {
@@ -2936,8 +2823,8 @@ async function capturePhoto() {
   const res = await fetch('/api/upload', { method: 'POST', body: fd });
   const data = await res.json();
   if (data.error) { alert(data.error); return; }
-  pendingAttachments.push(data);
-  renderPreview();
+  attachments.pending.push(data);
+  attachments.render();
 }
 
 // ── 语音消息播放 ──

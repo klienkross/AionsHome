@@ -6,7 +6,7 @@ let rooms = [];
 let isSending = false;
 let isAiChatting = false;
 let chatroomModel = '';
-let pendingAttachments = [];  // [{url, type, name}]
+const attachments = AionChat.createAttachmentManager('/api/chatroom/upload', 'previewArea', msg => toast(msg));
 
 const AVATARS = {
   user: '/public/UserIcon.png?v=2',
@@ -15,12 +15,6 @@ const AVATARS = {
 };
 
 let NAMES = { user: '我', aion: 'Aion', connor: 'Connor' };
-
-// ── 音效 ──
-const sndSend = new Audio('/public/发送消息.mp3');
-const sndRecv = new Audio('/public/收到消息.mp3');
-function playSend() { sndSend.currentTime = 0; sndSend.play().catch(() => {}); }
-function playRecv() { sndRecv.currentTime = 0; sndRecv.play().catch(() => {}); }
 
 // ── TTS 语音合成 ──
 let crTtsEnabled = localStorage.getItem('chatroom_tts_enabled') === 'true';
@@ -163,15 +157,9 @@ function timeStr(ts) {
   return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function isNearBottom() {
-  return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 100;
-}
-
-function scrollToBottom(force = false) {
-  if (force || isNearBottom()) {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-}
+const _scroll = AionChat.createScrollHelper(messagesEl);
+const isNearBottom = _scroll.isNearBottom;
+const scrollToBottom = _scroll.scrollToBottom;
 
 function resizeInput() {
   inputEl.style.height = 'auto';
@@ -306,8 +294,7 @@ function msgHTML(m) {
   // 用户消息按单换行拆，AI消息按双换行拆
   const isUser = sender === 'user';
   const raw = m.content || '';
-  // AI 消息使用 escWithImages 解析 [[image:...]]，用户消息纯转义
-  const fmt = isUser ? esc : escWithImages;
+  const fmt = isUser ? esc : crEscWithImages;
   const parts = raw.split(isUser ? /\n+/ : /\n{2,}/).filter(p => p.trim());
   let bubblesHtml;
   if (parts.length > 1) {
@@ -469,7 +456,7 @@ function endStreamingBubble(attachments) {
       parts.forEach(p => {
         const b = document.createElement('div');
         b.className = 'bubble';
-        b.innerHTML = escWithImages(p);
+        b.innerHTML = crEscWithImages(p);
         container.appendChild(b);
       });
       parent.replaceChild(container, streamingBubble);
@@ -478,7 +465,7 @@ function endStreamingBubble(attachments) {
       if (attHtml) container.insertAdjacentHTML('afterend', attHtml);
     } else {
       // 单气泡也解析 [[image:...]]
-      streamingBubble.innerHTML = escWithImages(streamingText);
+      streamingBubble.innerHTML = crEscWithImages(streamingText);
       // 附件图片追加到气泡后面
       const attHtml = renderAttachments(attachments);
       if (attHtml) streamingBubble.insertAdjacentHTML('afterend', attHtml);
@@ -495,26 +482,24 @@ function endStreamingBubble(attachments) {
 composer.addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = inputEl.value.trim();
-  if ((!text && !pendingAttachments.length) || !currentRoom || isSending) return;
+  if ((!text && !attachments.hasPending()) || !currentRoom || isSending) return;
 
   isSending = true;
   sendBtn.disabled = true;
   inputEl.value = '';
   resizeInput();
 
-  const attachments = pendingAttachments.map(a => a.url);
-  pendingAttachments = [];
-  renderPreview();
+  const attachUrls = attachments.flush();
 
   // 立即显示用户消息
   playSend();
-  appendMessage({ sender: 'user', content: text, created_at: Date.now() / 1000, attachments });
+  appendMessage({ sender: 'user', content: text, created_at: Date.now() / 1000, attachments: attachUrls });
 
   try {
     const resp = await fetch(`${API}/rooms/${currentRoom.id}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text, model: chatroomModel, attachments, tts_enabled: crTtsEnabled, tts_aion_voice: crTtsAionVoice, tts_connor_voice: crTtsConnorVoice }),
+      body: JSON.stringify({ content: text, model: chatroomModel, attachments: attachUrls, tts_enabled: crTtsEnabled, tts_aion_voice: crTtsAionVoice, tts_connor_voice: crTtsConnorVoice }),
     });
 
     const reader = resp.body.getReader();
@@ -942,12 +927,24 @@ function renderEmptyChat() {
 //  WebSocket 实时同步
 // ══════════════════════════════════════════════════
 
+async function checkSyncIntegrity() {
+  if (!currentRoom) return;
+  try {
+    const resp = await api(`/rooms/${currentRoom.id}/hash`);
+    const localCount = messagesEl.querySelectorAll('.message-row').length;
+    if (resp.count !== localCount) {
+      await loadMessages();
+    }
+  } catch {}
+}
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'ping' }));
+    checkSyncIntegrity();
   };
 
   ws.onmessage = (e) => {
@@ -1002,112 +999,21 @@ function renderAttachments(atts) {
   return html ? '<div class="msg-media">' + html + '</div>' : '';
 }
 
-async function handleChatroomFileSelect(input) {
-  for (const file of input.files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
-      const res = await fetch(`${API}/upload`, { method: 'POST', body: fd });
-      const data = await res.json();
-      if (data.error) { toast(data.error); continue; }
-      pendingAttachments.push(data);
-    } catch (err) {
-      toast('上传失败: ' + err.message);
-    }
-  }
-  input.value = '';
-  renderPreview();
-}
-
-function renderPreview() {
-  const area = document.getElementById('previewArea');
-  if (!pendingAttachments.length) { area.className = 'preview-area'; area.innerHTML = ''; return; }
-  area.className = 'preview-area has-files';
-  area.innerHTML = pendingAttachments.map((a, i) => {
-    return `<div class="preview-item"><img src="${a.url}"><button class="preview-remove" onclick="removeChatroomAttachment(${i})">✕</button></div>`;
-  }).join('');
-}
-
-function removeChatroomAttachment(i) {
-  pendingAttachments.splice(i, 1);
-  renderPreview();
-}
-
-function openImageViewer(src) {
-  const viewer = document.getElementById('imageViewer');
-  document.getElementById('viewerImg').src = src;
-  viewer.classList.add('active');
-}
-
-function closeImageViewer() {
-  document.getElementById('imageViewer').classList.remove('active');
-}
-
 // 文件选择绑定
 document.getElementById('fileInput').addEventListener('change', function() {
-  handleChatroomFileSelect(this);
+  attachments.handleFiles(this);
 });
 
 // 粘贴图片
-inputEl.addEventListener('paste', async (e) => {
-  const items = e.clipboardData && e.clipboardData.items;
-  if (!items) return;
-  for (const item of items) {
-    if (!item.type.startsWith('image/')) continue;
-    e.preventDefault();
-    const file = item.getAsFile();
-    if (!file) continue;
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
-      const res = await fetch(`${API}/upload`, { method: 'POST', body: fd });
-      const data = await res.json();
-      if (data.error) { toast(data.error); continue; }
-      pendingAttachments.push(data);
-      renderPreview();
-    } catch (err) {
-      toast('粘贴上传失败: ' + err.message);
-    }
-  }
-});
+inputEl.addEventListener('paste', e => attachments.handlePaste(e));
 
 // ESC 关闭图片查看器
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeImageViewer();
 });
 
-// ══════════════════════════════════════════════════
-//  转义
-// ══════════════════════════════════════════════════
-
-function esc(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-/** 将文本中的 [[image:...]] 标记渲染为 <img>，其余部分转义 */
-function escWithImages(str) {
-  if (!str) return '';
-  const imgRe = /\[\[image:(\S+?)\]\]/g;
-  let result = '';
-  let lastIdx = 0;
-  let match;
-  while ((match = imgRe.exec(str)) !== null) {
-    const before = str.slice(lastIdx, match.index);
-    if (before) result += esc(before);
-    // Connor 端 /uploads/ 在聊天室对应 /cr-uploads/
-    let imgUrl = match[1];
-    if (imgUrl.startsWith('/uploads/')) imgUrl = '/cr-uploads/' + imgUrl.slice('/uploads/'.length);
-    const safeUrl = esc(imgUrl);
-    result += `<img class="cr-inline-img" src="${safeUrl}" onclick="openImageViewer(this.src)" loading="lazy">`;
-    lastIdx = imgRe.lastIndex;
-  }
-  const tail = str.slice(lastIdx);
-  if (tail) result += esc(tail);
-  return result;
-}
+// chatroom 的 escWithImages 需要 rewrite /uploads/ → /cr-uploads/
+const crEscWithImages = s => escWithImages(s, { rewriteUploads: '/cr-uploads/' });
 
 // ══════════════════════════════════════════════════
 //  初始化

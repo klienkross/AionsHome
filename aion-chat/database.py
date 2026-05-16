@@ -312,6 +312,11 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_chatroom_msg_room ON chatroom_messages(room_id, created_at)")
+        for _tbl in ("messages", "chatroom_messages"):
+            try:
+                await db.execute(f"ALTER TABLE {_tbl} ADD COLUMN chain_hash TEXT DEFAULT ''")
+            except:
+                pass
         # ── 聊天室记忆表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS chatroom_memories (

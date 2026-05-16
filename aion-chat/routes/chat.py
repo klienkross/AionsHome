@@ -14,6 +14,7 @@ from typing import Optional, List, Any
 
 from config import DEFAULT_MODEL, load_worldbook, SETTINGS, UPLOADS_DIR, CODEX_UPLOADS_DIR, PUBLIC_DIR, MODELS
 from database import get_db
+from chain_hash import compute_chain_hash
 from ws import manager
 from ai_providers import stream_ai, convert_images_to_text, CLI_STATUS_PREFIX
 from memory import recall_memories, instant_digest, fetch_source_details, build_surfacing_memories, get_embedding, _pack_embedding
@@ -90,6 +91,26 @@ def _process_voice_attachments_in_history(history: list, keep_idx: int = -1):
             msg["attachments"] = non_media_atts
         else:
             msg["attachments"] = []
+
+async def _insert_msg(db, msg_id, conv_id, role, content, created_at, attachments="[]", surfaced_memory_ids=None):
+    cur = await db.execute(
+        "SELECT chain_hash FROM messages WHERE conv_id = ? ORDER BY created_at DESC LIMIT 1",
+        (conv_id,)
+    )
+    row = await cur.fetchone()
+    prev_hash = row[0] if row and row[0] else '00000000'
+    chain_hash = compute_chain_hash(prev_hash, msg_id, content or '', created_at)
+    if surfaced_memory_ids is not None:
+        await db.execute(
+            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, surfaced_memory_ids, chain_hash) VALUES (?,?,?,?,?,?,?,?)",
+            (msg_id, conv_id, role, content, created_at, attachments, surfaced_memory_ids, chain_hash)
+        )
+    else:
+        await db.execute(
+            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, chain_hash) VALUES (?,?,?,?,?,?,?)",
+            (msg_id, conv_id, role, content, created_at, attachments, chain_hash)
+        )
+    return chain_hash
 
 router = APIRouter()
 
@@ -405,10 +426,7 @@ async def _toy_sys_msg(conv_id: str, commands: list):
         now = time.time()
         msg_id = f"msg_{int(now*1000)}_toy"
         async with get_db() as db:
-            await db.execute(
-                "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                (msg_id, conv_id, "system", text, now, "[]"),
-            )
+            await _insert_msg(db, msg_id, conv_id, "system", text, now, "[]")
             await db.commit()
         msg = {"id": msg_id, "conv_id": conv_id, "role": "system",
                "content": text, "created_at": now, "attachments": []}
@@ -422,10 +440,7 @@ async def _video_call_incoming_sys_msg(conv_id: str):
     now = time.time()
     msg_id = f"msg_{int(now*1000)}_vc_in"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, conv_id, "system", text, now, "[]"),
-        )
+        await _insert_msg(db, msg_id, conv_id, "system", text, now, "[]")
         await db.commit()
     msg = {"id": msg_id, "conv_id": conv_id, "role": "system",
            "content": text, "created_at": now, "attachments": []}
@@ -437,10 +452,7 @@ async def _video_call_outgoing_sys_msg(conv_id: str):
     now = time.time()
     msg_id = f"msg_{int(now*1000)}_vc_out"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, conv_id, "system", text, now, "[]"),
-        )
+        await _insert_msg(db, msg_id, conv_id, "system", text, now, "[]")
         await db.commit()
     msg = {"id": msg_id, "conv_id": conv_id, "role": "system",
            "content": text, "created_at": now, "attachments": []}
@@ -457,10 +469,7 @@ async def _video_call_sys_msg(conv_id: str, duration: int):
     now = time.time()
     msg_id = f"msg_{int(now*1000)}_vc"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, conv_id, "system", text, now, "[]"),
-        )
+        await _insert_msg(db, msg_id, conv_id, "system", text, now, "[]")
         await db.commit()
     msg = {"id": msg_id, "conv_id": conv_id, "role": "system",
            "content": text, "created_at": now, "attachments": []}
@@ -475,10 +484,7 @@ async def _music_sys_msg(conv_id: str, music_cards: list):
     now = time.time()
     msg_id = f"msg_{int(now*1000)}_music"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, conv_id, "system", text, now, "[]"),
-        )
+        await _insert_msg(db, msg_id, conv_id, "system", text, now, "[]")
         await db.commit()
     msg = {"id": msg_id, "conv_id": conv_id, "role": "system",
            "content": text, "created_at": now, "attachments": []}
@@ -610,6 +616,39 @@ async def list_messages(conv_id: str, limit: int = Query(50, ge=1, le=500), befo
             d["starred"] = d.get("starred") or 0
             result.append(d)
         return result
+
+@router.get("/api/conversations/{conv_id}/hash")
+async def get_conv_hash(conv_id: str):
+    async with get_db() as db:
+        cur = await db.execute(
+            "SELECT chain_hash FROM messages WHERE conv_id = ? ORDER BY created_at DESC LIMIT 1",
+            (conv_id,)
+        )
+        hash_row = await cur.fetchone()
+        cur2 = await db.execute(
+            "SELECT COUNT(*) FROM messages WHERE conv_id = ?",
+            (conv_id,)
+        )
+        count_row = await cur2.fetchone()
+        return {
+            "chain_hash": hash_row[0] if hash_row and hash_row[0] else "00000000",
+            "count": count_row[0] if count_row else 0
+        }
+
+@router.post("/api/conversations/{conv_id}/hash/verify")
+async def verify_conv_hashes(conv_id: str, body: dict):
+    client_hashes = body.get("hashes", [])
+    async with get_db() as db:
+        for item in client_hashes:
+            cur = await db.execute(
+                "SELECT chain_hash FROM messages WHERE id = ?",
+                (item["id"],)
+            )
+            row = await cur.fetchone()
+            server_hash = row[0] if row else None
+            if server_hash != item.get("chain_hash"):
+                return {"match": False, "diverge_at": item["id"]}
+        return {"match": True}
 
 @router.delete("/api/messages/{msg_id}")
 async def delete_message(msg_id: str):
@@ -1175,14 +1214,11 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
 
             now2 = time.time()
             async with get_db() as db2:
-                await db2.execute(
-                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, surfaced_memory_ids) VALUES (?,?,?,?,?,?,?)",
-                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json, _surfaced_ids_json)
-                )
+                ch = await _insert_msg(db2, ai_msg_id, conv_id, "assistant", full_text, now2, att_json, _surfaced_ids_json)
                 await db2.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
                 await db2.commit()
 
-            ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant", "content": full_text, "created_at": now2, "attachments": reply_atts}
+            ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant", "content": full_text, "created_at": now2, "attachments": reply_atts, "chain_hash": ch}
             await manager.broadcast({"type": "msg_created", "data": ai_msg})
             await export_conversation(conv_id)
 
@@ -1294,10 +1330,7 @@ async def send_message(conv_id: str, body: MsgCreate):
 
     att_json = json.dumps(body.attachments, ensure_ascii=False) if body.attachments else "[]"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, conv_id, "user", body.content, now, att_json)
-        )
+        await _insert_msg(db, msg_id, conv_id, "user", body.content, now, att_json)
         await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         await db.commit()
 
@@ -1875,14 +1908,11 @@ async def send_message(conv_id: str, body: MsgCreate):
 
             now2 = time.time()
             async with get_db() as db2:
-                await db2.execute(
-                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, surfaced_memory_ids) VALUES (?,?,?,?,?,?,?)",
-                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json, _surfaced_ids_json)
-                )
+                ch = await _insert_msg(db2, ai_msg_id, conv_id, "assistant", full_text, now2, att_json, _surfaced_ids_json)
                 await db2.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
                 await db2.commit()
 
-            ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant", "content": full_text, "created_at": now2, "attachments": reply_atts}
+            ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant", "content": full_text, "created_at": now2, "attachments": reply_atts, "chain_hash": ch}
             await manager.broadcast({"type": "msg_created", "data": ai_msg})
             await export_conversation(conv_id)
 
@@ -2018,10 +2048,7 @@ async def _do_image_gen(conv_id: str, trigger_msg_id: str, prompt: str, is_selfi
             att_list = [f"/uploads/{filename}"]
             att_json = json.dumps(att_list, ensure_ascii=False)
             async with get_db() as db:
-                await db.execute(
-                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                    (img_msg_id, conv_id, "assistant", "", now, att_json)
-                )
+                await _insert_msg(db, img_msg_id, conv_id, "assistant", "", now, att_json)
                 await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
                 await db.commit()
             img_msg = {"id": img_msg_id, "conv_id": conv_id, "role": "assistant", "content": "", "created_at": now, "attachments": att_list}
@@ -2253,10 +2280,7 @@ async def perform_poi_check(conv_id: str, model_key: str, categories: list[str])
     searched_cats = "、".join(c.strip() for c in categories)
     sys_content = f"{ai_name}搜索了{user_name}周边的{searched_cats}信息"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (sys_msg_id, conv_id, "system", sys_content, sys_now, "[]")
-        )
+        await _insert_msg(db, sys_msg_id, conv_id, "system", sys_content, sys_now, "[]")
         await db.commit()
     sys_msg = {"id": sys_msg_id, "conv_id": conv_id, "role": "system",
                "content": sys_content, "created_at": sys_now, "attachments": []}
@@ -2264,10 +2288,7 @@ async def perform_poi_check(conv_id: str, model_key: str, categories: list[str])
 
     now = time.time()
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, conv_id, "assistant", full_text, now, "[]")
-        )
+        await _insert_msg(db, msg_id, conv_id, "assistant", full_text, now, "[]")
         await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         await db.commit()
 
@@ -2385,10 +2406,7 @@ async def perform_recall_check(conv_id: str, model_key: str, all_keywords: list[
     sys_msg_id = f"msg_{int(sys_now*1000)}_rc_sys"
     sys_content = f"{ai_name}查阅了记忆库（{kw_display}）\n{recall_text}"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (sys_msg_id, conv_id, "system", sys_content, sys_now, "[]")
-        )
+        await _insert_msg(db, sys_msg_id, conv_id, "system", sys_content, sys_now, "[]")
         await db.commit()
     sys_msg = {"id": sys_msg_id, "conv_id": conv_id, "role": "system",
                "content": sys_content, "created_at": sys_now, "attachments": []}
@@ -2396,10 +2414,7 @@ async def perform_recall_check(conv_id: str, model_key: str, all_keywords: list[
 
     now = time.time()
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, conv_id, "assistant", full_text, now, "[]")
-        )
+        await _insert_msg(db, msg_id, conv_id, "assistant", full_text, now, "[]")
         await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         await db.commit()
 
@@ -2501,10 +2516,7 @@ async def perform_activity_check(conv_id: str, model_key: str, n: int = 6):
     sys_msg_id = f"msg_{int(sys_now*1000)}_ac_sys"
     sys_content = f"{ai_name}查看了{user_name}过去{minutes}分钟的动态"
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (sys_msg_id, conv_id, "system", sys_content, sys_now, "[]")
-        )
+        await _insert_msg(db, sys_msg_id, conv_id, "system", sys_content, sys_now, "[]")
         await db.commit()
     sys_msg = {"id": sys_msg_id, "conv_id": conv_id, "role": "system",
                "content": sys_content, "created_at": sys_now, "attachments": []}
@@ -2512,10 +2524,7 @@ async def perform_activity_check(conv_id: str, model_key: str, n: int = 6):
 
     now = time.time()
     async with get_db() as db:
-        await db.execute(
-            "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, conv_id, "assistant", full_text, now, "[]")
-        )
+        await _insert_msg(db, msg_id, conv_id, "assistant", full_text, now, "[]")
         await db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conv_id))
         await db.commit()
 
@@ -3169,14 +3178,11 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
 
             now2 = time.time()
             async with get_db() as db2:
-                await db2.execute(
-                    "INSERT INTO messages (id, conv_id, role, content, created_at, attachments, surfaced_memory_ids) VALUES (?,?,?,?,?,?,?)",
-                    (ai_msg_id, conv_id, "assistant", full_text, now2, att_json, _surfaced_ids_json)
-                )
+                ch = await _insert_msg(db2, ai_msg_id, conv_id, "assistant", full_text, now2, att_json, _surfaced_ids_json)
                 await db2.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now2, conv_id))
                 await db2.commit()
 
-            ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant", "content": full_text, "created_at": now2, "attachments": reply_atts}
+            ai_msg = {"id": ai_msg_id, "conv_id": conv_id, "role": "assistant", "content": full_text, "created_at": now2, "attachments": reply_atts, "chain_hash": ch}
             await manager.broadcast({"type": "msg_created", "data": ai_msg})
             await export_conversation(conv_id)
 
