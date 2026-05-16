@@ -7,8 +7,8 @@
 - **后端**：Python FastAPI + SQLite (aiosqlite) + WebSocket
 - **前端**：多页面架构（原生 JS，无框架），暖光主题，手机/PC 自适应。chat.html/css/js 为主聊天页（结构/样式/逻辑分离），独立功能页通过 common.css/common.js 共享样式和工具函数
 - **摄像头**：OpenCV (`cv2`) DirectShow 后端后台线程采集 + ESP32-CAM HTTP 远程抓帧（双摄切换 + App 桥接模式）
-- **语音**：WebRTC VAD 语音检测 + 硬基流动 ASR (SenseVoiceSmall) + TTS (CosyVoice2) + 语音消息（按住录制）
-- **AI 接口**：硬基流动（OpenAI 兼容）、Google Gemini（REST API）、AiPro 中转站（OpenAI 兼容）、Gemini CLI（本地子进程调用，免费 OAuth 认证）、Codex CLI（本地子进程调用，Connor 专用）
+- **语音**：WebRTC VAD 语音检测 + 硅基流动 ASR (SenseVoiceSmall) + TTS (CosyVoice2) + 语音消息（按住录制）
+- **AI 接口**：硅基流动（OpenAI 兼容）、Google Gemini（REST API）、AiPro 中转站（OpenAI 兼容）、Gemini CLI（本地子进程调用，免费 OAuth 认证）、Codex CLI（本地子进程调用，Connor 专用）
 - **AI 生图**：Gemini `gemini-3.1-flash-image-preview`（REST API generateContent，responseModalities=["IMAGE"]）
 - **Embedding**：Gemini `gemini-embedding-001`（3072维），余弦相似度检索
 - **Android App**：Java，WebView + 前台推送服务（OkHttp 4.12.0 WebSocket）+ 原生录音桥 + 原生摄像头桥 + 原生视频录制桥（MediaCodec + MediaMuxer），compileSdk 34 / minSdk 24
@@ -16,7 +16,7 @@
 - **EPUB 解析**：ebooklib（EPUB 读取）+ BeautifulSoup4 / lxml（HTML 解析）
 - **基金监控**：akshare（A股/基金数据拉取）+ chinese-calendar（中国节假日/交易日判断）
 - **MCP 娱乐室**：mcp（Python MCP SDK，支持 Streamable HTTP / stdio 传输，接入外部服务如 AI 小镇）
-- **聊天室**：三人群聊（用户 + Aion + Connor-Codex），Connor 代理通过 HTTP 轮询接入 Codex CLI 服务，随机回复顺序，统一时间线上下文（私聊+群聊合并排序，场景切换标记），统一记忆总结（Aion/Connor 各自合并私聊+群聊消息总结，独立锚点，1小时无新消息自动触发），图片收发（用户发图→CLI 管线通过本地绝对路径传递、API 管线通过 base64 内嵌，Codex 回复 `[[image:...]]` 标记→前端渲染，图片存储于 `Connor-Codex/uploads/YYYY-MM-DD/`），TTS 语音合成（Aion/Connor 独立音色配置，硬基流动 CosyVoice2 服务端流式切分+并行合成，通过 SSE 推送音频分段顺序播放，配置持久化 localStorage）
+- **聊天室**：三人群聊（用户 + Aion + Connor-Codex），Connor 代理通过 HTTP 轮询接入 Codex CLI 服务，随机回复顺序，统一时间线上下文（私聊+群聊合并排序，场景切换标记），统一记忆总结（Aion/Connor 各自合并私聊+群聊消息总结，独立锚点，1小时无新消息自动触发），图片收发（用户发图→CLI 管线通过本地绝对路径传递、API 管线通过 base64 内嵌，Codex 回复 `[[image:...]]` 标记→前端渲染，图片存储于 `Connor-Codex/uploads/YYYY-MM-DD/`），TTS 语音合成（Aion/Connor 独立音色配置，硅基流动 CosyVoice2 服务端流式切分+并行合成，通过 SSE 推送音频分段顺序播放，配置持久化 localStorage）
 - **依赖库**：fastapi, uvicorn, httpx, aiosqlite, opencv-python, Pillow, sounddevice, numpy, webrtcvad-wheels, pyncm, pywin32, psutil, ebooklib, beautifulsoup4, lxml, akshare, chinese-calendar, mcp
 
 ## 文档
