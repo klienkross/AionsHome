@@ -950,10 +950,25 @@ async function api(method, url, body) {
 }
 
 // ── WebSocket 同步 ──
+async function checkSyncIntegrity() {
+  if (!currentConvId || !currentMessages.length) return;
+  const lastMsg = currentMessages[currentMessages.length - 1];
+  if (!lastMsg.chain_hash) return;
+  try {
+    const resp = await api("GET", `/api/conversations/${currentConvId}/hash`);
+    if (resp.chain_hash !== lastMsg.chain_hash) {
+      console.warn('[Sync] 哈希不一致，重新加载消息');
+      const msgs = await api("GET", `/api/conversations/${currentConvId}/messages?limit=${MSG_PAGE_SIZE}`);
+      currentMessages = msgs;
+      renderMessages();
+    }
+  } catch {}
+}
+
 function connectWS() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${proto}//${location.host}/ws`);
-  ws.onopen = () => { _sendTTSState(); ws.send(JSON.stringify({type:'register_client',client_id:_clientId})); };
+  ws.onopen = () => { _sendTTSState(); ws.send(JSON.stringify({type:'register_client',client_id:_clientId})); checkSyncIntegrity(); };
   ws.onmessage = e => handleSync(JSON.parse(e.data));
   ws.onclose = () => setTimeout(connectWS, 2000);
 }

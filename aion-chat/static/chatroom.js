@@ -927,12 +927,24 @@ function renderEmptyChat() {
 //  WebSocket 实时同步
 // ══════════════════════════════════════════════════
 
+async function checkSyncIntegrity() {
+  if (!currentRoom) return;
+  try {
+    const resp = await api(`/rooms/${currentRoom.id}/hash`);
+    const localCount = messagesEl.querySelectorAll('.message-row').length;
+    if (resp.count !== localCount) {
+      await loadMessages();
+    }
+  } catch {}
+}
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${proto}//${location.host}/ws`);
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'ping' }));
+    checkSyncIntegrity();
   };
 
   ws.onmessage = (e) => {
