@@ -41,10 +41,11 @@ router = APIRouter(prefix="/api/chatroom", tags=["chatroom"])
 
 
 async def _insert_cr_msg(db, msg_id, room_id, sender, content, created_at, attachments="[]"):
-    row = await db.execute_fetchone(
+    cur = await db.execute(
         "SELECT chain_hash FROM chatroom_messages WHERE room_id = ? ORDER BY created_at DESC LIMIT 1",
         (room_id,)
     )
+    row = await cur.fetchone()
     prev_hash = row[0] if row and row[0] else '00000000'
     chain_hash = compute_chain_hash(prev_hash, msg_id, content or '', created_at)
     await db.execute(
@@ -744,14 +745,16 @@ async def list_messages(room_id: str, limit: int = Query(50, ge=1, le=500), befo
 @router.get("/rooms/{room_id}/hash")
 async def get_room_hash(room_id: str):
     async with get_db() as db:
-        hash_row = await db.execute_fetchone(
+        cur = await db.execute(
             "SELECT chain_hash FROM chatroom_messages WHERE room_id = ? ORDER BY created_at DESC LIMIT 1",
             (room_id,)
         )
-        count_row = await db.execute_fetchone(
+        hash_row = await cur.fetchone()
+        cur2 = await db.execute(
             "SELECT COUNT(*) FROM chatroom_messages WHERE room_id = ?",
             (room_id,)
         )
+        count_row = await cur2.fetchone()
         return {
             "chain_hash": hash_row[0] if hash_row and hash_row[0] else "00000000",
             "count": count_row[0] if count_row else 0

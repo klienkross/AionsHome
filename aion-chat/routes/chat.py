@@ -93,10 +93,11 @@ def _process_voice_attachments_in_history(history: list, keep_idx: int = -1):
             msg["attachments"] = []
 
 async def _insert_msg(db, msg_id, conv_id, role, content, created_at, attachments="[]", surfaced_memory_ids=None):
-    row = await db.execute_fetchone(
+    cur = await db.execute(
         "SELECT chain_hash FROM messages WHERE conv_id = ? ORDER BY created_at DESC LIMIT 1",
         (conv_id,)
     )
+    row = await cur.fetchone()
     prev_hash = row[0] if row and row[0] else '00000000'
     chain_hash = compute_chain_hash(prev_hash, msg_id, content or '', created_at)
     if surfaced_memory_ids is not None:
@@ -619,14 +620,16 @@ async def list_messages(conv_id: str, limit: int = Query(50, ge=1, le=500), befo
 @router.get("/api/conversations/{conv_id}/hash")
 async def get_conv_hash(conv_id: str):
     async with get_db() as db:
-        hash_row = await db.execute_fetchone(
+        cur = await db.execute(
             "SELECT chain_hash FROM messages WHERE conv_id = ? ORDER BY created_at DESC LIMIT 1",
             (conv_id,)
         )
-        count_row = await db.execute_fetchone(
+        hash_row = await cur.fetchone()
+        cur2 = await db.execute(
             "SELECT COUNT(*) FROM messages WHERE conv_id = ?",
             (conv_id,)
         )
+        count_row = await cur2.fetchone()
         return {
             "chain_hash": hash_row[0] if hash_row and hash_row[0] else "00000000",
             "count": count_row[0] if count_row else 0
@@ -637,10 +640,11 @@ async def verify_conv_hashes(conv_id: str, body: dict):
     client_hashes = body.get("hashes", [])
     async with get_db() as db:
         for item in client_hashes:
-            row = await db.execute_fetchone(
+            cur = await db.execute(
                 "SELECT chain_hash FROM messages WHERE id = ?",
                 (item["id"],)
             )
+            row = await cur.fetchone()
             server_hash = row[0] if row else None
             if server_hash != item.get("chain_hash"):
                 return {"match": False, "diverge_at": item["id"]}
