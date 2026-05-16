@@ -313,7 +313,8 @@ async def pet_page():
 # PWA：Service Worker 必须从根路径提供，作用域才能覆盖所有页面
 @app.get("/sw.js")
 async def service_worker():
-    return FileResponse(BASE_DIR / "static" / "sw.js", media_type="application/javascript")
+    return FileResponse(BASE_DIR / "static" / "sw.js", media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache"})
 
 @app.get("/manifest.json")
 async def manifest():

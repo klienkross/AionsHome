@@ -1,5 +1,21 @@
 /* ── Aion Common JS — 共享工具函数 ── */
 
+// ── Service Worker 注册 ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  navigator.serviceWorker.addEventListener('message', e => {
+    if (e.data?.type === 'RELOAD') location.reload();
+  });
+}
+
+function clearAionCache() {
+  if (navigator.serviceWorker?.controller) {
+    navigator.serviceWorker.controller.postMessage({ type: 'FORCE_REFRESH' });
+  } else {
+    location.reload();
+  }
+}
+
 const $ = id => document.getElementById(id);
 
 // Android APK 中 WebView 是 edge-to-edge，普通功能页需要自己避开系统状态栏。
