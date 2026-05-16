@@ -18,7 +18,7 @@ const _clientId = localStorage.getItem('aion_client_id') || (() => {
   localStorage.setItem('aion_client_id', id); return id;
 })();
 let ws = null;
-let pendingAttachments = [];  // [{url, type, name}]
+const attachments = AionChat.createAttachmentManager('/api/upload', 'previewArea');
 let worldBook = { ai_persona: "", user_persona: "", ai_name: "AI", user_name: "你" };
 let msgDebugData = {};  // { msgId: { model, recalled_memories, prompt_messages, prompt_count, usage } }
 let systemLogs = [];    // 系统日志（会话级，刷新清空）
@@ -1839,7 +1839,7 @@ function _showSendBtn() {
 function _updateSendBtnState() {
   if (sending) return;
   const btn = $("sendBtn");
-  btn.disabled = !$("input").value.trim() && !pendingAttachments.length;
+  btn.disabled = !$("input").value.trim() && !attachments.hasPending();
 }
 
 async function stopGeneration() {
@@ -1862,19 +1862,17 @@ function _getMaxTokens() {
 async function send() {
   const input = $("input");
   const text = input.value.trim();
-  if ((!text && !pendingAttachments.length) || !currentConvId || sending) return;
+  if ((!text && !attachments.hasPending()) || !currentConvId || sending) return;
 
   sending = true;
   _showStopBtn();
   input.value = "";
   autoResize(input);
-  const attachments = pendingAttachments.map(a => a.url);
-  pendingAttachments = [];
-  renderPreview();
+  const attachUrls = attachments.flush();
 
   // 立即显示用户消息（乐观更新）
   playSend();
-  const tempUserMsg = { id: "temp_user", conv_id: currentConvId, role: "user", content: text, created_at: Date.now()/1000, attachments };
+  const tempUserMsg = { id: "temp_user", conv_id: currentConvId, role: "user", content: text, created_at: Date.now()/1000, attachments: attachUrls };
   currentMessages.push(tempUserMsg);
   renderMessages();
 
@@ -1886,7 +1884,7 @@ async function send() {
     const res = await fetch(`/api/conversations/${currentConvId}/send`, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ content: text, context_limit: contextLimit, attachments, whisper_mode: whisperMode, temperature, max_tokens: maxTokens, tts_enabled: ttsEnabled, tts_voice: ttsVoiceId, client_id: _clientId }),
+      body: JSON.stringify({ content: text, context_limit: contextLimit, attachments: attachUrls, whisper_mode: whisperMode, temperature, max_tokens: maxTokens, tts_enabled: ttsEnabled, tts_voice: ttsVoiceId, client_id: _clientId }),
       signal: _abortController.signal
     });
 
@@ -2638,56 +2636,14 @@ function renderAttachments(atts) {
   return html;
 }
 
-async function handleFileSelect(input) {
-  for (const file of input.files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    const res = await fetch('/api/upload', {method:'POST', body: fd});
-    const data = await res.json();
-    if (data.error) { alert(data.error); continue; }
-    pendingAttachments.push(data);
-  }
-  input.value = '';
-  renderPreview();
-}
+function handleFileSelect(input) { attachments.handleFiles(input); }
 
-// 粘贴图片到输入框
 document.addEventListener('DOMContentLoaded', () => {
   const input = $('input');
-  if (input) input.addEventListener('paste', async (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    for (const item of items) {
-      if (!item.type.startsWith('image/')) continue;
-      e.preventDefault();
-      const file = item.getAsFile();
-      if (!file) continue;
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/upload', {method:'POST', body: fd});
-      const data = await res.json();
-      if (data.error) { alert(data.error); continue; }
-      pendingAttachments.push(data);
-      renderPreview();
-    }
-  });
+  if (input) input.addEventListener('paste', e => attachments.handlePaste(e));
 });
 
-function renderPreview() {
-  const area = $('previewArea');
-  if (!pendingAttachments.length) { area.className = 'preview-area'; area.innerHTML = ''; return; }
-  area.className = 'preview-area has-files';
-  area.innerHTML = pendingAttachments.map((a, i) => {
-    const isVid = a.type && a.type.startsWith('video/');
-    const media = isVid ? `<video src="${a.url}" muted></video>` : `<img src="${a.url}">`;
-    return `<div class="preview-item">${media}<button class="preview-remove" onclick="removeAttachment(${i})">✕</button></div>`;
-  }).join('');
-}
-
-function removeAttachment(i) {
-  pendingAttachments.splice(i, 1);
-  renderPreview();
-}
+function removeAttachment(i) { attachments.remove(i); }
 
 // ── 附加功能菜单 ──
 function positionPlusMenu() {
@@ -2852,8 +2808,8 @@ async function capturePhoto() {
   const res = await fetch('/api/upload', { method: 'POST', body: fd });
   const data = await res.json();
   if (data.error) { alert(data.error); return; }
-  pendingAttachments.push(data);
-  renderPreview();
+  attachments.pending.push(data);
+  attachments.render();
 }
 
 // ── 语音消息播放 ──

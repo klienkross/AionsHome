@@ -6,7 +6,7 @@ let rooms = [];
 let isSending = false;
 let isAiChatting = false;
 let chatroomModel = '';
-let pendingAttachments = [];  // [{url, type, name}]
+const attachments = AionChat.createAttachmentManager('/api/chatroom/upload', 'previewArea', msg => toast(msg));
 
 const AVATARS = {
   user: '/public/UserIcon.png?v=2',
@@ -488,26 +488,24 @@ function endStreamingBubble(attachments) {
 composer.addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = inputEl.value.trim();
-  if ((!text && !pendingAttachments.length) || !currentRoom || isSending) return;
+  if ((!text && !attachments.hasPending()) || !currentRoom || isSending) return;
 
   isSending = true;
   sendBtn.disabled = true;
   inputEl.value = '';
   resizeInput();
 
-  const attachments = pendingAttachments.map(a => a.url);
-  pendingAttachments = [];
-  renderPreview();
+  const attachUrls = attachments.flush();
 
   // 立即显示用户消息
   playSend();
-  appendMessage({ sender: 'user', content: text, created_at: Date.now() / 1000, attachments });
+  appendMessage({ sender: 'user', content: text, created_at: Date.now() / 1000, attachments: attachUrls });
 
   try {
     const resp = await fetch(`${API}/rooms/${currentRoom.id}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text, model: chatroomModel, attachments, tts_enabled: crTtsEnabled, tts_aion_voice: crTtsAionVoice, tts_connor_voice: crTtsConnorVoice }),
+      body: JSON.stringify({ content: text, model: chatroomModel, attachments: attachUrls, tts_enabled: crTtsEnabled, tts_aion_voice: crTtsAionVoice, tts_connor_voice: crTtsConnorVoice }),
     });
 
     const reader = resp.body.getReader();
@@ -995,65 +993,13 @@ function renderAttachments(atts) {
   return html ? '<div class="msg-media">' + html + '</div>' : '';
 }
 
-async function handleChatroomFileSelect(input) {
-  for (const file of input.files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
-      const res = await fetch(`${API}/upload`, { method: 'POST', body: fd });
-      const data = await res.json();
-      if (data.error) { toast(data.error); continue; }
-      pendingAttachments.push(data);
-    } catch (err) {
-      toast('上传失败: ' + err.message);
-    }
-  }
-  input.value = '';
-  renderPreview();
-}
-
-function renderPreview() {
-  const area = document.getElementById('previewArea');
-  if (!pendingAttachments.length) { area.className = 'preview-area'; area.innerHTML = ''; return; }
-  area.className = 'preview-area has-files';
-  area.innerHTML = pendingAttachments.map((a, i) => {
-    return `<div class="preview-item"><img src="${a.url}"><button class="preview-remove" onclick="removeChatroomAttachment(${i})">✕</button></div>`;
-  }).join('');
-}
-
-function removeChatroomAttachment(i) {
-  pendingAttachments.splice(i, 1);
-  renderPreview();
-}
-
-
 // 文件选择绑定
 document.getElementById('fileInput').addEventListener('change', function() {
-  handleChatroomFileSelect(this);
+  attachments.handleFiles(this);
 });
 
 // 粘贴图片
-inputEl.addEventListener('paste', async (e) => {
-  const items = e.clipboardData && e.clipboardData.items;
-  if (!items) return;
-  for (const item of items) {
-    if (!item.type.startsWith('image/')) continue;
-    e.preventDefault();
-    const file = item.getAsFile();
-    if (!file) continue;
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
-      const res = await fetch(`${API}/upload`, { method: 'POST', body: fd });
-      const data = await res.json();
-      if (data.error) { toast(data.error); continue; }
-      pendingAttachments.push(data);
-      renderPreview();
-    } catch (err) {
-      toast('粘贴上传失败: ' + err.message);
-    }
-  }
-});
+inputEl.addEventListener('paste', e => attachments.handlePaste(e));
 
 // ESC 关闭图片查看器
 document.addEventListener('keydown', (e) => {

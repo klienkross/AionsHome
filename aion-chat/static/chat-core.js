@@ -105,6 +105,69 @@ const AionChat = (() => {
     if (fixed) fixed.classList.remove('active');
   }
 
+  // ── 附件上传 ──
+  function createAttachmentManager(uploadUrl, previewAreaId, notify = alert) {
+    let pending = [];
+
+    async function handleFiles(input) {
+      for (const file of input.files) {
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+          const res = await fetch(uploadUrl, { method: 'POST', body: fd });
+          const data = await res.json();
+          if (data.error) { notify(data.error); continue; }
+          pending.push(data);
+        } catch (err) {
+          notify('上传失败: ' + err.message);
+        }
+      }
+      input.value = '';
+      render();
+    }
+
+    async function handlePaste(e) {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (!item.type.startsWith('image/')) continue;
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (!file) continue;
+        const fd = new FormData();
+        fd.append('file', file);
+        try {
+          const res = await fetch(uploadUrl, { method: 'POST', body: fd });
+          const data = await res.json();
+          if (data.error) { notify(data.error); continue; }
+          pending.push(data);
+          render();
+        } catch (err) {
+          notify('粘贴上传失败: ' + err.message);
+        }
+      }
+    }
+
+    function remove(i) { pending.splice(i, 1); render(); }
+
+    function render() {
+      const area = document.getElementById(previewAreaId);
+      if (!area) return;
+      if (!pending.length) { area.className = 'preview-area'; area.innerHTML = ''; return; }
+      area.className = 'preview-area has-files';
+      area.innerHTML = pending.map((a, i) => {
+        const isVid = a.type && a.type.startsWith('video/');
+        const media = isVid ? `<video src="${a.url}" muted></video>` : `<img src="${a.url}">`;
+        return `<div class="preview-item">${media}<button class="preview-remove" onclick="attachments.remove(${i})">✕</button></div>`;
+      }).join('');
+    }
+
+    function flush() { const urls = pending.map(a => a.url); pending = []; render(); return urls; }
+    function hasPending() { return pending.length > 0; }
+
+    return { handleFiles, handlePaste, remove, render, flush, hasPending, get pending() { return pending; } };
+  }
+
   // ── 主题 ──
   function applyTheme(theme) {
     const next = theme === 'light' ? 'light' : 'dark';
@@ -124,7 +187,7 @@ const AionChat = (() => {
     if (e.key === 'aion_chat_theme') applyTheme(e.newValue || 'dark');
   });
 
-  return { playSend, playRecv, applyTheme, toggleTheme, escHtml, escWithImages, formatMsg, openImageViewer, closeImageViewer };
+  return { playSend, playRecv, applyTheme, toggleTheme, escHtml, escWithImages, formatMsg, openImageViewer, closeImageViewer, createAttachmentManager };
 })();
 
 const playSend = AionChat.playSend;
