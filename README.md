@@ -1,5 +1,9 @@
 # Aion Chat 项目档案
 
+
+> 📌 **本仓库是 fork**。本 README 描述原版基线；本 fork 新增/改动了什么（含免梯子运行、新手必看配置）见 **[LOCAL_README.md](LOCAL_README.md)**。
+
+
 ## 项目定位
 局域网 + 外网（Tailscale 组网）多端同步 AI 聊天程序 + 摄像头智能监控系统。PC/手机浏览器同时使用，支持 PWA 安装为独立 App（全屏无地址栏），数据全部存在本地电脑上。
 
@@ -20,6 +24,7 @@
 - **依赖库**：fastapi, uvicorn, httpx, aiosqlite, opencv-python, Pillow, sounddevice, numpy, webrtcvad-wheels, pyncm, pywin32, psutil, ebooklib, beautifulsoup4, lxml, akshare, chinese-calendar, mcp
 
 ## 文档
+
 详细内容已拆分到独立文件：
 
 - [docs/架构.md](docs/架构.md) — 模块化文件结构、路由、支持的模型
