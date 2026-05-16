@@ -88,5 +88,12 @@ AionApp/local.properties
 .DS_Store
 Thumbs.db
 
+# ── Claude Code 本地状态（每台机器不同，不应上传） ──
+.claude/settings.local.json
+.claude/worktrees/
+
+# ── 数据库文件 ──
+aion-chat/aion_chat.db
+
 # ── Git worktrees ──
 .worktrees/
