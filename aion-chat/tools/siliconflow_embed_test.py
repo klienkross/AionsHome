@@ -31,8 +31,8 @@ from config import DB_PATH, get_key
 
 # ── 硅基流动配置 ─────────────────────────────────
 SF_BASE = "https://api.siliconflow.cn/v1"
-SF_MODEL = "Qwen/Qwen3-Embedding-8B"
-SF_DIMS = 4096
+SF_MODEL = "BAAI/bge-m3"
+SF_DIMS = 1024
 
 
 # ── 工具函数 ─────────────────────────────────────

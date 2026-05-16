@@ -14,6 +14,7 @@ from ws import manager
 from sentinel import (
     call_sentinel,
     get_embedding,
+    fetch_rerank,
     _pack_embedding,
     _unpack_embedding,
     EMBEDDING_DIMS,
@@ -52,12 +53,14 @@ def _keyword_match_score(query_keywords: list[str], mem_keywords_json: str) -> f
     return hits / len(query_keywords)
 
 
-# ── 记忆召回（向量 + 关键词 + 重要度 综合评分）────
+# ── 记忆召回（关键词 + reranker 混合）────────────
 async def recall_memories(query_text: str, query_keywords: list[str] = None,
-                          top_k: int = 5, threshold: float = 0.35) -> tuple[list[dict], list[dict]]:
+                          top_k: int = 5, threshold: float = 0.15) -> tuple[list[dict], list[dict]]:
     """
-    新公式：base_score = kw×0.5 + vec×0.3 + importance×0.2, final = base × vitality
-    命中的卡片 activation_count += 1
+    混合召回：
+      - embedding 粗筛 top-25 + 关键词 top-20 → 并集候选
+      - BGE-reranker-v2-m3 精排（不可用时回退原公式 kw×0.5+vec×0.3+imp×0.2）
+      - base = reranker_norm×0.5 + kw×0.3 + imp×0.2, final = base × vitality
     """
     import time as _time
     from decay_engine import compute_vitality
@@ -88,15 +91,53 @@ async def recall_memories(query_text: str, query_keywords: list[str] = None,
         rows = await cur.fetchall()
 
     now_ts = time.time()
+
+    # ── 1. 关键词 top-20 ──────────────────────────
+    kw_ranked = []
+    if query_keywords:
+        for row in rows:
+            ks = _keyword_match_score(query_keywords, row["keywords"])
+            if ks > 0:
+                kw_ranked.append((row["id"], ks))
+        kw_ranked.sort(key=lambda x: x[1], reverse=True)
+    kw_scores = {cid: s for cid, s in kw_ranked}
+    top_kw_ids = {cid for cid, _ in kw_ranked[:20]}
+
+    # ── 2. embedding top-25 ──────────────────────
+    emb_ranked = sorted(vec_scores.items(), key=lambda x: x[1], reverse=True)
+    top_emb_ids = {cid for cid, _ in emb_ranked[:25]}
+
+    # ── 3. 并集候选 ──────────────────────────────
+    candidate_ids = top_kw_ids | top_emb_ids
+
+    # ── 4. reranker 精排 ──────────────────────────
+    rerank_scores = {}
+    use_reranker = False
+    if candidate_ids:
+        candidates = [r for r in rows if r["id"] in candidate_ids]
+        docs = [r["content"][:512] for r in candidates]
+        rr_results = await fetch_rerank(query_text, docs, top_n=min(len(docs), 10))
+        if rr_results:
+            use_reranker = True
+            for rr in rr_results:
+                rerank_scores[candidates[rr["index"]]["id"]] = rr["relevance_score"]
+            # 归一化：让最高分 = 1.0
+            max_rr = max(rerank_scores.values()) if rerank_scores else 1.0
+            if max_rr > 0:
+                for cid in list(rerank_scores):
+                    rerank_scores[cid] /= max_rr
+
+    # ── 5. 评分 ──────────────────────────────────
     all_scored = []
-    for row in rows:
-        vec_sim = vec_scores.get(row["id"], 0.0)
-        kw_score = _keyword_match_score(query_keywords, row["keywords"]) if query_keywords else 0.0
-        importance = float(row["importance"] or 0.5)
-        base_score = kw_score * 0.5 + vec_sim * 0.3 + importance * 0.2
+
+    def score_row(row, rr: float, kw: float, imp: float, vec: float) -> dict:
+        if use_reranker:
+            base = rr * 0.5 + kw * 0.3 + imp * 0.2
+        else:
+            base = kw * 0.5 + vec * 0.3 + imp * 0.2
 
         vitality = compute_vitality(
-            importance=importance,
+            importance=imp,
             activation_count=row["activation_count"] or 0,
             last_activated=row["last_activated"] or row["created_at"],
             valence=row["valence"] or 0.0,
@@ -104,21 +145,36 @@ async def recall_memories(query_text: str, query_keywords: list[str] = None,
             unresolved=row["unresolved"] or 0,
             now=now_ts,
         )
-        final_score = base_score * vitality
-
-        item = {
+        return {
             "id": row["id"], "content": row["content"], "type": row["type"],
             "created_at": row["created_at"],
-            "score": round(final_score, 4),
-            "vec_sim": round(vec_sim, 4),
-            "kw_score": round(kw_score, 4),
-            "importance": round(importance, 2),
+            "score": round(base * vitality, 4),
+            "vec_sim": round(vec, 4),
+            "kw_score": round(kw, 4),
+            "importance": round(imp, 2),
             "vitality": round(vitality, 4),
             "keywords": row["keywords"] or "",
             "source_start_ts": row["source_start_ts"],
             "source_end_ts": row["source_end_ts"],
         }
-        all_scored.append(item)
+
+    if use_reranker:
+        # 仅对候选集评分
+        for row in rows:
+            if row["id"] not in candidate_ids:
+                continue
+            kw = kw_scores.get(row["id"], 0.0)
+            imp = float(row["importance"] or 0.5)
+            vec = vec_scores.get(row["id"], 0.0)
+            rr = rerank_scores.get(row["id"], 0.0)
+            all_scored.append(score_row(row, rr, kw, imp, vec))
+    else:
+        # 回退：全量原公式
+        for row in rows:
+            kw = kw_scores.get(row["id"], 0.0)
+            imp = float(row["importance"] or 0.5)
+            vec = vec_scores.get(row["id"], 0.0)
+            all_scored.append(score_row(row, 0.0, kw, imp, vec))
 
     all_scored.sort(key=lambda x: x["score"], reverse=True)
     debug_top6 = all_scored[:6]
@@ -136,7 +192,8 @@ async def recall_memories(query_text: str, query_keywords: list[str] = None,
             await db.commit()
 
     _elapsed = (_time.perf_counter() - _t0) * 1000
-    print(f"[memory] recall: q='{query_text[:40]}' kws={query_keywords} → {len(matched)}/{len(all_scored)} cards, {_elapsed:.0f}ms")
+    _mode = "reranker" if use_reranker else "composite"
+    print(f"[memory] recall({_mode}): q='{query_text[:40]}' kws={query_keywords} → {len(matched)}/{len(all_scored)} cards, {_elapsed:.0f}ms")
     return matched, debug_top6
 
 

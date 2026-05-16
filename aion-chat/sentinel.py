@@ -221,3 +221,25 @@ async def get_embedding(text: str) -> list[float] | None:
             return resp.json()["data"][0]["embedding"]
     except Exception:
         return None
+
+
+# ── 对外：重排序 ─────────────────────────────────
+_RERANK_API = "https://api.siliconflow.cn/v1/rerank"
+_RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
+
+
+async def fetch_rerank(query: str, documents: list[str], top_n: int = 10) -> list[dict]:
+    """SiliconFlow BGE-reranker-v2-m3，返回 [{'index': int, 'relevance_score': float}, ...] 按分降序"""
+    from config import get_key
+    key = get_key("siliconflow")
+    if not key:
+        return []
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    body = {"model": _RERANK_MODEL, "query": query, "documents": documents, "top_n": top_n}
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(_RERANK_API, headers=headers, json=body)
+            resp.raise_for_status()
+            return resp.json().get("results", [])
+    except Exception:
+        return []
