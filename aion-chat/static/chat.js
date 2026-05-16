@@ -63,33 +63,6 @@ async function init() {
   }
 }
 
-function escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-function formatMsg(s) {
-  // 先转义 HTML，再将 [[image:path]] 标记渲染为 <img>
-  const escaped = escHtml(s);
-  // 渲染 [转账：N元] 为转账卡片
-  const transferRe = /\[转账[：:]\s*(-?\d+(?:\.\d+)?)\s*元\]/g;
-  let processed = escaped.replace(transferRe, (match, amount) => {
-    const val = parseFloat(amount);
-    const isNeg = val < 0;
-    const absVal = Math.abs(val);
-    if (isNeg) {
-      return `<div class="transfer-card deduct"><div class="transfer-card-body"><div class="transfer-card-amount">¥${absVal}</div><div class="transfer-card-desc">钱包扣除</div></div><div class="transfer-card-footer">扣除</div></div>`;
-    } else {
-      return `<div class="transfer-card"><div class="transfer-card-body"><div class="transfer-card-amount">¥${absVal}</div><div class="transfer-card-desc">发起了一笔转账</div></div><div class="transfer-card-footer">转账</div></div>`;
-    }
-  });
-  const imgRe = /\[\[image:(\S+?)\]\]/g;
-  let result = '', lastIdx = 0, match;
-  while ((match = imgRe.exec(processed)) !== null) {
-    result += processed.slice(lastIdx, match.index).replace(/\n/g, '<br>');
-    const safeUrl = match[1];
-    result += `<img class="cr-inline-img" src="${safeUrl}" onclick="openImageViewer && openImageViewer(this.src)" loading="lazy" style="max-width:100%;border-radius:8px;cursor:pointer;margin:4px 0">`;
-    lastIdx = imgRe.lastIndex;
-  }
-  result += processed.slice(lastIdx).replace(/\n/g, '<br>');
-  return result;
-}
 
 // ── 配置弹窗 ──
 function toggleConfig(e) {
@@ -2473,22 +2446,6 @@ function handleImageGenStart(data) {
   imageGenSafetyTimer = setTimeout(() => dismissImageGenIndicator(), 120000);
 }
 
-// ── 图片查看器（Lightbox） ──
-function openImageViewer(url) {
-  const overlay = document.createElement('div');
-  overlay.className = 'image-viewer-overlay';
-  overlay.innerHTML = `
-    <button class="image-viewer-close" onclick="this.parentElement.remove()">&times;</button>
-    <img src="${url}" alt="图片">
-    <div class="image-viewer-actions">
-      <button onclick="saveImage('${url}')">💾 保存图片</button>
-      <button onclick="this.closest('.image-viewer-overlay').remove()">关闭</button>
-    </div>
-  `;
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
-  requestAnimationFrame(() => overlay.classList.add('active'));
-}
 function saveImage(url) {
   fetch(url)
     .then(r => r.blob())

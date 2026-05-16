@@ -300,8 +300,7 @@ function msgHTML(m) {
   // 用户消息按单换行拆，AI消息按双换行拆
   const isUser = sender === 'user';
   const raw = m.content || '';
-  // AI 消息使用 escWithImages 解析 [[image:...]]，用户消息纯转义
-  const fmt = isUser ? esc : escWithImages;
+  const fmt = isUser ? esc : crEscWithImages;
   const parts = raw.split(isUser ? /\n+/ : /\n{2,}/).filter(p => p.trim());
   let bubblesHtml;
   if (parts.length > 1) {
@@ -463,7 +462,7 @@ function endStreamingBubble(attachments) {
       parts.forEach(p => {
         const b = document.createElement('div');
         b.className = 'bubble';
-        b.innerHTML = escWithImages(p);
+        b.innerHTML = crEscWithImages(p);
         container.appendChild(b);
       });
       parent.replaceChild(container, streamingBubble);
@@ -472,7 +471,7 @@ function endStreamingBubble(attachments) {
       if (attHtml) container.insertAdjacentHTML('afterend', attHtml);
     } else {
       // 单气泡也解析 [[image:...]]
-      streamingBubble.innerHTML = escWithImages(streamingText);
+      streamingBubble.innerHTML = crEscWithImages(streamingText);
       // 附件图片追加到气泡后面
       const attHtml = renderAttachments(attachments);
       if (attHtml) streamingBubble.insertAdjacentHTML('afterend', attHtml);
@@ -1027,15 +1026,6 @@ function removeChatroomAttachment(i) {
   renderPreview();
 }
 
-function openImageViewer(src) {
-  const viewer = document.getElementById('imageViewer');
-  document.getElementById('viewerImg').src = src;
-  viewer.classList.add('active');
-}
-
-function closeImageViewer() {
-  document.getElementById('imageViewer').classList.remove('active');
-}
 
 // 文件选择绑定
 document.getElementById('fileInput').addEventListener('change', function() {
@@ -1070,38 +1060,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeImageViewer();
 });
 
-// ══════════════════════════════════════════════════
-//  转义
-// ══════════════════════════════════════════════════
-
-function esc(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-/** 将文本中的 [[image:...]] 标记渲染为 <img>，其余部分转义 */
-function escWithImages(str) {
-  if (!str) return '';
-  const imgRe = /\[\[image:(\S+?)\]\]/g;
-  let result = '';
-  let lastIdx = 0;
-  let match;
-  while ((match = imgRe.exec(str)) !== null) {
-    const before = str.slice(lastIdx, match.index);
-    if (before) result += esc(before);
-    // Connor 端 /uploads/ 在聊天室对应 /cr-uploads/
-    let imgUrl = match[1];
-    if (imgUrl.startsWith('/uploads/')) imgUrl = '/cr-uploads/' + imgUrl.slice('/uploads/'.length);
-    const safeUrl = esc(imgUrl);
-    result += `<img class="cr-inline-img" src="${safeUrl}" onclick="openImageViewer(this.src)" loading="lazy">`;
-    lastIdx = imgRe.lastIndex;
-  }
-  const tail = str.slice(lastIdx);
-  if (tail) result += esc(tail);
-  return result;
-}
+// chatroom 的 escWithImages 需要 rewrite /uploads/ → /cr-uploads/
+const crEscWithImages = s => escWithImages(s, { rewriteUploads: '/cr-uploads/' });
 
 // ══════════════════════════════════════════════════
 //  初始化
