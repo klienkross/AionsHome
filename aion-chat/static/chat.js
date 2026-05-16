@@ -30,25 +30,6 @@ const MSG_PAGE_SIZE = 50;
 const $ = id => document.getElementById(id);
 
 
-function applyAionTheme(theme) {
-  const next = theme === 'light' ? 'light' : 'dark';
-  document.body.dataset.theme = next;
-  localStorage.setItem('aion_chat_theme', next);
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', next === 'dark' ? '#050923' : '#eef3ff');
-  // 通知原生 App 切换状态栏图标颜色
-  if (window.AionStatusBar) window.AionStatusBar.setBarStyle(next);
-}
-
-function toggleAionTheme() {
-  applyAionTheme(document.body.dataset.theme === 'light' ? 'dark' : 'light');
-}
-
-applyAionTheme(localStorage.getItem('aion_chat_theme') || 'dark');
-window.addEventListener('storage', e => {
-  if (e.key === 'aion_chat_theme') applyAionTheme(e.newValue || 'dark');
-});
-
 // ── 初始化 ──
 async function init() {
   models = await api("GET", "/api/models");
