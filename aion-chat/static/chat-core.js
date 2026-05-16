@@ -168,6 +168,24 @@ const AionChat = (() => {
     return { handleFiles, handlePaste, remove, render, flush, hasPending, get pending() { return pending; } };
   }
 
+  // ── 滚动工具 ──
+  function createScrollHelper(containerEl) {
+    function isNearBottom() {
+      return containerEl.scrollHeight - containerEl.scrollTop - containerEl.clientHeight < 100;
+    }
+    function scrollToBottom(force = false) {
+      if (force || isNearBottom()) containerEl.scrollTop = containerEl.scrollHeight;
+    }
+    return { isNearBottom, scrollToBottom };
+  }
+
+  function setupAutoResize(textarea, maxHeight = 120) {
+    textarea.addEventListener('input', () => {
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px';
+    });
+  }
+
   // ── 主题 ──
   function applyTheme(theme) {
     const next = theme === 'light' ? 'light' : 'dark';
@@ -187,7 +205,7 @@ const AionChat = (() => {
     if (e.key === 'aion_chat_theme') applyTheme(e.newValue || 'dark');
   });
 
-  return { playSend, playRecv, applyTheme, toggleTheme, escHtml, escWithImages, formatMsg, openImageViewer, closeImageViewer, createAttachmentManager };
+  return { playSend, playRecv, applyTheme, toggleTheme, escHtml, escWithImages, formatMsg, openImageViewer, closeImageViewer, createAttachmentManager, createScrollHelper, setupAutoResize };
 })();
 
 const playSend = AionChat.playSend;

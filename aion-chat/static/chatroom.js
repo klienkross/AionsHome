@@ -157,15 +157,9 @@ function timeStr(ts) {
   return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function isNearBottom() {
-  return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 100;
-}
-
-function scrollToBottom(force = false) {
-  if (force || isNearBottom()) {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-}
+const _scroll = AionChat.createScrollHelper(messagesEl);
+const isNearBottom = _scroll.isNearBottom;
+const scrollToBottom = _scroll.scrollToBottom;
 
 function resizeInput() {
   inputEl.style.height = 'auto';
