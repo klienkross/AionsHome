@@ -1,5 +1,5 @@
 // Aion Service Worker — 静态资源缓存 + 强制刷新
-const CACHE_NAME = 'aion-v1';
+const CACHE_NAME = 'aion-v2';
 
 self.addEventListener('install', () => self.skipWaiting());
 
@@ -26,14 +26,20 @@ self.addEventListener('fetch', e => {
 
   if (!cacheable) return;
 
+  // stale-while-revalidate: 缓存秒开 + 后台静默更新
   e.respondWith(
     caches.open(CACHE_NAME).then(cache =>
       cache.match(e.request).then(cached => {
-        if (cached) return cached;
-        return fetch(e.request).then(response => {
-          if (response.ok) cache.put(e.request, response.clone());
+        const fetchPromise = fetch(e.request).then(response => {
+          if (response.ok && response.status !== 206) cache.put(e.request, response.clone());
           return response;
         });
+        // 有缓存就直接返回，同时后台更新
+        if (cached) {
+          fetchPromise.catch(() => {}); // 后台更新失败不报错
+          return cached;
+        }
+        return fetchPromise;
       })
     )
   );

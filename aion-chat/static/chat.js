@@ -951,30 +951,42 @@ async function api(method, url, body) {
 
 // ── WebSocket 同步 ──
 async function checkSyncIntegrity() {
-  if (!currentConvId || !currentMessages.length) return;
+  if (!currentConvId) { console.log('[Sync] skip: no conv selected'); return; }
+  if (!currentMessages.length) { console.log('[Sync] skip: no messages loaded'); return; }
   const lastMsg = currentMessages[currentMessages.length - 1];
-  if (!lastMsg.chain_hash) return;
+  if (!lastMsg.chain_hash) { console.log('[Sync] skip: last msg has no chain_hash', lastMsg.id); return; }
   try {
     const resp = await api("GET", `/api/conversations/${currentConvId}/hash`);
+    console.log(`[Sync] server=${resp.chain_hash} client=${lastMsg.chain_hash} count=${resp.count} localMsgs=${currentMessages.length}`);
     if (resp.chain_hash !== lastMsg.chain_hash) {
       console.warn('[Sync] 哈希不一致，重新加载消息');
       const msgs = await api("GET", `/api/conversations/${currentConvId}/messages?limit=${MSG_PAGE_SIZE}`);
+      console.log(`[Sync] reloaded ${msgs.length} msgs (was ${currentMessages.length})`);
       currentMessages = msgs;
+      hasMoreMessages = msgs.length >= MSG_PAGE_SIZE;
       renderMessages();
+      renderConvList();
     }
-  } catch {}
+  } catch (e) { console.error('[Sync] check error:', e); }
 }
 
 function connectWS() {
+  console.log('[WS] connecting...');
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
   ws = new WebSocket(`${proto}//${location.host}/ws`);
-  ws.onopen = () => { _sendTTSState(); ws.send(JSON.stringify({type:'register_client',client_id:_clientId})); checkSyncIntegrity(); };
+  ws.onopen = () => { console.log('[WS] connected'); _sendTTSState(); ws.send(JSON.stringify({type:'register_client',client_id:_clientId})); checkSyncIntegrity(); };
   ws.onmessage = e => handleSync(JSON.parse(e.data));
   ws.onclose = () => setTimeout(connectWS, 2000);
 }
 
 function handleSync(msg) {
   const { type, data } = msg;
+
+  if (type === "ping") {
+    ws.send(JSON.stringify({type: "pong"}));
+    checkSyncIntegrity();
+    return;
+  }
 
   if (type === "conv_created") {
     if (!conversations.find(c => c.id === data.id)) {
@@ -1007,6 +1019,7 @@ function handleSync(msg) {
       }
       // 其他端发来的新消息（含 Core 主动发言 / 语音唤醒）
       else if (!currentMessages.find(m => m.id === data.id)) {
+        console.log('[WS] msg_created from other:', data.id, data.role, data.chain_hash);
         currentMessages.push(data);
         playRecv();
         // CAM_CHECK 响应到达：收到 assistant 消息时关闭「正在查看监控」提示
