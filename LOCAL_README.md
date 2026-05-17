@@ -19,8 +19,22 @@
 | **接任意第三方大模型**（Claude 中转站等）| `custom_keys` + `MODELS` 加一条 | `data/settings.json` + `config.py` | `"custom_keys": {"<名>": "sk-xxx"}`，再在 `config.py` 的 `MODELS` 里加 `{"provider":"custom","model":"上游模型名","base_url":"https://xxx/v1","key_name":"<名>"}` |
 | **AI 读你的 Obsidian 日记** | `obsidian_vault_path` | `data/settings.json` | 指向本地 Obsidian vault 目录。配了之后 AI 才会获得 `[OBSIDIAN_READ/RECENT/SEARCH]` 日记指令 |
 | **手机传感器/地理围栏喂给 AI** | `ntfy_enabled` + `ntfy_topic` | `data/settings.json` | 启用后订阅 ntfy.sh topic，手机（MacroDroid）事件经 `/api/webhooks` 进哨兵管道 |
+| **智能家居 (Home Assistant)** | `ha_token` | `data/settings.json` | HA 长期访问令牌。MCP Server 读取优先级：环境变量 `HA_TOKEN` > `settings.json` > `home_assistant_mcp.json`。URL 等非敏感项仍在 `data/home_assistant_mcp.json` |
 
 > 🎁 **MiMo TTS 当前限时免费**——目前性价比最高的语音方案，萌新建议第一个就配上它。
+
+### AI 生图：两套独立方案
+
+本 fork 有两个生图入口，使用**不同的模型和提供商**，注意区分：
+
+| 功能 | 触发方式 | 模型 | 提供商 | 需要的 key | 需梯子 |
+|---|---|---|---|---|---|
+| **SELFIE / DRAW**（用户主动要求画图） | AI 回复 `[SELFIE:提示词]` 或 `[DRAW:提示词]` | `gemini-3.1-flash-image-preview` | Google Gemini | `gemini_key` | 是 |
+| **礼物生图**（AI 自动送礼时） | 记忆总结后 AI 判断送礼 | `Kwai-Kolors/Kolors` | 硅基流动 | `siliconflow_key` | 否 |
+
+- SELFIE 模式支持参考图（`public/生图锚点.jpg`），保证人物一致性；Kolors 不支持参考图
+- 两者互不影响：没有 `gemini_key` 只是 SELFIE/DRAW 不可用，礼物生图照常；反之亦然
+- 前端设置页的「AI 生图」开关（`image_gen_enabled`）只控制 SELFIE/DRAW，礼物生图始终跟随记忆总结自动触发
 
 ## 不用梯子也能跑
 
@@ -34,7 +48,7 @@
   - **语音合成 TTS** → 小米 MiMo
   - 音乐 / 基金 / 高德定位本就是国内服务
 - **结论**：聊天、记忆、语音、监控哨兵这条主链路，配好上表的国内 key 即可，全程不用梯子。
-- 仍需梯子的只剩**可选项**：Gemini 系模型、AI 生图（Gemini）、Gemini CLI、ntfy.sh 公网中转——不碰这些完全不影响主程序。
+- 仍需梯子的只剩**可选项**：Gemini 系模型、AI 生图的 SELFIE/DRAW（Gemini）、Gemini CLI、ntfy.sh 公网中转——不碰这些完全不影响主程序。礼物生图走硅基流动 Kolors，不需要梯子。
 
 ## 技术栈（增量）
 - **哨兵/向量改用阿里云百炼 DashScope**（OpenAI 兼容端点）：哨兵 `qwen-flash` / 视觉 `qwen3-vl-flash`，Embedding `text-embedding-v4`（1024维）——替代原版散落的 Gemini 哨兵/embedding 调用，前端可配置 base_url/key/model
