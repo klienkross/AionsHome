@@ -950,16 +950,24 @@ function connectWS() {
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
+      if (data.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong' }));
+        checkSyncIntegrity();
+        return;
+      }
       if (data.type === 'pong') return;
 
       if (data.type === 'chatroom_msg_created' && currentRoom) {
         const msg = data.data;
         if (msg.room_id === currentRoom.id) {
-          // 避免重复：检查是否已经在页面上
-          const existing = document.getElementById(`streaming-${msg.id}`);
-          if (!existing && !messagesEl.querySelector(`[data-msg-id="${msg.id}"]`)) {
-            // 只在非发送状态下追加（发送时 SSE 已经处理了）
-            if (!isSending && !isAiChatting) {
+          // 去重：检查是否已存在（SSE 流式气泡 / 已有消息）
+          if (!document.getElementById(`streaming-${msg.id}`)
+              && !messagesEl.querySelector(`[data-msg-id="${msg.id}"]`)) {
+            // 替换同位置的无 ID 乐观渲染消息（如发送方刚发过的用户消息）
+            const emptyId = messagesEl.querySelector('.message-row.user[data-msg-id=""]');
+            if (emptyId && msg.sender === 'user') {
+              emptyId.setAttribute('data-msg-id', msg.id);
+            } else {
               appendMessage(msg);
               playRecv();
             }
