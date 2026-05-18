@@ -154,7 +154,7 @@ MODELS = {
     "CLI-2.5flash":     {"provider": "gemini_cli", "model": "gemini-2.5-flash"},
     "Codex":            {"provider": "codex_cli",  "model": ""},
     "CLI-Claude":       {"provider": "claude_cli",  "model": ""},
-    "CLI-DeepSeek":     {"provider": "claude_cli", "model": "", "key_name": "ds_key", "base_url": "https://api.deepseek.com/anthropic/v1",
+    "CLI-DeepSeek":     {"provider": "claude_cli", "model": "", "key_name": "ds_key", "base_url": "https://api.deepseek.com/anthropic",
         "cli_env": {
             "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
             "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
