@@ -19,11 +19,12 @@ from mcp.server.fastmcp import FastMCP
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = BASE_DIR / "data" / "home_assistant_mcp.json"
+SETTINGS_PATH = BASE_DIR / "data" / "settings.json"
 ALIASES_PATH = BASE_DIR / "data" / "home_assistant_aliases.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "ha_url": "http://homeassistant.local:8123",
-    "ha_token": "",
+    "ha_token": "",  # 敏感信息，建议填在 data/settings.json 的 "ha_token" 字段
     "dry_run": True,
     "allowed_domains": [
         "light",
@@ -57,8 +58,17 @@ def _load_config() -> dict[str, Any]:
     cfg = dict(DEFAULT_CONFIG)
     cfg.update(loaded if isinstance(loaded, dict) else {})
 
+    # ha_token 优先级：环境变量 > settings.json（gitignored）> home_assistant_mcp.json
+    settings_token = ""
+    if SETTINGS_PATH.exists():
+        try:
+            settings_token = json.loads(
+                SETTINGS_PATH.read_text(encoding="utf-8")
+            ).get("ha_token", "")
+        except Exception:
+            pass
     cfg["ha_url"] = os.getenv("HA_URL", cfg.get("ha_url", "")).rstrip("/")
-    cfg["ha_token"] = os.getenv("HA_TOKEN", cfg.get("ha_token", ""))
+    cfg["ha_token"] = os.getenv("HA_TOKEN", "") or settings_token or cfg.get("ha_token", "")
     cfg["dry_run"] = _as_bool(os.getenv("HA_DRY_RUN", cfg.get("dry_run", True)))
 
     if isinstance(cfg.get("allowed_domains"), str):
@@ -159,7 +169,7 @@ def _friendly_missing_config() -> dict[str, Any]:
         "configured": False,
         "message": (
             "Home Assistant bridge is installed, but HA token is not configured yet. "
-            f"Edit {CONFIG_PATH} or set HA_URL and HA_TOKEN."
+            f"Add \"ha_token\" to {SETTINGS_PATH} or set env HA_TOKEN."
         ),
         "config_path": str(CONFIG_PATH),
     }
