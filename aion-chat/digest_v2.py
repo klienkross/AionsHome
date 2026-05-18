@@ -15,7 +15,10 @@ def _parse_atomic_cards(raw) -> list[dict]:
     if isinstance(raw, list):
         items = raw
     else:
+        import re as _re
         text = raw.strip()
+        # 剥掉 ```json ... ``` 代码块包裹
+        text = _re.sub(r'```(?:json)?\s*', '', text).strip()
         # 尝试提取 [ ... ] 区间（处理 AI 在 JSON 前后附加文字的情况）
         start = text.find("[")
         end = text.rfind("]") + 1
@@ -24,8 +27,13 @@ def _parse_atomic_cards(raw) -> list[dict]:
         try:
             items = json.loads(text)
         except (json.JSONDecodeError, ValueError):
-            print(f"[digest_v2] JSON parse failed, raw[:200]: {str(raw)[:200]}")
-            return []
+            try:
+                from json_repair import repair_json
+                items = json.loads(repair_json(text))
+                print(f"[digest_v2] JSON repaired successfully")
+            except Exception:
+                print(f"[digest_v2] JSON parse failed, raw[:200]: {str(raw)[:200]}")
+                return []
     if not isinstance(items, list):
         return []
     valid = []
@@ -52,7 +60,11 @@ def _parse_emotion_output(raw: str, card_contents: list[str]) -> list[dict]:
         try:
             items = json.loads(raw.strip())
         except (json.JSONDecodeError, ValueError):
-            return [{"valence": 0.0, "arousal": 0.0} for _ in card_contents]
+            try:
+                from json_repair import repair_json
+                items = json.loads(repair_json(raw.strip()))
+            except Exception:
+                return [{"valence": 0.0, "arousal": 0.0} for _ in card_contents]
     if not isinstance(items, list):
         return [{"valence": 0.0, "arousal": 0.0} for _ in card_contents]
     result = []
@@ -363,6 +375,25 @@ async def _verify_ai_claims(card: dict, source_start_ts: float) -> bool:
     return True  # 核查失败时保守保留
 
 
+async def _digest_group_to_cards(
+    messages_text: str,
+    user_name: str,
+    ai_name: str,
+    persona_block: str,
+    call_fn,  # async (prompt: str) -> str | None
+) -> list[dict]:
+    """通用：给定格式化消息文本，调用 AI 生成原子卡片列表。供 _do_digest_v2 和 digest_chatroom 复用。"""
+    prompt = _build_unified_prompt(messages_text, user_name, ai_name, persona_block)
+    try:
+        raw = await call_fn(prompt)
+    except Exception as e:
+        print(f"[digest] 模型调用失败: {e}")
+        return []
+    if not raw:
+        return []
+    return _parse_atomic_cards(raw)
+
+
 async def _do_digest_v2(min_messages: int = 0) -> dict:
     """V2 digest: atomic card split + emotion + intensity + relationship matching."""
     import aiosqlite
@@ -436,22 +467,12 @@ async def _do_digest_v2(min_messages: int = 0) -> dict:
         source_conv_id = group[0].get("conv_id")
 
         if split_mode == "unified":
-            unified_prompt = _build_unified_prompt(messages_text, user_name, ai_name, persona_block)
-            print(f"[digest_v2] → 调用 sentinel (prompt {len(unified_prompt)} chars)...")
-            try:
-                raw_u = await simple_ai_call([{"role": "user", "content": unified_prompt}], model_key)
-            except Exception as e:
-                print(f"[digest_v2] ✗ Unified agent exception: {e}")
-                save_digest_anchor(source_end_ts)
-                continue
-            if not raw_u:
-                print(f"[digest_v2] ✗ Unified agent returned empty/None")
-                save_digest_anchor(source_end_ts)
-                continue
-            print(f"[digest_v2] ← sentinel 返回 {len(raw_u)} chars: {str(raw_u)[:150]}")
-            atomic_cards = _parse_atomic_cards(raw_u)
+            async def _call_main(prompt: str) -> str | None:
+                return await simple_ai_call([{"role": "user", "content": prompt}], model_key)
+            print(f"[digest_v2] → 调用 unified agent...")
+            atomic_cards = await _digest_group_to_cards(messages_text, user_name, ai_name, persona_block, _call_main)
             if not atomic_cards:
-                print(f"[digest_v2] ✗ 解析后无有效卡片 (raw[:300]): {str(raw_u)[:300]}")
+                print(f"[digest_v2] ✗ 解析后无有效卡片")
                 save_digest_anchor(source_end_ts)
                 continue
             print(f"[digest_v2] ✓ 解析出 {len(atomic_cards)} 张卡片, sources: {[ac.get('source','?') for ac in atomic_cards]}")

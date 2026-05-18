@@ -335,6 +335,11 @@ async def init_db():
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_chatroom_mem_room ON chatroom_memories(room_id, created_at)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_chatroom_mem_scope ON chatroom_memories(scope)")
+        for _col, _defn in [("valence", "REAL DEFAULT 0.0"), ("arousal", "REAL DEFAULT 0.0")]:
+            try:
+                await db.execute(f"ALTER TABLE chatroom_memories ADD COLUMN {_col} {_defn}")
+            except:
+                pass
         # ── 聊天室总结锚点表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS chatroom_digest_anchors (

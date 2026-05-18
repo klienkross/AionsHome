@@ -30,6 +30,7 @@ aion-chat/data/screenshots/*
 aion-chat/data/uploads/*
 aion-chat/data/tts_cache/*
 aion-chat/data/webhook_log.jsonl
+aion-chat/data/ntfy.log*
 aion-chat/data/books/
 aion-chat/data/aion.db
 aion-chat/data/theater_personas.json

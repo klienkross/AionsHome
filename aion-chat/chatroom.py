@@ -263,7 +263,11 @@ async def recall_chatroom_memories(
         mem = dict(row)
         mem_emb = _unpack_embedding(mem["embedding"])
         vec_sim = cosine_similarity(query_emb, mem_emb)
-        kw_score = _keyword_match_score(query_keywords or [], mem.get("keywords", "")) if query_keywords else 0
+        kw_raw = mem.get("keywords", "") or ""
+        # 兼容旧格式：逗号分隔字符串 → JSON 数组字符串
+        if kw_raw and not kw_raw.strip().startswith("["):
+            kw_raw = json.dumps([k.strip() for k in kw_raw.replace("、", ",").split(",") if k.strip()], ensure_ascii=False)
+        kw_score = _keyword_match_score(query_keywords or [], kw_raw) if query_keywords else 0
         importance = mem.get("importance", 0.5)
         final = vec_sim * 0.6 + kw_score * 0.3 + importance * 0.1
         if final >= threshold:
@@ -294,6 +298,8 @@ async def save_chatroom_memory(
     source_start_ts: float = None,
     source_end_ts: float = None,
     unresolved: int = 0,
+    valence: float = 0.0,
+    arousal: float = 0.0,
 ) -> Optional[str]:
     """保存一条聊天室记忆"""
     emb = await get_embedding(content)
@@ -303,19 +309,20 @@ async def save_chatroom_memory(
     async with get_db() as db:
         await db.execute(
             "INSERT INTO chatroom_memories "
-            "(id, room_id, scope, content, keywords, importance, embedding, source_start_ts, source_end_ts, created_at, unresolved) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (mem_id, room_id, scope, content, keywords, importance, emb_blob, source_start_ts, source_end_ts, now, unresolved),
+            "(id, room_id, scope, content, keywords, importance, embedding, source_start_ts, source_end_ts, created_at, unresolved, valence, arousal) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (mem_id, room_id, scope, content, keywords, importance, emb_blob, source_start_ts, source_end_ts, now, unresolved, valence, arousal),
         )
         await db.commit()
     return mem_id
 
 
 async def digest_chatroom(room_id: str = None, model_key: str = None) -> dict:
-    """对 Connor 的所有消息（1v1 + 群聊）统一进行总结，通过 Codex 生成记忆。
-    room_id 参数保留兼容性但不再用于限定数据源，改为合并所有 Connor 可见消息。"""
+    """对 Connor 的所有消息（1v1 + 群聊）统一进行总结，生成原子记忆卡片存入 chatroom_memories。"""
+    from datetime import datetime
+    from digest_v2 import _digest_group_to_cards
+    from memory import _split_into_groups_smart
 
-    # 读取统一锚点（以 "connor_unified" 为 key）
     anchor_key = "connor_unified"
     async with get_db() as db:
         db.row_factory = aiosqlite.Row
@@ -339,6 +346,7 @@ async def digest_chatroom(room_id: str = None, model_key: str = None) -> dict:
             for r in await cur.fetchall():
                 d = dict(r)
                 d["_source"] = "private"
+                d["role"] = "assistant" if d["sender"] == "connor" else "user"
                 msgs.append(d)
 
         # ── 群聊消息 ──
@@ -356,125 +364,84 @@ async def digest_chatroom(room_id: str = None, model_key: str = None) -> dict:
             for r in await cur.fetchall():
                 d = dict(r)
                 d["_source"] = "group"
+                d["role"] = "assistant" if d["sender"] == "connor" else "user"
                 msgs.append(d)
 
-        # 按时间排序合并
         msgs.sort(key=lambda x: x["created_at"])
 
     if len(msgs) < 8:
         return {"ok": False, "message": f"消息不足（{len(msgs)}条），至少需要 8 条"}
 
-    # 读取世界书人设
     wb = load_worldbook()
     user_name = wb.get("user_name", "用户")
     ai_name = wb.get("ai_name", "AI")
     connor_name = get_connor_name()
 
-    # 构建人设前缀（Connor 已有自身人设，这里注入 Aion 和用户信息供参考）
     persona_block = ""
     if wb.get("ai_persona"):
         persona_block += f"[{ai_name}的人设]\n{wb['ai_persona']}\n\n"
     if wb.get("user_persona"):
         persona_block += f"[{user_name}的信息]\n{wb['user_persona']}\n\n"
 
-    # 构建消息文本（合并私聊+群聊，标注来源）
-    group_start = time.strftime("%Y年%m月%d日 %H:%M", time.localtime(msgs[0]["created_at"]))
-    group_end = time.strftime("%Y年%m月%d日 %H:%M", time.localtime(msgs[-1]["created_at"]))
-    date_header = f"[对话时间范围: {group_start} ~ {group_end}]\n"
-    sources = set(m.get("_source", "private") for m in msgs)
-    has_mixed = len(sources) > 1
-    formatted = []
-    for m in msgs:
-        ts = time.strftime("%m-%d %H:%M", time.localtime(m["created_at"]))
-        name = {"user": user_name, "aion": ai_name, "connor": connor_name}.get(m["sender"], m["sender"])
-        tag = f"[{'群聊' if m.get('_source') == 'group' else '私聊'}]" if has_mixed else ""
-        formatted.append(f"[{ts}]{tag} {name}: {m['content'][:300]}")
-    messages_text = date_header + "\n".join(formatted)
-
-    prompt_text = (
-        f"{persona_block}"
-        f"你是{connor_name}，请从你自己的视角和情绪，使用精简的语言，总结出对话中包含的重要回忆。"
-        f"提到的他/她/它根据上下文输出正确的名字，例如：{user_name}说自己一年前养过一只叫Maru的猫。晚上因为{user_name}提起前男友让我感到吃醋。\n\n"
-        f"请分析输入的【一段对话记录】，输出一个 JSON 对象：\n"
-        f"1. \"summary\": 在开头加上对话发生的日期，总结对话的主要内容，发生的既定事实。预定的计划等。"
-        f"多个话题可以用多个短句来概括，例如：今天下午{user_name}玩了拼豆并展示给我看。今天莱利做了绝育手术。"
-        f"语言简练，**严禁废话**。总体控制在100字以内。\n\n"
-        f"2. \"keywords\": 提取 2-6 个用于检索的核心关键词。\n"
-        f"   - 【严禁】包含高频人名（如 {ai_name}, {user_name}, {connor_name}, Riley, Maru等）。\n"
-        f"   - 【严禁】包含泛指词或无意义虚词（如 AI, 聊天, 回复, 说话, 好的, 知道）。\n"
-        f"   - 将对话中提及的**稀缺**专有名词罗列出来。\n"
-        f"   - 包括：书名、电影名、具体的菜名、地名、特定的技术术语等。\n\n"
-        f"3. \"importance\": (0.0 - 1.0) 评分。\n"
-        f"   【评分严厉度：极高】请像一个苛刻的历史学家一样评分。默认分数为 0.3。\n"
-        f"   - 1.0 (极罕见): 仅限【永久性】的核心事实（如：改名、确诊绝症、结婚、亲人离世）。\n"
-        f"   - 0.8 (少见): 强烈的个人偏好或长期习惯（如：绝对不吃香菜、坚持每天晨跑、核心价值观改变）。\n"
-        f"   - 0.5 (普通): 当天发生的具体事件（如：看了一部电影、去了一家餐厅、讨论了一个新闻）。大部分有内容的对话应在此档。\n"
-        f"   - 0.1 - 0.3 (默认分数): 闲聊、情绪发泄、日常问候、没有信息增量的互动。\n"
-        f"   【注意】：不要因为情绪激动就给高分，除非这揭示了新的性格特质。\n\n"
-        f"4. \"unresolved\": Boolean。当摘要中包含**尚未完成**的计划、约定、承诺（如\"说好了要去…\"、\"打算下次…\"、\"答应了…\"、\"准备买…\"等），输出 true。纯粹的已发生事实输出 false。\n\n"
-        f"严格只输出一个 JSON 对象，不要输出任何其他内容。\n\n"
-        f"【一段对话记录】：\n{messages_text}"
-    )
-
-    # 使用 Codex CLI 直接调用进行总结
-    full_text = await simple_connor_cli_call(prompt_text)
-    if not full_text:
-        return {"ok": False, "message": "Codex CLI 无响应，请检查是否已安装"}
-
-    # 解析结果
-    result = _parse_digest_result(full_text)
-    if not result:
-        return {"ok": False, "message": "无法解析总结结果"}
-
-    scope = "connor"
-    # keywords 可能是数组或字符串，统一转为逗号分隔字符串
-    raw_keywords = result.get("keywords", "")
-    if isinstance(raw_keywords, list):
-        raw_keywords = ",".join(raw_keywords)
-    # 使用 Connor 1v1 房间 ID 存储（若存在），否则用群聊房间 ID
     store_room_id = connor_room["id"] if connor_room else (group_room["id"] if group_room else "connor_unified")
-    mem_id = await save_chatroom_memory(
-        room_id=store_room_id,
-        scope=scope,
-        content=result["summary"],
-        keywords=raw_keywords,
-        importance=result.get("importance", 0.5),
-        source_start_ts=msgs[0]["created_at"],
-        source_end_ts=msgs[-1]["created_at"],
-        unresolved=1 if result.get("unresolved") else 0,
-    )
+    name_map = {"user": user_name, "aion": ai_name, "connor": connor_name}
 
-    # 更新统一锚点
-    async with get_db() as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO chatroom_digest_anchors (room_id, anchor_ts) VALUES (?, ?)",
-            (anchor_key, msgs[-1]["created_at"]),
+    groups = await _split_into_groups_smart(msgs, connor_name, user_name)
+    total_new = 0
+
+    for group in groups:
+        source_start_ts = group[0]["created_at"]
+        source_end_ts = group[-1]["created_at"]
+
+        group_start = datetime.fromtimestamp(source_start_ts).strftime("%Y年%m月%d日 %H:%M")
+        group_end = datetime.fromtimestamp(source_end_ts).strftime("%Y年%m月%d日 %H:%M")
+        date_header = f"[对话时间范围: {group_start} ~ {group_end}]\n"
+        sources = set(m.get("_source", "private") for m in group)
+        has_mixed = len(sources) > 1
+        lines = []
+        for m in group:
+            ts = datetime.fromtimestamp(m["created_at"]).strftime("%m-%d %H:%M")
+            name = name_map.get(m["sender"], m["sender"])
+            tag = f"[{'群聊' if m.get('_source') == 'group' else '私聊'}]" if has_mixed else ""
+            lines.append(f"[{ts}]{tag} {name}: {m['content'][:300]}")
+        messages_text = date_header + "\n".join(lines)
+
+        cards = await _digest_group_to_cards(
+            messages_text, user_name, connor_name, persona_block, simple_connor_cli_call
         )
-        await db.commit()
+        if not cards:
+            async with get_db() as db:
+                await db.execute(
+                    "INSERT OR REPLACE INTO chatroom_digest_anchors (room_id, anchor_ts) VALUES (?, ?)",
+                    (anchor_key, source_end_ts),
+                )
+                await db.commit()
+            continue
 
-    return {"ok": True, "message": f"已总结 {len(msgs)} 条消息", "memory_id": mem_id}
+        for ac in cards:
+            kw_json = json.dumps(ac.get("keywords", []), ensure_ascii=False)
+            await save_chatroom_memory(
+                room_id=store_room_id,
+                scope="connor",
+                content=ac["content"],
+                keywords=kw_json,
+                importance=ac.get("importance", 0.5),
+                source_start_ts=source_start_ts,
+                source_end_ts=source_end_ts,
+                unresolved=1 if ac.get("unresolved") else 0,
+                valence=max(-1.0, min(1.0, float(ac.get("valence", 0.0)))),
+                arousal=max(-1.0, min(1.0, float(ac.get("arousal", 0.0)))),
+            )
+            total_new += 1
 
+        async with get_db() as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO chatroom_digest_anchors (room_id, anchor_ts) VALUES (?, ?)",
+                (anchor_key, source_end_ts),
+            )
+            await db.commit()
 
-def _parse_digest_result(raw: str) -> Optional[dict]:
-    """解析 AI 总结结果的 JSON"""
-    import re
-    raw = raw.strip()
-    # 尝试提取 JSON 块
-    match = re.search(r'\{[^{}]*"summary"[^{}]*\}', raw, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except Exception:
-            pass
-    # 尝试直接解析
-    try:
-        return json.loads(raw)
-    except Exception:
-        pass
-    # fallback: 整段作为 summary
-    if len(raw) > 20:
-        return {"summary": raw, "keywords": "", "importance": 0.5, "unresolved": False}
-    return None
+    return {"ok": True, "message": f"已处理 {len(msgs)} 条消息（{len(groups)} 组），生成 {total_new} 张卡片"}
 
 
 # ══════════════════════════════════════════════════
