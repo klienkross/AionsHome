@@ -942,14 +942,14 @@ async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
         return
 
     cmd = [claude_bin, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
-    if model:
-        cmd.extend(["--model", model])
     if max_tokens:
         cmd.extend(["--max-turns", "3"])
     cmd.extend(["-p", prompt])
 
     try:
         env = {**os.environ, "NO_COLOR": "1"}
+        if model:
+            env["ANTHROPIC_MODEL"] = model
         if cfg:
             key_name = cfg.get("key_name", "")
             if key_name:
