@@ -44,6 +44,9 @@ aion-chat/data/cert.pem
 aion-chat/data/key.pem
 aion-chat/data/tmp/
 
+# ── 实验缓存 ──
+aion-chat/tools/recall_eval_data.json
+
 # ── Connor-Codex 用户数据 ──
 Connor-Codex/messages.jsonl
 Connor-Codex/persona.md
