@@ -31,6 +31,7 @@ from context_builder import (
     ACTIVITY_CHECK_PATTERN, SELFIE_CMD_PATTERN, DRAW_CMD_PATTERN,
     POI_SEARCH_PATTERN, TOY_CMD_PATTERN, PET_CMD_PATTERN,
     VIDEO_CALL_CMD, META_TAG_PATTERN, strip_tool_commands,
+    _strip_backtick_content,
 )
 from memory import get_embedding
 from schedule import process_schedule_commands, ALARM_CMD, REMINDER_CMD, MONITOR_CMD, _parse_dt
@@ -75,9 +76,10 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
     who: 'Aion' 或 'Connor'"""
     from ws import manager as ws_manager
     triggered = {}  # 收集需要后续处理的动作
+    clean_for_cmd = _strip_backtick_content(full_text)
 
     # ── 点歌 ──
-    music_matches = MUSIC_CMD_PATTERN.findall(full_text)
+    music_matches = MUSIC_CMD_PATTERN.findall(clean_for_cmd)
     music_cards = []
     if music_matches:
         for keyword in music_matches:
@@ -101,7 +103,7 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
         await ws_manager.broadcast({"type": "music", "data": music_data})
 
     # ── 日程/闹钟（先检测指令生成系统消息，再交给 schedule 模块处理） ──
-    for match in ALARM_CMD.finditer(full_text):
+    for match in ALARM_CMD.finditer(clean_for_cmd):
         try:
             raw_dt, content = match.group(1), match.group(2)
             dt = _parse_dt(raw_dt)
@@ -109,7 +111,7 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
                 await _chatroom_sys_msg(room_id, f"⏰ {who}设置了 {dt.replace('T', ' ')} 的闹铃：{content.strip()}", _q)
         except Exception:
             pass
-    for match in REMINDER_CMD.finditer(full_text):
+    for match in REMINDER_CMD.finditer(clean_for_cmd):
         try:
             raw_dt, content = match.group(1), match.group(2)
             dt = _parse_dt(raw_dt)
@@ -117,7 +119,7 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
                 await _chatroom_sys_msg(room_id, f"📅 {who}设置了 {dt.replace('T', ' ')} 的日程：{content.strip()}", _q)
         except Exception:
             pass
-    for match in MONITOR_CMD.finditer(full_text):
+    for match in MONITOR_CMD.finditer(clean_for_cmd):
         try:
             raw_dt, content = match.group(1), match.group(2)
             dt = _parse_dt(raw_dt)
@@ -132,7 +134,7 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
     full_text = await _process_home_commands(full_text)
 
     # ── 查岗 ──
-    cam_triggered = CAM_CHECK_CMD in full_text
+    cam_triggered = CAM_CHECK_CMD in clean_for_cmd
     if cam_triggered:
         full_text = full_text.replace(CAM_CHECK_CMD, "")
         if cam.running:
@@ -142,7 +144,7 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
             asyncio.create_task(_delayed_cam_check(f"chatroom:{room_id}", ""))
 
     # ── 查看动态 ──
-    activity_match = ACTIVITY_CHECK_PATTERN.search(full_text)
+    activity_match = ACTIVITY_CHECK_PATTERN.search(clean_for_cmd)
     if activity_match:
         try:
             activity_n = int(activity_match.group(1))
@@ -154,7 +156,7 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
         triggered["activity"] = activity_n
 
     # ── HEART ──
-    heart_matches = HEART_CMD_PATTERN.findall(full_text)
+    heart_matches = HEART_CMD_PATTERN.findall(clean_for_cmd)
     if heart_matches:
         full_text = HEART_CMD_PATTERN.sub("", full_text)
         for hw_content in heart_matches:
@@ -173,7 +175,7 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
                 await ws_manager.broadcast({"type": "heart_whisper", "data": hw_data})
 
     # ── MEMORY ──
-    memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
+    memory_matches = MEMORY_CMD_PATTERN.findall(clean_for_cmd)
     if memory_matches:
         full_text = MEMORY_CMD_PATTERN.sub("", full_text)
         for mem_content in memory_matches:
@@ -191,13 +193,13 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
                 await _chatroom_sys_msg(room_id, f"💾 {who}记住了：{mem_content[:50]}", _q)
 
     # ── POI 搜索 ──
-    poi_matches = POI_SEARCH_PATTERN.findall(full_text)
+    poi_matches = POI_SEARCH_PATTERN.findall(clean_for_cmd)
     if poi_matches:
         full_text = POI_SEARCH_PATTERN.sub("", full_text)
         triggered["poi"] = poi_matches
 
     # ── 玩具 ──
-    toy_matches = TOY_CMD_PATTERN.findall(full_text)
+    toy_matches = TOY_CMD_PATTERN.findall(clean_for_cmd)
     if toy_matches:
         full_text = TOY_CMD_PATTERN.sub("", full_text)
         toy_data = {"type": "toy_command", "commands": toy_matches, "msg_id": msg_id}
@@ -205,14 +207,14 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
         await ws_manager.broadcast({"type": "toy_command", "data": toy_data})
 
     # ── 桌宠 ──
-    pet_matches = PET_CMD_PATTERN.findall(full_text)
+    pet_matches = PET_CMD_PATTERN.findall(clean_for_cmd)
     if pet_matches:
         full_text = PET_CMD_PATTERN.sub("", full_text)
         await ws_manager.broadcast({"type": "pet_command", "data": {"action": pet_matches[-1].lower()}})
 
     # ── 图片生成 ──
-    selfie_match = SELFIE_CMD_PATTERN.search(full_text)
-    draw_match = DRAW_CMD_PATTERN.search(full_text)
+    selfie_match = SELFIE_CMD_PATTERN.search(clean_for_cmd)
+    draw_match = DRAW_CMD_PATTERN.search(clean_for_cmd)
     if selfie_match:
         triggered["image_gen"] = {"prompt": selfie_match.group(1).strip(), "is_selfie": True}
         full_text = SELFIE_CMD_PATTERN.sub("", full_text)
@@ -221,7 +223,7 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
         full_text = DRAW_CMD_PATTERN.sub("", full_text)
 
     # ── 视频通话 ──
-    if VIDEO_CALL_CMD in full_text:
+    if VIDEO_CALL_CMD in clean_for_cmd:
         full_text = full_text.replace(VIDEO_CALL_CMD, "")
 
     # 清理 META 标签

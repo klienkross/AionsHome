@@ -44,7 +44,7 @@ THINK_CMD_PATTERN = re.compile(r'\[THINK:([^\]]+)\]')
 
 # 允许进入上下文的 system 消息关键词（点歌、查看监控、查看动态）
 _SYSTEM_MSG_CONTEXT_KEYWORDS = ('查看了监控', '搜索了', '点歌', '点了一首', '推荐了', '查看了动态', '视频通话')
-from context_builder import fetch_merged_timeline, render_merged_timeline
+from context_builder import fetch_merged_timeline, render_merged_timeline, _strip_backtick_content
 from music import search_songs, get_audio_url
 from schedule import process_schedule_commands, get_active_schedules, build_schedule_prompt
 from mcp_client import mcp_manager
@@ -1054,7 +1054,9 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
             if not has_error and (stripped.startswith('[Gemini错误') or stripped.startswith('[硅基流动错误') or stripped.startswith('[中转站错误') or stripped.startswith('[错误]') or not stripped):
                 has_error = True
 
-            music_matches = MUSIC_CMD_PATTERN.findall(full_text)
+            clean_for_cmd = _strip_backtick_content(full_text)
+
+            music_matches = MUSIC_CMD_PATTERN.findall(clean_for_cmd)
             music_cards = []
             if music_matches:
                 for keyword in music_matches:
@@ -1070,19 +1072,19 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                         pass
                 full_text = MUSIC_CMD_PATTERN.sub("", full_text).strip()
 
-            toy_matches = TOY_CMD_PATTERN.findall(full_text)
+            toy_matches = TOY_CMD_PATTERN.findall(clean_for_cmd)
             if toy_matches:
                 full_text = TOY_CMD_PATTERN.sub("", full_text).strip()
 
-            pet_matches = PET_CMD_PATTERN.findall(full_text)
+            pet_matches = PET_CMD_PATTERN.findall(clean_for_cmd)
             if pet_matches:
                 full_text = PET_CMD_PATTERN.sub("", full_text).strip()
 
-            cam_triggered = CAM_CHECK_CMD in full_text
+            cam_triggered = CAM_CHECK_CMD in clean_for_cmd
             if cam_triggered:
                 full_text = full_text.replace(CAM_CHECK_CMD, "").strip()
 
-            activity_match = ACTIVITY_CHECK_PATTERN.search(full_text)
+            activity_match = ACTIVITY_CHECK_PATTERN.search(clean_for_cmd)
             activity_n = 0
             if activity_match:
                 try:
@@ -1092,9 +1094,9 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                 activity_n = max(1, min(12, activity_n)) if activity_n > 0 else 6
                 full_text = ACTIVITY_CHECK_PATTERN.sub("", full_text).strip()
 
-            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(full_text)
-            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(full_text)
-            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(full_text)
+            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(clean_for_cmd)
+            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(clean_for_cmd)
+            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(clean_for_cmd)
             if obsidian_read_match:
                 full_text = OBSIDIAN_READ_PATTERN.sub("", full_text).strip()
             if obsidian_recent_match:
@@ -1102,16 +1104,16 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
             if obsidian_search_match:
                 full_text = OBSIDIAN_SEARCH_PATTERN.sub("", full_text).strip()
 
-            poi_matches = POI_SEARCH_PATTERN.findall(full_text)
+            poi_matches = POI_SEARCH_PATTERN.findall(clean_for_cmd)
             if poi_matches:
                 full_text = POI_SEARCH_PATTERN.sub("", full_text).strip()
 
-            video_call_triggered = VIDEO_CALL_CMD in full_text
+            video_call_triggered = VIDEO_CALL_CMD in clean_for_cmd
             if video_call_triggered:
                 full_text = full_text.replace(VIDEO_CALL_CMD, "").strip()
 
-            selfie_match = SELFIE_CMD_PATTERN.search(full_text)
-            draw_match = DRAW_CMD_PATTERN.search(full_text)
+            selfie_match = SELFIE_CMD_PATTERN.search(clean_for_cmd)
+            draw_match = DRAW_CMD_PATTERN.search(clean_for_cmd)
             image_gen_prompt = None
             image_gen_is_selfie = False
             if selfie_match:
@@ -1125,7 +1127,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
             full_text = await process_schedule_commands(full_text, conv_id)
             full_text = await _process_home_commands(full_text)
 
-            heart_matches = HEART_CMD_PATTERN.findall(full_text)
+            heart_matches = HEART_CMD_PATTERN.findall(clean_for_cmd)
             if heart_matches:
                 full_text = HEART_CMD_PATTERN.sub("", full_text).strip()
                 for hw_content in heart_matches:
@@ -1143,7 +1145,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                         await _q.put(hw_data)
                         await manager.broadcast({"type": "heart_whisper", "data": hw_data})
 
-            memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
+            memory_matches = MEMORY_CMD_PATTERN.findall(clean_for_cmd)
             if memory_matches:
                 full_text = MEMORY_CMD_PATTERN.sub("", full_text).strip()
                 for mem_content in memory_matches:
@@ -1165,7 +1167,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                         await _q.put(mr_data)
 
             # 检测主动检索指令 → 异步追加回复
-            recall_matches = RECALL_CMD_PATTERN.findall(full_text)
+            recall_matches = RECALL_CMD_PATTERN.findall(clean_for_cmd)
             recall_all_kws = []
             if recall_matches:
                 full_text = RECALL_CMD_PATTERN.sub("", full_text).strip()
@@ -1174,7 +1176,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                     if kws:
                         recall_all_kws.append(kws)
 
-            organize_matches = ORGANIZE_CMD_PATTERN.findall(full_text)
+            organize_matches = ORGANIZE_CMD_PATTERN.findall(clean_for_cmd)
             if organize_matches:
                 full_text = ORGANIZE_CMD_PATTERN.sub("", full_text).strip()
                 for keywords_str in organize_matches:
@@ -1183,7 +1185,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                     result = await organize_memories(kws)
                     print(f"[ORGANIZE] {result}")
 
-            mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
+            mem_edit_matches = MEM_EDIT_PATTERN.findall(clean_for_cmd)
             if mem_edit_matches:
                 full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
                 from active_recall import execute_mem_edit
@@ -1192,7 +1194,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                     print(f"[MEM_EDIT] {result}")
 
             # 检测 [转账：N元] 指令 — AI 转账入账（不从 full_text 中剥离，前端渲染卡片需要）
-            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(clean_for_cmd)
             for t_amount_str in transfer_matches:
                 try:
                     t_val = float(t_amount_str)
@@ -1690,7 +1692,8 @@ async def send_message(conv_id: str, body: MsgCreate):
                 has_error = True
 
             # 检测 [MUSIC:xxx] 指令 → 搜索歌曲并推送卡片数据
-            music_matches = MUSIC_CMD_PATTERN.findall(full_text)
+            clean_for_cmd = _strip_backtick_content(full_text)
+            music_matches = MUSIC_CMD_PATTERN.findall(clean_for_cmd)
             music_cards = []
             if music_matches:
                 for keyword in music_matches:
@@ -1707,22 +1710,22 @@ async def send_message(conv_id: str, body: MsgCreate):
                 full_text = MUSIC_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [TOY:x] 指令
-            toy_matches = TOY_CMD_PATTERN.findall(full_text)
+            toy_matches = TOY_CMD_PATTERN.findall(clean_for_cmd)
             if toy_matches:
                 full_text = TOY_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [PET:xxx] 桌宠指令
-            pet_matches = PET_CMD_PATTERN.findall(full_text)
+            pet_matches = PET_CMD_PATTERN.findall(clean_for_cmd)
             if pet_matches:
                 full_text = PET_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [CAM_CHECK] 指令
-            cam_triggered = CAM_CHECK_CMD in full_text
+            cam_triggered = CAM_CHECK_CMD in clean_for_cmd
             if cam_triggered:
                 full_text = full_text.replace(CAM_CHECK_CMD, "").strip()
 
             # 检测 [查看动态:n] 指令
-            activity_match = ACTIVITY_CHECK_PATTERN.search(full_text)
+            activity_match = ACTIVITY_CHECK_PATTERN.search(clean_for_cmd)
             activity_n = 0
             if activity_match:
                 try:
@@ -1733,9 +1736,9 @@ async def send_message(conv_id: str, body: MsgCreate):
                 full_text = ACTIVITY_CHECK_PATTERN.sub("", full_text).strip()
 
             # 检测 Obsidian 日记指令
-            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(full_text)
-            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(full_text)
-            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(full_text)
+            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(clean_for_cmd)
+            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(clean_for_cmd)
+            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(clean_for_cmd)
             if obsidian_read_match:
                 full_text = OBSIDIAN_READ_PATTERN.sub("", full_text).strip()
             if obsidian_recent_match:
@@ -1744,18 +1747,18 @@ async def send_message(conv_id: str, body: MsgCreate):
                 full_text = OBSIDIAN_SEARCH_PATTERN.sub("", full_text).strip()
 
             # 检测 [POI_SEARCH:xxx] 指令 → 标记，后续触发自动搜索+追加回复
-            poi_matches = POI_SEARCH_PATTERN.findall(full_text)
+            poi_matches = POI_SEARCH_PATTERN.findall(clean_for_cmd)
             if poi_matches:
                 full_text = POI_SEARCH_PATTERN.sub("", full_text).strip()
 
             # 检测 [视频电话] 指令
-            video_call_triggered = VIDEO_CALL_CMD in full_text
+            video_call_triggered = VIDEO_CALL_CMD in clean_for_cmd
             if video_call_triggered:
                 full_text = full_text.replace(VIDEO_CALL_CMD, "").strip()
 
             # 检测 [SELFIE:xxx] / [DRAW:xxx] 生图指令
-            selfie_match = SELFIE_CMD_PATTERN.search(full_text)
-            draw_match = DRAW_CMD_PATTERN.search(full_text)
+            selfie_match = SELFIE_CMD_PATTERN.search(clean_for_cmd)
+            draw_match = DRAW_CMD_PATTERN.search(clean_for_cmd)
             image_gen_prompt = None
             image_gen_is_selfie = False
             if selfie_match:
@@ -1771,7 +1774,7 @@ async def send_message(conv_id: str, body: MsgCreate):
             full_text = await _process_home_commands(full_text)
 
             # 检测 [HEART:xxx] 心语指令
-            heart_matches = HEART_CMD_PATTERN.findall(full_text)
+            heart_matches = HEART_CMD_PATTERN.findall(clean_for_cmd)
             if heart_matches:
                 full_text = HEART_CMD_PATTERN.sub("", full_text).strip()
                 for hw_content in heart_matches:
@@ -1790,7 +1793,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                         await manager.broadcast({"type": "heart_whisper", "data": hw_data})
 
             # 检测 [MEMORY:xxx] 记忆录入指令
-            memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
+            memory_matches = MEMORY_CMD_PATTERN.findall(clean_for_cmd)
             if memory_matches:
                 full_text = MEMORY_CMD_PATTERN.sub("", full_text).strip()
                 for mem_content in memory_matches:
@@ -1813,7 +1816,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                         print(f"[MEMORY] AI 录入卡片: {mem_content[:50]}")
 
             # 检测主动检索指令 → 异步追加回复
-            recall_matches = RECALL_CMD_PATTERN.findall(full_text)
+            recall_matches = RECALL_CMD_PATTERN.findall(clean_for_cmd)
             recall_all_kws = []
             if recall_matches:
                 full_text = RECALL_CMD_PATTERN.sub("", full_text).strip()
@@ -1822,7 +1825,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                     if kws:
                         recall_all_kws.append(kws)
 
-            organize_matches = ORGANIZE_CMD_PATTERN.findall(full_text)
+            organize_matches = ORGANIZE_CMD_PATTERN.findall(clean_for_cmd)
             if organize_matches:
                 full_text = ORGANIZE_CMD_PATTERN.sub("", full_text).strip()
                 for keywords_str in organize_matches:
@@ -1832,11 +1835,11 @@ async def send_message(conv_id: str, body: MsgCreate):
                     print(f"[ORGANIZE] {result}")
 
             # 检测 [THINK:xxx] 背景思考指令
-            think_matches = THINK_CMD_PATTERN.findall(full_text)
+            think_matches = THINK_CMD_PATTERN.findall(clean_for_cmd)
             if think_matches:
                 full_text = THINK_CMD_PATTERN.sub("", full_text).strip()
 
-            mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
+            mem_edit_matches = MEM_EDIT_PATTERN.findall(clean_for_cmd)
             if mem_edit_matches:
                 full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
                 from active_recall import execute_mem_edit
@@ -1848,7 +1851,7 @@ async def send_message(conv_id: str, body: MsgCreate):
             theater_updates = []
             if theater_session:
                 stat_name_map = {"hp": "hp", "HP": "hp", "力量": "str", "敏捷": "dex", "智力": "int", "魅力": "cha", "幸运": "lck"}
-                theater_stat_matches = THEATER_STAT_PATTERN.findall(full_text)
+                theater_stat_matches = THEATER_STAT_PATTERN.findall(clean_for_cmd)
                 for stat_name, val_str in theater_stat_matches:
                     stat_name = stat_name.strip()
                     val = int(val_str.replace('＋', '+').replace('－', '-'))
@@ -1865,7 +1868,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                             theater_updates.append({"type": "stat", "name": label, "value": val})
                             print(f"[剧场] 属性变更: {label} {'+' if val > 0 else ''}{val}")
 
-                theater_item_matches = THEATER_ITEM_PATTERN.findall(full_text)
+                theater_item_matches = THEATER_ITEM_PATTERN.findall(clean_for_cmd)
                 for item_name in theater_item_matches:
                     item_name = item_name.strip()
                     if item_name:
@@ -1884,7 +1887,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                             print(f"[剧场] 道具赠送: {item_name}")
 
             # 检测 [转账：N元] 指令 — AI 转账入账
-            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(clean_for_cmd)
             for t_amount_str in transfer_matches:
                 try:
                     t_val = float(t_amount_str)
@@ -2394,7 +2397,8 @@ async def perform_recall_check(conv_id: str, model_key: str, all_keywords: list[
     if not full_text.strip():
         return
 
-    mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
+    clean_for_cmd = _strip_backtick_content(full_text)
+    mem_edit_matches = MEM_EDIT_PATTERN.findall(clean_for_cmd)
     if mem_edit_matches:
         full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
         from active_recall import execute_mem_edit
@@ -3004,7 +3008,8 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 has_error = True
 
             # 检测 [MUSIC:xxx] 指令 → 搜索歌曲并推送卡片数据
-            music_matches = MUSIC_CMD_PATTERN.findall(full_text)
+            clean_for_cmd = _strip_backtick_content(full_text)
+            music_matches = MUSIC_CMD_PATTERN.findall(clean_for_cmd)
             music_cards = []
             if music_matches:
                 for keyword in music_matches:
@@ -3021,22 +3026,22 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 full_text = MUSIC_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [TOY:x] 指令
-            toy_matches = TOY_CMD_PATTERN.findall(full_text)
+            toy_matches = TOY_CMD_PATTERN.findall(clean_for_cmd)
             if toy_matches:
                 full_text = TOY_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [PET:xxx] 桌宠指令
-            pet_matches = PET_CMD_PATTERN.findall(full_text)
+            pet_matches = PET_CMD_PATTERN.findall(clean_for_cmd)
             if pet_matches:
                 full_text = PET_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [CAM_CHECK] 指令
-            cam_triggered = CAM_CHECK_CMD in full_text
+            cam_triggered = CAM_CHECK_CMD in clean_for_cmd
             if cam_triggered:
                 full_text = full_text.replace(CAM_CHECK_CMD, "").strip()
 
             # 检测 [查看动态:n] 指令
-            activity_match = ACTIVITY_CHECK_PATTERN.search(full_text)
+            activity_match = ACTIVITY_CHECK_PATTERN.search(clean_for_cmd)
             activity_n = 0
             if activity_match:
                 try:
@@ -3048,9 +3053,9 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
 
             # 检测 [POI_SEARCH:xxx] 指令
             # 检测 Obsidian 日记指令
-            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(full_text)
-            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(full_text)
-            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(full_text)
+            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(clean_for_cmd)
+            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(clean_for_cmd)
+            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(clean_for_cmd)
             if obsidian_read_match:
                 full_text = OBSIDIAN_READ_PATTERN.sub("", full_text).strip()
             if obsidian_recent_match:
@@ -3058,18 +3063,18 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
             if obsidian_search_match:
                 full_text = OBSIDIAN_SEARCH_PATTERN.sub("", full_text).strip()
 
-            poi_matches = POI_SEARCH_PATTERN.findall(full_text)
+            poi_matches = POI_SEARCH_PATTERN.findall(clean_for_cmd)
             if poi_matches:
                 full_text = POI_SEARCH_PATTERN.sub("", full_text).strip()
 
             # 检测 [视频电话] 指令
-            video_call_triggered = VIDEO_CALL_CMD in full_text
+            video_call_triggered = VIDEO_CALL_CMD in clean_for_cmd
             if video_call_triggered:
                 full_text = full_text.replace(VIDEO_CALL_CMD, "").strip()
 
             # 检测 [SELFIE:xxx] / [DRAW:xxx] 生图指令
-            selfie_match = SELFIE_CMD_PATTERN.search(full_text)
-            draw_match = DRAW_CMD_PATTERN.search(full_text)
+            selfie_match = SELFIE_CMD_PATTERN.search(clean_for_cmd)
+            draw_match = DRAW_CMD_PATTERN.search(clean_for_cmd)
             image_gen_prompt = None
             image_gen_is_selfie = False
             if selfie_match:
@@ -3085,7 +3090,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
             full_text = await _process_home_commands(full_text)
 
             # 检测 [HEART:xxx] 心语指令
-            heart_matches = HEART_CMD_PATTERN.findall(full_text)
+            heart_matches = HEART_CMD_PATTERN.findall(clean_for_cmd)
             if heart_matches:
                 full_text = HEART_CMD_PATTERN.sub("", full_text).strip()
                 for hw_content in heart_matches:
@@ -3104,7 +3109,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                         await manager.broadcast({"type": "heart_whisper", "data": hw_data})
 
             # 检测 [MEMORY:xxx] 记忆录入指令
-            memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
+            memory_matches = MEMORY_CMD_PATTERN.findall(clean_for_cmd)
             if memory_matches:
                 full_text = MEMORY_CMD_PATTERN.sub("", full_text).strip()
                 for mem_content in memory_matches:
@@ -3127,7 +3132,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                         print(f"[MEMORY] AI 录入卡片: {mem_content[:50]}")
 
             # 检测主动检索指令 → 异步追加回复
-            recall_matches = RECALL_CMD_PATTERN.findall(full_text)
+            recall_matches = RECALL_CMD_PATTERN.findall(clean_for_cmd)
             recall_all_kws = []
             if recall_matches:
                 full_text = RECALL_CMD_PATTERN.sub("", full_text).strip()
@@ -3136,7 +3141,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                     if kws:
                         recall_all_kws.append(kws)
 
-            organize_matches = ORGANIZE_CMD_PATTERN.findall(full_text)
+            organize_matches = ORGANIZE_CMD_PATTERN.findall(clean_for_cmd)
             if organize_matches:
                 full_text = ORGANIZE_CMD_PATTERN.sub("", full_text).strip()
                 for keywords_str in organize_matches:
@@ -3145,7 +3150,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                     result = await organize_memories(kws)
                     print(f"[ORGANIZE] {result}")
 
-            mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
+            mem_edit_matches = MEM_EDIT_PATTERN.findall(clean_for_cmd)
             if mem_edit_matches:
                 full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
                 from active_recall import execute_mem_edit
@@ -3154,7 +3159,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                     print(f"[MEM_EDIT] {result}")
 
             # 检测 [转账：N元] 指令 — AI 转账入账
-            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(clean_for_cmd)
             for t_amount_str in transfer_matches:
                 try:
                     t_val = float(t_amount_str)

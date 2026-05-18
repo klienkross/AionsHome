@@ -51,6 +51,20 @@ HOME_ABILITY_TEXT = (
 )
 
 
+# 反引号包裹内容：行内代码 `...` 和代码块 ```...```
+_BACKTICK_BLOCK_RE = re.compile(r'```[\s\S]*?```')
+_BACKTICK_INLINE_RE = re.compile(r'`([^`]+)`')
+
+
+def _strip_backtick_content(text: str) -> str:
+    """移除反引号包裹的内容（行内代码和代码块），用于命令匹配前过滤。"""
+    if not text:
+        return text
+    cleaned = _BACKTICK_BLOCK_RE.sub('', text)
+    cleaned = _BACKTICK_INLINE_RE.sub('', cleaned)
+    return cleaned
+
+
 def strip_tool_commands(text: str) -> str:
     """从文本中移除所有工具指令标记，返回干净文本（用于 TTS 和保存）"""
     for pat in _ALL_CMD_PATTERNS:
