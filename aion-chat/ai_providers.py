@@ -637,7 +637,8 @@ _CLI_TOOL_LABELS = {
 }
 
 async def call_gemini_cli(messages: list, model: str, meta: dict | None = None,
-                          temperature: float | None = None, max_tokens: int | None = None):
+                          temperature: float | None = None, max_tokens: int | None = None,
+                          cfg: dict | None = None):
     """通过 gemini CLI 子进程流式获取响应（stream-json 模式，支持 token 统计）"""
     prompt = _build_cli_prompt(messages, copy_cr_uploads=True)
 
@@ -666,7 +667,14 @@ async def call_gemini_cli(messages: list, model: str, meta: dict | None = None,
     cmd.extend(["--skip-trust", "--approval-mode", approval, "-o", "stream-json", "-p", " "])
 
     try:
-        proc = await _spawn_cli_process(cmd, prompt)
+        env = {**os.environ}
+        if cfg:
+            key_name = cfg.get("key_name", "")
+            if key_name:
+                env["GEMINI_API_KEY"] = get_key(key_name)
+            for k, v in cfg.get("cli_env", {}).items():
+                env[str(k)] = str(v)
+        proc = await _spawn_cli_process(cmd, prompt, env)
 
         # 调试日志
         debug_log = None
@@ -811,7 +819,8 @@ _CODEX_SCRIPT: str | None = _find_codex_script()
 _CODEX_WORKSPACE: str = str(Path(__file__).parent.parent)
 
 async def call_codex_cli(messages: list, model: str, meta: dict | None = None,
-                         temperature: float | None = None, max_tokens: int | None = None):
+                         temperature: float | None = None, max_tokens: int | None = None,
+                         cfg: dict | None = None):
     """通过 Codex CLI 子进程调用，--json 模式逐行读取 JSONL 事件"""
     prompt = _build_cli_prompt(messages)
 
@@ -831,6 +840,12 @@ async def call_codex_cli(messages: list, model: str, meta: dict | None = None,
 
     try:
         env = {**os.environ, "NO_COLOR": "1"}
+        if cfg:
+            key_name = cfg.get("key_name", "")
+            if key_name:
+                env["OPENAI_API_KEY"] = get_key(key_name)
+            for k, v in cfg.get("cli_env", {}).items():
+                env[str(k)] = str(v)
         proc = await _spawn_cli_process(cmd, prompt, env)
 
         last_agent_text = ""
@@ -916,7 +931,8 @@ async def call_codex_cli(messages: list, model: str, meta: dict | None = None,
 
 # ── Claude CLI ───────────────────────────────────
 async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
-                          temperature: float | None = None, max_tokens: int | None = None):
+                          temperature: float | None = None, max_tokens: int | None = None,
+                          cfg: dict | None = None):
     """通过 claude CLI 子进程流式获取响应（stream-json 模式）"""
     prompt = _build_cli_prompt(messages)
 
@@ -934,6 +950,15 @@ async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
 
     try:
         env = {**os.environ, "NO_COLOR": "1"}
+        if cfg:
+            key_name = cfg.get("key_name", "")
+            if key_name:
+                env["ANTHROPIC_API_KEY"] = get_key(key_name)
+            base_url = cfg.get("base_url", "")
+            if base_url:
+                env["ANTHROPIC_BASE_URL"] = base_url
+            for k, v in cfg.get("cli_env", {}).items():
+                env[str(k)] = str(v)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -1044,11 +1069,11 @@ def _pick_provider(cfg, normalized, meta, temperature, max_tokens=None):
         return call_custom(normalized, cfg["model"], cfg.get("base_url", ""),
                            cfg.get("key_name", ""), meta, temperature, max_tokens)
     elif p == "gemini_cli":
-        return call_gemini_cli(normalized, cfg["model"], meta, temperature, max_tokens)
+        return call_gemini_cli(normalized, cfg["model"], meta, temperature, max_tokens, cfg=cfg)
     elif p == "codex_cli":
-        return call_codex_cli(normalized, cfg["model"], meta, temperature, max_tokens)
+        return call_codex_cli(normalized, cfg["model"], meta, temperature, max_tokens, cfg=cfg)
     elif p == "claude_cli":
-        return call_claude_cli(normalized, cfg["model"], meta, temperature, max_tokens)
+        return call_claude_cli(normalized, cfg["model"], meta, temperature, max_tokens, cfg=cfg)
     return None
 
 
