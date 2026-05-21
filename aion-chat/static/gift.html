@@ -291,7 +291,7 @@ function renderGrid() {
     return `
       <div class="gift-thumb" id="thumb_${g.id}" onclick="openDetail(${i})">
         <img class="gift-thumb-img" src="/uploads/${escHtml(g.image_path)}" alt="礼物" loading="lazy" />
-        <div class="gift-thumb-date">${dateStr}</div>
+        <div class="gift-thumb-date">${dateStr}${g.sender ? ' · from ' + escHtml(g.sender === 'connor' ? 'Connor' : 'Aion') : ''}</div>
       </div>`;
   }).join('');
 }
@@ -305,7 +305,7 @@ function openDetail(idx) {
   box.innerHTML = `
     <img class="gift-detail-img" src="/uploads/${escHtml(g.image_path)}" alt="礼物" />
     <div class="gift-detail-body">
-      <div class="gift-detail-date">${dateStr}</div>
+      <div class="gift-detail-date">${dateStr}${g.sender ? ' · from ' + escHtml(g.sender === 'connor' ? 'Connor' : 'Aion') : ''}</div>
       <div class="gift-detail-msg">${escHtml(g.message)}</div>
       <div class="gift-detail-actions">
         <button class="btn-detail-close" onclick="closeDetail()">关闭</button>

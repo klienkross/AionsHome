@@ -25,26 +25,31 @@ from routes.music import MUSIC_CMD_PATTERN
 from routes.wallet import record_transfer
 from tts import TTSStreamer
 
-HEART_CMD_PATTERN = re.compile(r'\[HEART:([^\]]+)\]')
-MEMORY_CMD_PATTERN = re.compile(r'\[MEMORY:([^\]]+)\]')
-RECALL_CMD_PATTERN = re.compile(r'\[RECALL:([^\]]+)\]')
-ORGANIZE_CMD_PATTERN = re.compile(r'\[ORGANIZE:([^\]]+)\]')
-MEM_EDIT_PATTERN = re.compile(r'\[MEM_EDIT:([^\]]+)\]')
-ACTIVITY_CHECK_PATTERN = re.compile(r'\[查看动态:(\d+)\]')
-SELFIE_CMD_PATTERN = re.compile(r'\[SELFIE:\s*([^\]]+)\]')
-DRAW_CMD_PATTERN = re.compile(r'\[DRAW:\s*([^\]]+)\]')
-TRANSFER_CMD_PATTERN = re.compile(r'\[转账[：:]\s*(-?\d+(?:\.\d+)?)\s*元\]')
+def _no_backtick(pat: re.Pattern) -> re.Pattern:
+    return re.compile(r'(?<!`)' + pat.pattern + r'(?!`)', pat.flags)
+
+MOMENT_CMD_PATTERN = _no_backtick(re.compile(r'\[MOMENT:(.+?)(?:\|(true|false))?\]'))
+MEMORY_CMD_PATTERN = _no_backtick(re.compile(r'\[MEMORY:([^\]]+)\]'))
+RECALL_CMD_PATTERN = _no_backtick(re.compile(r'\[RECALL:([^\]]+)\]'))
+ORGANIZE_CMD_PATTERN = _no_backtick(re.compile(r'\[ORGANIZE:([^\]]+)\]'))
+MEM_EDIT_PATTERN = _no_backtick(re.compile(r'\[MEM_EDIT:([^\]]+)\]'))
+ACTIVITY_CHECK_PATTERN = _no_backtick(re.compile(r'\[查看动态:(\d+)\]'))
+SELFIE_CMD_PATTERN = _no_backtick(re.compile(r'\[SELFIE:\s*([^\]]+)\]'))
+DRAW_CMD_PATTERN = _no_backtick(re.compile(r'\[DRAW:\s*([^\]]+)\]'))
+TRANSFER_CMD_PATTERN = _no_backtick(re.compile(r'\[转账[：:]\s*(-?\d+(?:\.\d+)?)\s*元\]'))
 
 # ── 活跃生成任务（用于 abort 取消） ──
 active_generations: dict[str, asyncio.Event] = {}  # conv_id → cancel_event
 VIDEO_CALL_CMD = '[视频电话]'
-THEATER_STAT_PATTERN = re.compile(r'\[剧场属性[：:]([^\s]+)\s*([+\-＋－]\d+)\]')
-THEATER_ITEM_PATTERN = re.compile(r'\[剧场道具[：:]([^\]]+)\]')
-THINK_CMD_PATTERN = re.compile(r'\[THINK:([^\]]+)\]')
+CAM_CHECK_PAT = _no_backtick(re.compile(r'\[CAM_CHECK\]'))
+VIDEO_CALL_PAT = _no_backtick(re.compile(r'\[视频电话\]'))
+THEATER_STAT_PATTERN = _no_backtick(re.compile(r'\[剧场属性[：:]([^\s]+)\s*([+\-＋－]\d+)\]'))
+THEATER_ITEM_PATTERN = _no_backtick(re.compile(r'\[剧场道具[：:]([^\]]+)\]'))
+THINK_CMD_PATTERN = _no_backtick(re.compile(r'\[THINK:([^\]]+)\]'))
 
 # 允许进入上下文的 system 消息关键词（点歌、查看监控、查看动态）
 _SYSTEM_MSG_CONTEXT_KEYWORDS = ('查看了监控', '搜索了', '点歌', '点了一首', '推荐了', '查看了动态', '视频通话')
-from context_builder import fetch_merged_timeline, render_merged_timeline, _strip_backtick_content
+from context_builder import fetch_merged_timeline, render_merged_timeline
 from music import search_songs, get_audio_url
 from schedule import process_schedule_commands, get_active_schedules, build_schedule_prompt
 from mcp_client import mcp_manager
@@ -114,13 +119,14 @@ async def _insert_msg(db, msg_id, conv_id, role, content, created_at, attachment
 
 router = APIRouter()
 
-POI_SEARCH_PATTERN = re.compile(r'\[POI_SEARCH:([^\]]+)\]')
-OBSIDIAN_READ_PATTERN   = re.compile(r'\[OBSIDIAN_READ:(\d{4}-\d{2}-\d{2})\]')
-OBSIDIAN_RECENT_PATTERN = re.compile(r'\[OBSIDIAN_RECENT:(\d+)\]')
-OBSIDIAN_SEARCH_PATTERN = re.compile(r'\[OBSIDIAN_SEARCH:([^\]]+)\]')
-TOY_CMD_PATTERN = re.compile(r'\[TOY:((?:\d|STOP)|(?:mode=\d+(?:,speed=\d+)?(?:,speed_b=\d+)?))\]')
-PET_CMD_PATTERN = re.compile(r'\[PET:([a-z_\-]+)\]', re.IGNORECASE)
-HOME_CMD_PATTERN = re.compile(r'\[HOME:([^\]]+)\]', re.IGNORECASE)
+POI_SEARCH_PATTERN = _no_backtick(re.compile(r'\[POI_SEARCH:([^\]]+)\]'))
+OBSIDIAN_READ_PATTERN   = _no_backtick(re.compile(r'\[OBSIDIAN_READ:(\d{4}-\d{2}-\d{2})\]'))
+OBSIDIAN_RECENT_PATTERN = _no_backtick(re.compile(r'\[OBSIDIAN_RECENT:(\d+)\]'))
+OBSIDIAN_SEARCH_PATTERN = _no_backtick(re.compile(r'\[OBSIDIAN_SEARCH:([^\]]+)\]'))
+TOY_CMD_PATTERN = _no_backtick(re.compile(r'\[TOY:((?:\d|STOP)|(?:mode=\d+(?:,speed=\d+)?(?:,speed_b=\d+)?))\]'))
+PET_CMD_PATTERN = _no_backtick(re.compile(r'\[PET:([a-z_\-]+)\]', re.IGNORECASE))
+HEART_CMD_PATTERN = _no_backtick(re.compile(r'\[HEART:([^\]]+)\]', re.IGNORECASE))
+HOME_CMD_PATTERN = _no_backtick(re.compile(r'\[HOME:([^\]]+)\]', re.IGNORECASE))
 META_TAG_PATTERN = re.compile(r'\s*<meta>.*?</meta>', re.DOTALL)
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 _MD_IMAGE_PATTERN = re.compile(r'!\[[^\]]*\]\(([^)]+)\)')
@@ -772,6 +778,8 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     """编辑用户消息后重新发送：更新内容 → 删除后续消息 → AI 重新回复"""
     if body.client_id:
         manager.set_last_sender(body.client_id)
+    # Aion 侧：用户在 Aion 私聊发消息
+    manager.set_aion_last_active("private")
 
     # 1. 查出原消息信息
     async with get_db() as db:
@@ -872,7 +880,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
         abilities.append(f"{CAM_CHECK_CMD} — 当你想查看{user_name}**此时此刻**的状态，不限于监督其是否去睡觉，在吃什么，在干什么时，可以主动调用指令。使用后下条消息会收到画面，查看前不要编造内容。")
     abilities.append("[ALARM:YYYY-MM-DDTHH:MM|内容] — 设置闹铃，到时间系统会主动提醒用户。日期时间用ISO格式。")
     abilities.append("[REMINDER:YYYY-MM-DD|内容] — 设置日程提醒（不闹铃），你在合适时机自然提起即可。")
-    abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了、是否在好好工作等，也可以当做下一次主动发送消息来使用，根据对话内容可以随时设定。日期时间用ISO格式。")
+    abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监控。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了，是否工作在摸鱼等，尤其是当{user_name}表示去工作或长时间做事，监督她隔一段时间起来活动一下，或者单纯想主动找她聊天，可以随意使用。日期时间用ISO格式。")
     abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
     abilities.append(HOME_ABILITY_TEXT)
     if is_activity_tracking_enabled():
@@ -897,6 +905,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
     if _is_pet_available():
         abilities.append("[PET:动作名] — 控制桌面宠物切换动画表情。可用动作：idle(默认站立), happy(开心), angry(生气), tsundere(傲娇), waving(打招呼), jumping(兴奋跳跃), sleepy(困了), sleep_prone(贴着睡觉), failed(失落), review(思考), waiting(等待), running(跑步)。根据对话情感自然使用，每条回复最多用一个。")
     abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
+    abilities.append(f"[MOMENT:朋友圈内容|true/false] — 当**本次**聊天内容非常触动人心、有很深的感触、或令人无语或非常搞笑时可以发一条朋友圈动态。第二个参数表示是否期望好友回复（true=期望回复，false=不期望），禁止滥用。")
     if SETTINGS.get("obsidian_vault_path"):
         abilities.append(f"[OBSIDIAN_READ:YYYY-MM-DD] — 查看{user_name}指定日期的Obsidian日记全文。[OBSIDIAN_RECENT:N] — 查看最近N天日记摘要（N最大14）。[OBSIDIAN_SEARCH:关键词] — 搜索日记中含某关键词的内容（最多返回10篇）。当{user_name}提到日记、某天发生的事、想回顾过去时主动使用，使用后系统会自动读取并将内容发给你，查看前不要编造内容。")
     abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。例：[MEMORY:2026年4月26日，{user_name}通过了驾照考试]")
@@ -1054,9 +1063,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
             if not has_error and (stripped.startswith('[Gemini错误') or stripped.startswith('[硅基流动错误') or stripped.startswith('[中转站错误') or stripped.startswith('[错误]') or not stripped):
                 has_error = True
 
-            clean_for_cmd = _strip_backtick_content(full_text)
-
-            music_matches = MUSIC_CMD_PATTERN.findall(clean_for_cmd)
+            music_matches = MUSIC_CMD_PATTERN.findall(full_text)
             music_cards = []
             if music_matches:
                 for keyword in music_matches:
@@ -1072,19 +1079,19 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                         pass
                 full_text = MUSIC_CMD_PATTERN.sub("", full_text).strip()
 
-            toy_matches = TOY_CMD_PATTERN.findall(clean_for_cmd)
+            toy_matches = TOY_CMD_PATTERN.findall(full_text)
             if toy_matches:
                 full_text = TOY_CMD_PATTERN.sub("", full_text).strip()
 
-            pet_matches = PET_CMD_PATTERN.findall(clean_for_cmd)
+            pet_matches = PET_CMD_PATTERN.findall(full_text)
             if pet_matches:
                 full_text = PET_CMD_PATTERN.sub("", full_text).strip()
 
-            cam_triggered = CAM_CHECK_CMD in clean_for_cmd
+            cam_triggered = bool(CAM_CHECK_PAT.search(full_text))
             if cam_triggered:
-                full_text = full_text.replace(CAM_CHECK_CMD, "").strip()
+                full_text = CAM_CHECK_PAT.sub("", full_text).strip()
 
-            activity_match = ACTIVITY_CHECK_PATTERN.search(clean_for_cmd)
+            activity_match = ACTIVITY_CHECK_PATTERN.search(full_text)
             activity_n = 0
             if activity_match:
                 try:
@@ -1094,9 +1101,9 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                 activity_n = max(1, min(12, activity_n)) if activity_n > 0 else 6
                 full_text = ACTIVITY_CHECK_PATTERN.sub("", full_text).strip()
 
-            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(clean_for_cmd)
-            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(clean_for_cmd)
-            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(clean_for_cmd)
+            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(full_text)
+            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(full_text)
+            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(full_text)
             if obsidian_read_match:
                 full_text = OBSIDIAN_READ_PATTERN.sub("", full_text).strip()
             if obsidian_recent_match:
@@ -1104,16 +1111,16 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
             if obsidian_search_match:
                 full_text = OBSIDIAN_SEARCH_PATTERN.sub("", full_text).strip()
 
-            poi_matches = POI_SEARCH_PATTERN.findall(clean_for_cmd)
+            poi_matches = POI_SEARCH_PATTERN.findall(full_text)
             if poi_matches:
                 full_text = POI_SEARCH_PATTERN.sub("", full_text).strip()
 
-            video_call_triggered = VIDEO_CALL_CMD in clean_for_cmd
+            video_call_triggered = bool(VIDEO_CALL_PAT.search(full_text))
             if video_call_triggered:
-                full_text = full_text.replace(VIDEO_CALL_CMD, "").strip()
+                full_text = VIDEO_CALL_PAT.sub("", full_text).strip()
 
-            selfie_match = SELFIE_CMD_PATTERN.search(clean_for_cmd)
-            draw_match = DRAW_CMD_PATTERN.search(clean_for_cmd)
+            selfie_match = SELFIE_CMD_PATTERN.search(full_text)
+            draw_match = DRAW_CMD_PATTERN.search(full_text)
             image_gen_prompt = None
             image_gen_is_selfie = False
             if selfie_match:
@@ -1124,10 +1131,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                 image_gen_prompt = draw_match.group(1).strip()
                 full_text = DRAW_CMD_PATTERN.sub("", full_text).strip()
 
-            full_text = await process_schedule_commands(full_text, conv_id)
-            full_text = await _process_home_commands(full_text)
-
-            heart_matches = HEART_CMD_PATTERN.findall(clean_for_cmd)
+            heart_matches = HEART_CMD_PATTERN.findall(full_text)
             if heart_matches:
                 full_text = HEART_CMD_PATTERN.sub("", full_text).strip()
                 for hw_content in heart_matches:
@@ -1141,11 +1145,34 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                                 (hw_id, conv_id, ai_msg_id, hw_content, hw_now)
                             )
                             await hw_db.commit()
-                        hw_data = {'type': 'heart_whisper', 'id': hw_id, 'msg_id': ai_msg_id, 'content': hw_content, 'created_at': hw_now}
-                        await _q.put(hw_data)
-                        await manager.broadcast({"type": "heart_whisper", "data": hw_data})
 
-            memory_matches = MEMORY_CMD_PATTERN.findall(clean_for_cmd)
+            moment_matches = MOMENT_CMD_PATTERN.findall(full_text)
+            if moment_matches:
+                full_text = MOMENT_CMD_PATTERN.sub("", full_text).strip()
+                for mt_content, mt_reply in moment_matches:
+                    mt_content = mt_content.strip()
+                    if mt_content:
+                        mt_now = time.time()
+                        mt_id = f"mt_{int(mt_now*1000)}"
+                        expect = 1 if mt_reply == "true" else 0
+                        async with get_db() as mt_db:
+                            await mt_db.execute(
+                                "INSERT INTO moments (id, author, content, source_conv, source_msg_id, expect_reply, created_at) VALUES (?,?,?,?,?,?,?)",
+                                (mt_id, "aion", mt_content, conv_id, ai_msg_id, expect, mt_now)
+                            )
+                            await mt_db.commit()
+                        mt_data = {"type": "moment_new", "data": {
+                            "id": mt_id, "author": "aion", "content": mt_content,
+                            "expect_reply": expect, "created_at": mt_now,
+                            "comments": [], "reactions": [],
+                        }}
+                        await _q.put(mt_data)
+                        await manager.broadcast(mt_data)
+                        if expect:
+                            from routes.moments import _trigger_ai_replies
+                            asyncio.create_task(_trigger_ai_replies(mt_id, exclude_author="aion"))
+
+            memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
             if memory_matches:
                 full_text = MEMORY_CMD_PATTERN.sub("", full_text).strip()
                 for mem_content in memory_matches:
@@ -1167,7 +1194,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                         await _q.put(mr_data)
 
             # 检测主动检索指令 → 异步追加回复
-            recall_matches = RECALL_CMD_PATTERN.findall(clean_for_cmd)
+            recall_matches = RECALL_CMD_PATTERN.findall(full_text)
             recall_all_kws = []
             if recall_matches:
                 full_text = RECALL_CMD_PATTERN.sub("", full_text).strip()
@@ -1176,7 +1203,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                     if kws:
                         recall_all_kws.append(kws)
 
-            organize_matches = ORGANIZE_CMD_PATTERN.findall(clean_for_cmd)
+            organize_matches = ORGANIZE_CMD_PATTERN.findall(full_text)
             if organize_matches:
                 full_text = ORGANIZE_CMD_PATTERN.sub("", full_text).strip()
                 for keywords_str in organize_matches:
@@ -1185,7 +1212,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                     result = await organize_memories(kws)
                     print(f"[ORGANIZE] {result}")
 
-            mem_edit_matches = MEM_EDIT_PATTERN.findall(clean_for_cmd)
+            mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
             if mem_edit_matches:
                 full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
                 from active_recall import execute_mem_edit
@@ -1194,7 +1221,7 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                     print(f"[MEM_EDIT] {result}")
 
             # 检测 [转账：N元] 指令 — AI 转账入账（不从 full_text 中剥离，前端渲染卡片需要）
-            transfer_matches = TRANSFER_CMD_PATTERN.findall(clean_for_cmd)
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
             for t_amount_str in transfer_matches:
                 try:
                     t_val = float(t_amount_str)
@@ -1208,6 +1235,27 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                     pass
 
             full_text = META_TAG_PATTERN.sub("", full_text).strip()
+
+            # 检测 [转账：N元] 指令 — AI 转账入账（不从 full_text 中剥离，前端渲染卡片需要）
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
+            for t_amount_str in transfer_matches:
+                try:
+                    t_val = float(t_amount_str)
+                    if t_val > 0:
+                        _a_n = wb.get('ai_name', 'AI')
+                        _u_n = wb.get('user_name', '用户')
+                        async with get_db() as t_db:
+                            t_now = time.time()
+                            t_id = f"wt_{int(t_now*1000)}"
+                            await t_db.execute(
+                                "INSERT INTO bookkeeping (id, record_type, amount, description, created_at) VALUES (?,?,?,?,?)",
+                                (t_id, 'wallet_ai', -t_val, f'{_a_n}转账给{_u_n} {t_val}元', t_now)
+                            )
+                            await t_db.commit()
+                        await manager.broadcast({"type": "wallet_update"})
+                        print(f"[WALLET] AI 转账: -{t_val}元")
+                except (ValueError, Exception):
+                    pass
 
             music_atts = [{"type": "music", "name": s["name"], "artist": s["artist"], "id": s["id"]} for s in music_cards] if music_cards else []
             full_text, image_atts = _extract_reply_image_attachments(full_text)
@@ -1327,6 +1375,8 @@ async def send_message(conv_id: str, body: MsgCreate):
     # 记录最后发消息的客户端 ID
     if body.client_id:
         manager.set_last_sender(body.client_id)
+    # Aion 侧：用户在 Aion 私聊发消息
+    manager.set_aion_last_active("private")
     now = time.time()
     msg_id = f"msg_{int(now*1000)}"
 
@@ -1339,6 +1389,13 @@ async def send_message(conv_id: str, body: MsgCreate):
     user_msg = {"id": msg_id, "conv_id": conv_id, "role": "user", "content": body.content,
                 "created_at": now, "attachments": body.attachments}
     await manager.broadcast({"type": "msg_created", "data": user_msg})
+
+    # 用户发消息时重置哨兵巡逻计时器
+    try:
+        if cam and hasattr(cam, 'reset_patrol_timer'):
+            cam.reset_patrol_timer()
+    except Exception:
+        pass
 
     # 检测用户消息中的 [转账：N元] → 入账
     user_transfer_matches = TRANSFER_CMD_PATTERN.findall(body.content)
@@ -1424,6 +1481,7 @@ async def send_message(conv_id: str, body: MsgCreate):
     abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监督。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了、是否在好好工作等，也可以当做下一次主动发送消息来使用，根据对话内容可以随时设定。日期时间用ISO格式。")
     abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
     abilities.append(HOME_ABILITY_TEXT)
+    # 活动动态查看能力
     if is_activity_tracking_enabled():
         abilities.append(f"[查看动态:n] — 查看{user_name}过去n×10分钟的设备使用动态（n为1~12的整数，例如[查看动态:2]查看过去20分钟，[查看动态:6]查看过去1小时）。当你好奇{user_name}最近在干什么、想了解{user_name}的设备使用情况时可以使用。使用后下条消息会收到动态摘要，查看前不要编造内容。")
     # 位置相关能力
@@ -1447,6 +1505,7 @@ async def send_message(conv_id: str, body: MsgCreate):
     if _is_pet_available():
         abilities.append("[PET:动作名] — 控制桌面宠物切换动画表情。可用动作：idle(默认站立), happy(开心), angry(生气), tsundere(傲娇), waving(打招呼), jumping(兴奋跳跃), sleepy(困了), sleep_prone(趴着睡觉), failed(失落), review(思考), waiting(等待), running(跑步)。根据对话情感自然使用，每条回复最多用一个。")
     abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
+    abilities.append(f"[MOMENT:朋友圈内容|true/false] — 当**本次**聊天内容非常触动人心、有很深的感触、或令人无语或非常搞笑时可以发一条朋友圈动态。第二个参数表示是否期望好友回复（true=期望回复，false=不期望），禁止滥用。")
     if SETTINGS.get("obsidian_vault_path"):
         abilities.append(f"[OBSIDIAN_READ:YYYY-MM-DD] — 查看{user_name}指定日期的Obsidian日记全文。[OBSIDIAN_RECENT:N] — 查看最近N天日记摘要（N最大14）。[OBSIDIAN_SEARCH:关键词] — 搜索日记中含某关键词的内容（最多返回10篇）。当{user_name}提到日记、某天发生的事、想回顾过去时主动使用，使用后系统会自动读取并将内容发给你，查看前不要编造内容。")
     abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。例：[MEMORY:2026年4月26日，{user_name}通过了驾照考试]")
@@ -1692,8 +1751,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                 has_error = True
 
             # 检测 [MUSIC:xxx] 指令 → 搜索歌曲并推送卡片数据
-            clean_for_cmd = _strip_backtick_content(full_text)
-            music_matches = MUSIC_CMD_PATTERN.findall(clean_for_cmd)
+            music_matches = MUSIC_CMD_PATTERN.findall(full_text)
             music_cards = []
             if music_matches:
                 for keyword in music_matches:
@@ -1710,22 +1768,22 @@ async def send_message(conv_id: str, body: MsgCreate):
                 full_text = MUSIC_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [TOY:x] 指令
-            toy_matches = TOY_CMD_PATTERN.findall(clean_for_cmd)
+            toy_matches = TOY_CMD_PATTERN.findall(full_text)
             if toy_matches:
                 full_text = TOY_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [PET:xxx] 桌宠指令
-            pet_matches = PET_CMD_PATTERN.findall(clean_for_cmd)
+            pet_matches = PET_CMD_PATTERN.findall(full_text)
             if pet_matches:
                 full_text = PET_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [CAM_CHECK] 指令
-            cam_triggered = CAM_CHECK_CMD in clean_for_cmd
+            cam_triggered = bool(CAM_CHECK_PAT.search(full_text))
             if cam_triggered:
-                full_text = full_text.replace(CAM_CHECK_CMD, "").strip()
+                full_text = CAM_CHECK_PAT.sub("", full_text).strip()
 
             # 检测 [查看动态:n] 指令
-            activity_match = ACTIVITY_CHECK_PATTERN.search(clean_for_cmd)
+            activity_match = ACTIVITY_CHECK_PATTERN.search(full_text)
             activity_n = 0
             if activity_match:
                 try:
@@ -1736,9 +1794,9 @@ async def send_message(conv_id: str, body: MsgCreate):
                 full_text = ACTIVITY_CHECK_PATTERN.sub("", full_text).strip()
 
             # 检测 Obsidian 日记指令
-            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(clean_for_cmd)
-            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(clean_for_cmd)
-            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(clean_for_cmd)
+            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(full_text)
+            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(full_text)
+            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(full_text)
             if obsidian_read_match:
                 full_text = OBSIDIAN_READ_PATTERN.sub("", full_text).strip()
             if obsidian_recent_match:
@@ -1747,18 +1805,18 @@ async def send_message(conv_id: str, body: MsgCreate):
                 full_text = OBSIDIAN_SEARCH_PATTERN.sub("", full_text).strip()
 
             # 检测 [POI_SEARCH:xxx] 指令 → 标记，后续触发自动搜索+追加回复
-            poi_matches = POI_SEARCH_PATTERN.findall(clean_for_cmd)
+            poi_matches = POI_SEARCH_PATTERN.findall(full_text)
             if poi_matches:
                 full_text = POI_SEARCH_PATTERN.sub("", full_text).strip()
 
             # 检测 [视频电话] 指令
-            video_call_triggered = VIDEO_CALL_CMD in clean_for_cmd
+            video_call_triggered = bool(VIDEO_CALL_PAT.search(full_text))
             if video_call_triggered:
-                full_text = full_text.replace(VIDEO_CALL_CMD, "").strip()
+                full_text = VIDEO_CALL_PAT.sub("", full_text).strip()
 
             # 检测 [SELFIE:xxx] / [DRAW:xxx] 生图指令
-            selfie_match = SELFIE_CMD_PATTERN.search(clean_for_cmd)
-            draw_match = DRAW_CMD_PATTERN.search(clean_for_cmd)
+            selfie_match = SELFIE_CMD_PATTERN.search(full_text)
+            draw_match = DRAW_CMD_PATTERN.search(full_text)
             image_gen_prompt = None
             image_gen_is_selfie = False
             if selfie_match:
@@ -1774,7 +1832,7 @@ async def send_message(conv_id: str, body: MsgCreate):
             full_text = await _process_home_commands(full_text)
 
             # 检测 [HEART:xxx] 心语指令
-            heart_matches = HEART_CMD_PATTERN.findall(clean_for_cmd)
+            heart_matches = HEART_CMD_PATTERN.findall(full_text)
             if heart_matches:
                 full_text = HEART_CMD_PATTERN.sub("", full_text).strip()
                 for hw_content in heart_matches:
@@ -1788,12 +1846,36 @@ async def send_message(conv_id: str, body: MsgCreate):
                                 (hw_id, conv_id, ai_msg_id, hw_content, hw_now)
                             )
                             await hw_db.commit()
-                        hw_data = {'type': 'heart_whisper', 'id': hw_id, 'msg_id': ai_msg_id, 'content': hw_content, 'created_at': hw_now}
-                        await _q.put(hw_data)
-                        await manager.broadcast({"type": "heart_whisper", "data": hw_data})
+
+            # 检测 [MOMENT:...] 朋友圈指令
+            moment_matches = MOMENT_CMD_PATTERN.findall(full_text)
+            if moment_matches:
+                full_text = MOMENT_CMD_PATTERN.sub("", full_text).strip()
+                for mt_content, mt_reply in moment_matches:
+                    mt_content = mt_content.strip()
+                    if mt_content:
+                        mt_now = time.time()
+                        mt_id = f"mt_{int(mt_now*1000)}"
+                        expect = 1 if mt_reply == "true" else 0
+                        async with get_db() as mt_db:
+                            await mt_db.execute(
+                                "INSERT INTO moments (id, author, content, source_conv, source_msg_id, expect_reply, created_at) VALUES (?,?,?,?,?,?,?)",
+                                (mt_id, "aion", mt_content, conv_id, ai_msg_id, expect, mt_now)
+                            )
+                            await mt_db.commit()
+                        mt_data = {"type": "moment_new", "data": {
+                            "id": mt_id, "author": "aion", "content": mt_content,
+                            "expect_reply": expect, "created_at": mt_now,
+                            "comments": [], "reactions": [],
+                        }}
+                        await _q.put(mt_data)
+                        await manager.broadcast(mt_data)
+                        if expect:
+                            from routes.moments import _trigger_ai_replies
+                            asyncio.create_task(_trigger_ai_replies(mt_id, exclude_author="aion"))
 
             # 检测 [MEMORY:xxx] 记忆录入指令
-            memory_matches = MEMORY_CMD_PATTERN.findall(clean_for_cmd)
+            memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
             if memory_matches:
                 full_text = MEMORY_CMD_PATTERN.sub("", full_text).strip()
                 for mem_content in memory_matches:
@@ -1816,7 +1898,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                         print(f"[MEMORY] AI 录入卡片: {mem_content[:50]}")
 
             # 检测主动检索指令 → 异步追加回复
-            recall_matches = RECALL_CMD_PATTERN.findall(clean_for_cmd)
+            recall_matches = RECALL_CMD_PATTERN.findall(full_text)
             recall_all_kws = []
             if recall_matches:
                 full_text = RECALL_CMD_PATTERN.sub("", full_text).strip()
@@ -1825,7 +1907,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                     if kws:
                         recall_all_kws.append(kws)
 
-            organize_matches = ORGANIZE_CMD_PATTERN.findall(clean_for_cmd)
+            organize_matches = ORGANIZE_CMD_PATTERN.findall(full_text)
             if organize_matches:
                 full_text = ORGANIZE_CMD_PATTERN.sub("", full_text).strip()
                 for keywords_str in organize_matches:
@@ -1835,11 +1917,11 @@ async def send_message(conv_id: str, body: MsgCreate):
                     print(f"[ORGANIZE] {result}")
 
             # 检测 [THINK:xxx] 背景思考指令
-            think_matches = THINK_CMD_PATTERN.findall(clean_for_cmd)
+            think_matches = THINK_CMD_PATTERN.findall(full_text)
             if think_matches:
                 full_text = THINK_CMD_PATTERN.sub("", full_text).strip()
 
-            mem_edit_matches = MEM_EDIT_PATTERN.findall(clean_for_cmd)
+            mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
             if mem_edit_matches:
                 full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
                 from active_recall import execute_mem_edit
@@ -1847,11 +1929,32 @@ async def send_message(conv_id: str, body: MsgCreate):
                     result = await execute_mem_edit(raw)
                     print(f"[MEM_EDIT] {result}")
 
+            # 检测 [转账：N元] 指令 — AI 转账入账
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
+            for t_amount_str in transfer_matches:
+                try:
+                    t_val = float(t_amount_str)
+                    if t_val > 0:
+                        _a_n = wb.get('ai_name', 'AI')
+                        _u_n = wb.get('user_name', '用户')
+                        async with get_db() as t_db:
+                            t_now = time.time()
+                            t_id = f"wt_{int(t_now*1000)}"
+                            await t_db.execute(
+                                "INSERT INTO bookkeeping (id, record_type, amount, description, created_at) VALUES (?,?,?,?,?)",
+                                (t_id, 'wallet_ai', -t_val, f'{_a_n}转账给{_u_n} {t_val}元', t_now)
+                            )
+                            await t_db.commit()
+                        await manager.broadcast({"type": "wallet_update"})
+                        print(f"[WALLET] AI 转账: -{t_val}元")
+                except (ValueError, Exception):
+                    pass
+
             # 检测剧场指令 [剧场属性：xxx ±N] / [剧场道具：xxx]
             theater_updates = []
             if theater_session:
                 stat_name_map = {"hp": "hp", "HP": "hp", "力量": "str", "敏捷": "dex", "智力": "int", "魅力": "cha", "幸运": "lck"}
-                theater_stat_matches = THEATER_STAT_PATTERN.findall(clean_for_cmd)
+                theater_stat_matches = THEATER_STAT_PATTERN.findall(full_text)
                 for stat_name, val_str in theater_stat_matches:
                     stat_name = stat_name.strip()
                     val = int(val_str.replace('＋', '+').replace('－', '-'))
@@ -1868,7 +1971,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                             theater_updates.append({"type": "stat", "name": label, "value": val})
                             print(f"[剧场] 属性变更: {label} {'+' if val > 0 else ''}{val}")
 
-                theater_item_matches = THEATER_ITEM_PATTERN.findall(clean_for_cmd)
+                theater_item_matches = THEATER_ITEM_PATTERN.findall(full_text)
                 for item_name in theater_item_matches:
                     item_name = item_name.strip()
                     if item_name:
@@ -1887,7 +1990,7 @@ async def send_message(conv_id: str, body: MsgCreate):
                             print(f"[剧场] 道具赠送: {item_name}")
 
             # 检测 [转账：N元] 指令 — AI 转账入账
-            transfer_matches = TRANSFER_CMD_PATTERN.findall(clean_for_cmd)
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
             for t_amount_str in transfer_matches:
                 try:
                     t_val = float(t_amount_str)
@@ -2397,8 +2500,7 @@ async def perform_recall_check(conv_id: str, model_key: str, all_keywords: list[
     if not full_text.strip():
         return
 
-    clean_for_cmd = _strip_backtick_content(full_text)
-    mem_edit_matches = MEM_EDIT_PATTERN.findall(clean_for_cmd)
+    mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
     if mem_edit_matches:
         full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
         from active_recall import execute_mem_edit
@@ -2804,7 +2906,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
         abilities.append(f"{CAM_CHECK_CMD} — 查看{user_name}的实时监控画面。使用后下条消息会收到画面，查看前不要编造内容。")
     abilities.append("[ALARM:YYYY-MM-DDTHH:MM|内容] — 设置闹铃，到时间系统会主动提醒用户。日期时间用ISO格式。")
     abilities.append("[REMINDER:YYYY-MM-DD|内容] — 设置日程提醒（不闹铃），你在合适时机自然提起即可。")
-    abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监控。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了等，尤其是当{user_name}表示去工作或长时间做事，监督她隔一段时间起来活动一下。日期时间用ISO格式。")
+    abilities.append(f"[Monitor:YYYY-MM-DDTHH:MM|内容] — 设置定时监控。到时间后系统自动截取摄像头画面发送给你，你可以查看{user_name}的状态。例如检查{user_name}是否去运动了、是否关灯睡觉了，是否工作在摸鱼等，尤其是当{user_name}表示去工作或长时间做事，监督她隔一段时间起来活动一下，或者单纯想主动找她聊天，可以随意使用。日期时间用ISO格式。")
     abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
     abilities.append(HOME_ABILITY_TEXT)
     # 活动动态查看能力
@@ -2831,6 +2933,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
     if _is_pet_available():
         abilities.append("[PET:动作名] — 控制桌面宠物切换动画表情。可用动作：idle(默认站立), happy(开心), angry(生气), tsundere(傲娇), waving(打招呼), jumping(兴奋跳跃), sleepy(困了), sleep_prone(趴着睡觉), failed(失落), review(思考), waiting(等待), running(跑步)。根据对话情感自然使用，每条回复最多用一个。")
     abilities.append(f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。")
+    abilities.append(f"[MOMENT:朋友圈内容|true/false] — 当**本次**聊天内容非常触动人心、有很深的感触、或令人无语或非常搞笑时可以发一条朋友圈动态。第二个参数表示是否期望好友回复（true=期望回复，false=不期望），禁止滥用。")
     if SETTINGS.get("obsidian_vault_path"):
         abilities.append(f"[OBSIDIAN_READ:YYYY-MM-DD] — 查看{user_name}指定日期的Obsidian日记全文。[OBSIDIAN_RECENT:N] — 查看最近N天日记摘要（N最大14）。[OBSIDIAN_SEARCH:关键词] — 搜索日记中含某关键词的内容（最多返回10篇）。当{user_name}提到日记、某天发生的事、想回顾过去时主动使用，使用后系统会自动读取并将内容发给你，查看前不要编造内容。")
     abilities.append(f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你记住某件事的时候，可以用该指令录入记忆库。禁止滥用。例：[MEMORY:2026年4月26日，{user_name}通过了驾照考试]")
@@ -3008,8 +3111,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 has_error = True
 
             # 检测 [MUSIC:xxx] 指令 → 搜索歌曲并推送卡片数据
-            clean_for_cmd = _strip_backtick_content(full_text)
-            music_matches = MUSIC_CMD_PATTERN.findall(clean_for_cmd)
+            music_matches = MUSIC_CMD_PATTERN.findall(full_text)
             music_cards = []
             if music_matches:
                 for keyword in music_matches:
@@ -3026,22 +3128,22 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                 full_text = MUSIC_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [TOY:x] 指令
-            toy_matches = TOY_CMD_PATTERN.findall(clean_for_cmd)
+            toy_matches = TOY_CMD_PATTERN.findall(full_text)
             if toy_matches:
                 full_text = TOY_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [PET:xxx] 桌宠指令
-            pet_matches = PET_CMD_PATTERN.findall(clean_for_cmd)
+            pet_matches = PET_CMD_PATTERN.findall(full_text)
             if pet_matches:
                 full_text = PET_CMD_PATTERN.sub("", full_text).strip()
 
             # 检测 [CAM_CHECK] 指令
-            cam_triggered = CAM_CHECK_CMD in clean_for_cmd
+            cam_triggered = bool(CAM_CHECK_PAT.search(full_text))
             if cam_triggered:
-                full_text = full_text.replace(CAM_CHECK_CMD, "").strip()
+                full_text = CAM_CHECK_PAT.sub("", full_text).strip()
 
             # 检测 [查看动态:n] 指令
-            activity_match = ACTIVITY_CHECK_PATTERN.search(clean_for_cmd)
+            activity_match = ACTIVITY_CHECK_PATTERN.search(full_text)
             activity_n = 0
             if activity_match:
                 try:
@@ -3053,9 +3155,9 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
 
             # 检测 [POI_SEARCH:xxx] 指令
             # 检测 Obsidian 日记指令
-            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(clean_for_cmd)
-            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(clean_for_cmd)
-            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(clean_for_cmd)
+            obsidian_read_match = OBSIDIAN_READ_PATTERN.search(full_text)
+            obsidian_recent_match = OBSIDIAN_RECENT_PATTERN.search(full_text)
+            obsidian_search_match = OBSIDIAN_SEARCH_PATTERN.search(full_text)
             if obsidian_read_match:
                 full_text = OBSIDIAN_READ_PATTERN.sub("", full_text).strip()
             if obsidian_recent_match:
@@ -3063,18 +3165,18 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
             if obsidian_search_match:
                 full_text = OBSIDIAN_SEARCH_PATTERN.sub("", full_text).strip()
 
-            poi_matches = POI_SEARCH_PATTERN.findall(clean_for_cmd)
+            poi_matches = POI_SEARCH_PATTERN.findall(full_text)
             if poi_matches:
                 full_text = POI_SEARCH_PATTERN.sub("", full_text).strip()
 
             # 检测 [视频电话] 指令
-            video_call_triggered = VIDEO_CALL_CMD in clean_for_cmd
+            video_call_triggered = bool(VIDEO_CALL_PAT.search(full_text))
             if video_call_triggered:
-                full_text = full_text.replace(VIDEO_CALL_CMD, "").strip()
+                full_text = VIDEO_CALL_PAT.sub("", full_text).strip()
 
             # 检测 [SELFIE:xxx] / [DRAW:xxx] 生图指令
-            selfie_match = SELFIE_CMD_PATTERN.search(clean_for_cmd)
-            draw_match = DRAW_CMD_PATTERN.search(clean_for_cmd)
+            selfie_match = SELFIE_CMD_PATTERN.search(full_text)
+            draw_match = DRAW_CMD_PATTERN.search(full_text)
             image_gen_prompt = None
             image_gen_is_selfie = False
             if selfie_match:
@@ -3090,7 +3192,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
             full_text = await _process_home_commands(full_text)
 
             # 检测 [HEART:xxx] 心语指令
-            heart_matches = HEART_CMD_PATTERN.findall(clean_for_cmd)
+            heart_matches = HEART_CMD_PATTERN.findall(full_text)
             if heart_matches:
                 full_text = HEART_CMD_PATTERN.sub("", full_text).strip()
                 for hw_content in heart_matches:
@@ -3104,12 +3206,36 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                                 (hw_id, conv_id, ai_msg_id, hw_content, hw_now)
                             )
                             await hw_db.commit()
-                        hw_data = {'type': 'heart_whisper', 'id': hw_id, 'msg_id': ai_msg_id, 'content': hw_content, 'created_at': hw_now}
-                        await _q.put(hw_data)
-                        await manager.broadcast({"type": "heart_whisper", "data": hw_data})
+
+            # 检测 [MOMENT:...] 朋友圈指令
+            moment_matches = MOMENT_CMD_PATTERN.findall(full_text)
+            if moment_matches:
+                full_text = MOMENT_CMD_PATTERN.sub("", full_text).strip()
+                for mt_content, mt_reply in moment_matches:
+                    mt_content = mt_content.strip()
+                    if mt_content:
+                        mt_now = time.time()
+                        mt_id = f"mt_{int(mt_now*1000)}"
+                        expect = 1 if mt_reply == "true" else 0
+                        async with get_db() as mt_db:
+                            await mt_db.execute(
+                                "INSERT INTO moments (id, author, content, source_conv, source_msg_id, expect_reply, created_at) VALUES (?,?,?,?,?,?,?)",
+                                (mt_id, "aion", mt_content, conv_id, ai_msg_id, expect, mt_now)
+                            )
+                            await mt_db.commit()
+                        mt_data = {"type": "moment_new", "data": {
+                            "id": mt_id, "author": "aion", "content": mt_content,
+                            "expect_reply": expect, "created_at": mt_now,
+                            "comments": [], "reactions": [],
+                        }}
+                        await _q.put(mt_data)
+                        await manager.broadcast(mt_data)
+                        if expect:
+                            from routes.moments import _trigger_ai_replies
+                            asyncio.create_task(_trigger_ai_replies(mt_id, exclude_author="aion"))
 
             # 检测 [MEMORY:xxx] 记忆录入指令
-            memory_matches = MEMORY_CMD_PATTERN.findall(clean_for_cmd)
+            memory_matches = MEMORY_CMD_PATTERN.findall(full_text)
             if memory_matches:
                 full_text = MEMORY_CMD_PATTERN.sub("", full_text).strip()
                 for mem_content in memory_matches:
@@ -3132,7 +3258,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                         print(f"[MEMORY] AI 录入卡片: {mem_content[:50]}")
 
             # 检测主动检索指令 → 异步追加回复
-            recall_matches = RECALL_CMD_PATTERN.findall(clean_for_cmd)
+            recall_matches = RECALL_CMD_PATTERN.findall(full_text)
             recall_all_kws = []
             if recall_matches:
                 full_text = RECALL_CMD_PATTERN.sub("", full_text).strip()
@@ -3141,7 +3267,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                     if kws:
                         recall_all_kws.append(kws)
 
-            organize_matches = ORGANIZE_CMD_PATTERN.findall(clean_for_cmd)
+            organize_matches = ORGANIZE_CMD_PATTERN.findall(full_text)
             if organize_matches:
                 full_text = ORGANIZE_CMD_PATTERN.sub("", full_text).strip()
                 for keywords_str in organize_matches:
@@ -3150,7 +3276,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                     result = await organize_memories(kws)
                     print(f"[ORGANIZE] {result}")
 
-            mem_edit_matches = MEM_EDIT_PATTERN.findall(clean_for_cmd)
+            mem_edit_matches = MEM_EDIT_PATTERN.findall(full_text)
             if mem_edit_matches:
                 full_text = MEM_EDIT_PATTERN.sub("", full_text).strip()
                 from active_recall import execute_mem_edit
@@ -3159,7 +3285,7 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                     print(f"[MEM_EDIT] {result}")
 
             # 检测 [转账：N元] 指令 — AI 转账入账
-            transfer_matches = TRANSFER_CMD_PATTERN.findall(clean_for_cmd)
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
             for t_amount_str in transfer_matches:
                 try:
                     t_val = float(t_amount_str)
@@ -3167,6 +3293,27 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                         _a_n = wb.get('ai_name', 'AI')
                         _u_n = wb.get('user_name', '用户')
                         await record_transfer(-t_val, 'ai', f'{_a_n}转账给{_u_n} {t_val}元')
+                        await manager.broadcast({"type": "wallet_update"})
+                        print(f"[WALLET] AI 转账: -{t_val}元")
+                except (ValueError, Exception):
+                    pass
+
+            # 检测 [转账：N元] 指令 — AI 转账入账
+            transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)
+            for t_amount_str in transfer_matches:
+                try:
+                    t_val = float(t_amount_str)
+                    if t_val > 0:
+                        _a_n = wb.get('ai_name', 'AI')
+                        _u_n = wb.get('user_name', '用户')
+                        async with get_db() as t_db:
+                            t_now = time.time()
+                            t_id = f"wt_{int(t_now*1000)}"
+                            await t_db.execute(
+                                "INSERT INTO bookkeeping (id, record_type, amount, description, created_at) VALUES (?,?,?,?,?)",
+                                (t_id, 'wallet_ai', -t_val, f'{_a_n}转账给{_u_n} {t_val}元', t_now)
+                            )
+                            await t_db.commit()
                         await manager.broadcast({"type": "wallet_update"})
                         print(f"[WALLET] AI 转账: -{t_val}元")
                 except (ValueError, Exception):

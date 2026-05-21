@@ -137,6 +137,12 @@ public class BleBridge {
             callJs("toyNativeBle.onError('蓝牙未开启')");
             return;
         }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S
+                && context.checkSelfPermission("android.permission.BLUETOOTH_ADVERTISE")
+                   != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            callJs("toyNativeBle.onError('缺少蓝牙广播权限，请在系统设置中授权')");
+            return;
+        }
         BluetoothLeAdvertiser advertiser = adapter.getBluetoothLeAdvertiser();
         if (advertiser == null) {
             callJs("toyNativeBle.onError('此设备不支持BLE广播')");

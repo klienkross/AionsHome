@@ -70,6 +70,55 @@ def get_key(provider: str) -> str:
     # 自定义端点：provider 传入 key_name，从 custom_keys 映射中取
     return SETTINGS.get("custom_keys", {}).get(provider, "")
 
+def get_sentinel_config() -> dict:
+    """
+    返回哨兵/前置模型的配置。
+    若用户配置了自定义 URL，走 OpenAI 兼容格式；否则走 Gemini 原生 API。
+    返回: {"base_url": str, "api_key": str, "model": str, "use_openai": bool}
+    """
+    base_url = SETTINGS.get("sentinel_base_url", "").strip()
+    api_key = SETTINGS.get("sentinel_api_key", "").strip()
+    model = SETTINGS.get("sentinel_model", "").strip()
+    if base_url and api_key:
+        # 自定义中转站 / 硅基流动等 OpenAI 兼容
+        return {
+            "base_url": base_url.rstrip("/"),
+            "api_key": api_key,
+            "model": model or "Qwen/Qwen3.6-35B-A3B",
+            "use_openai": True,
+        }
+    # 默认走 Gemini 原生
+    return {
+        "base_url": "",
+        "api_key": get_key("gemini_free"),
+        "model": model or "gemini-3.1-flash-lite",
+        "use_openai": False,
+    }
+
+def get_embedding_config() -> dict:
+    """
+    返回向量模型配置。
+    若用户配置了自定义 URL，走 OpenAI 兼容格式；否则走 Gemini 原生 API。
+    返回: {"base_url": str, "api_key": str, "model": str, "use_openai": bool}
+    """
+    base_url = SETTINGS.get("embedding_base_url", "").strip()
+    api_key = SETTINGS.get("embedding_api_key", "").strip()
+    model = SETTINGS.get("embedding_model", "").strip()
+    if base_url and api_key:
+        return {
+            "base_url": base_url.rstrip("/"),
+            "api_key": api_key,
+            "model": model or "Qwen/Qwen3-Embedding-8B",
+            "use_openai": True,
+        }
+    # 默认走 Gemini 原生
+    return {
+        "base_url": "",
+        "api_key": get_key("gemini_free"),
+        "model": model or "gemini-embedding-001",
+        "use_openai": False,
+    }
+
 # ── Worldbook ────────────────────────────────────
 def load_worldbook():
     if WORLDBOOK_PATH.exists():
@@ -141,6 +190,7 @@ MODELS = {
     "gemini-2.5-pro":        {"provider": "gemini", "model": "gemini-2.5-pro"},
     "gemini-3-flash":        {"provider": "gemini", "model": "gemini-3-flash-preview"},
     "gemini-3.1-pro":        {"provider": "gemini", "model": "gemini-3.1-pro-preview"},
+    "gemini-3.1-lite":       {"provider": "gemini", "model": "gemini-3.1-flash-lite"},
     "claude-sonnet-4-6":  {"provider": "aipro", "model": "claude-sonnet-4-6"},
     "claude-opus4.6":    {"provider": "aipro", "model": "claude-opus-4-6"},
     "claude-opus4.6T":    {"provider": "aipro", "model": "claude-opus-4-6-thinking"},

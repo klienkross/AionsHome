@@ -24,7 +24,7 @@ _STRIP_PATTERNS = [
     re.compile(r'\[SCHEDULE_DEL:[^\]]*\]'),
     re.compile(r'\[SCHEDULE_LIST\]'),
     re.compile(r'\[TOY:[^\]]*\]'),
-    re.compile(r'\[HEART:[^\]]*\]'),
+    re.compile(r'\[MOMENT:[^\]]*\]'),
     re.compile(r'\[MEMORY:[^\]]*\]'),
     re.compile(r'\[查看动态:\d+\]'),
     re.compile(r'\[SELFIE:[^\]]*\]'),

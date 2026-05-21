@@ -40,6 +40,9 @@ aion-chat/data/fund_cache.json
 aion-chat/data/chatroom_config.json
 aion-chat/data/chatroom_images/
 aion-chat/data/mcp_servers.json
+aion-chat/data/home_assistant_mcp.json
+aion-chat/data/home_assistant_aliases.json
+aion-chat/data/homeassistant-config/
 aion-chat/data/wallpaper_config.json
 aion-chat/data/cert.pem
 aion-chat/data/key.pem
@@ -47,6 +50,11 @@ aion-chat/data/tmp/
 
 # ── 实验缓存 ──
 aion-chat/tools/recall_eval_data.json
+aion-chat/tools/*.py
+aion-chat/tools/*.txt
+aion-chat/data/activity_archive/
+cookies.json
+tools/
 
 # ── Connor-Codex 用户数据 ──
 Connor-Codex/messages.jsonl

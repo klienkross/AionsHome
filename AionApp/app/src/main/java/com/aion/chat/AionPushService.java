@@ -58,6 +58,18 @@ import android.provider.Settings;
 import android.content.BroadcastReceiver;
 import android.content.IntentFilter;
 
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+
+import android.os.Handler;
+import android.os.Looper;
+
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Locale;
+
 /**
  * 前台服务 — OkHttp WebSocket 长连接
  * 针对 vivo/OPPO 等 ROM 做了适配：
@@ -129,6 +141,20 @@ public class AionPushService extends Service {
     private volatile boolean screenOn = true;
     private BroadcastReceiver screenReceiver;
 
+    // ── 步数计数 ──
+    // 使用 TYPE_STEP_COUNTER（硬件累计步数，低功耗），搭载定位线程 10 分钟上报
+    // 凌晨 5:00 重置（逻辑日期以 5:00 为分界，适应晚睡作息）
+    // 重启检测：currentCounter < lastKnownCounter 时把上一 boot 周期走的步数补偿到 rebootOffset
+    private SensorManager sensorManager;
+    private Sensor stepSensor;
+    private volatile float latestStepCounter = -1;  // 传感器最新值（开机累计）
+    private Handler mainHandler;  // 主线程 Handler，传感器回调需要 Looper
+    private static final String PREF_STEP_DAY_START = "step_day_start_counter";
+    private static final String PREF_STEP_REBOOT_OFFSET = "step_reboot_offset";
+    private static final String PREF_STEP_LAST_KNOWN = "step_last_known_counter";
+    private static final String PREF_STEP_RESET_DATE = "step_reset_logical_date";
+    private static final int STEP_RESET_HOUR = 5;  // 凌晨 5 点重置
+
     // ══════════════════════════════════════════════════════════
     //  生命周期
     // ══════════════════════════════════════════════════════════
@@ -138,6 +164,7 @@ public class AionPushService extends Service {
         super.onCreate();
         Log.i(TAG, "=== onCreate ===");
         createNotificationChannels();
+        mainHandler = new Handler(Looper.getMainLooper());
 
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (pm != null) {
@@ -160,6 +187,7 @@ public class AionPushService extends Service {
                 .build();
 
         registerNetworkCallback();
+        initStepCounter();
     }
 
     @Override
@@ -229,6 +257,7 @@ public class AionPushService extends Service {
         if (activityThread != null) activityThread.interrupt();
         stopEsp32Bridge();
         unregisterScreenReceiver();
+        if (sensorManager != null) sensorManager.unregisterListener(stepListener);
         if (webSocket != null) try { webSocket.cancel(); } catch (Exception ignored) {}
         if (client != null) client.dispatcher().executorService().shutdown();
         stopMusic();
@@ -354,6 +383,9 @@ public class AionPushService extends Service {
 
             while (shouldRun) {
                 try {
+                    // 权限可能在服务启动后才授予，重试初始化步数传感器
+                    if (latestStepCounter < 0) initStepCounter();
+
                     // 先检查服务端定位功能是否启用
                     checkLocationEnabled();
                     if (locationEnabled) {
@@ -472,6 +504,21 @@ public class AionPushService extends Service {
             body.put("lat", loc.getLatitude());
             body.put("accuracy", loc.getAccuracy());
             body.put("is_gcj02", false);  // Android 原生 GPS 输出 WGS84
+
+            // 搭载步数数据
+            int steps = getTodaySteps();
+            if (steps >= 0) {
+                body.put("steps", steps);
+            }
+            // 传感器诊断信息一并上报，方便服务端排查
+            boolean hasPerm = ContextCompat.checkSelfPermission(this,
+                    Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED;
+            String stepDiag = "steps=" + steps
+                    + " sensorVal=" + latestStepCounter
+                    + " sensorObj=" + (stepSensor != null)
+                    + " perm=" + hasPerm;
+            body.put("step_diag", stepDiag);
+            Log.i(TAG, "\uD83D\uDC63 " + stepDiag);
 
             MediaType JSON = MediaType.get("application/json; charset=utf-8");
             RequestBody reqBody = RequestBody.create(body.toString(), JSON);
@@ -608,8 +655,23 @@ public class AionPushService extends Service {
                             if (!isForegroundActive) {
                                 String c = data.optString("content", "");
                                 if (c.length() > 100) c = c.substring(0, 100) + "...";
-                                showNotif(CH_MESSAGE, "💬 Aion", c, false);
+                                String sender = data.optString("sender", "Aion");
+                                if (sender.isEmpty()) sender = "Aion";
+                                else sender = sender.substring(0, 1).toUpperCase() + sender.substring(1);
+                                showNotif(CH_ALARM, "💬 " + sender, c, true);
                             }
+                        }
+                    }
+                    break;
+                }
+                case "chatroom_msg_created": {
+                    if (data != null) {
+                        String sender = data.optString("sender", "");
+                        if (!"user".equals(sender) && !"system".equals(sender) && !sender.isEmpty()) {
+                            String c = data.optString("content", "");
+                            if (c.length() > 100) c = c.substring(0, 100) + "...";
+                            sender = sender.substring(0, 1).toUpperCase() + sender.substring(1);
+                            showNotif(CH_ALARM, "💬 " + sender, c, true);
                         }
                     }
                     break;
@@ -626,6 +688,66 @@ public class AionPushService extends Service {
                             stopEsp32Bridge();
                         }
                     }
+                    break;
+                }
+                case "request_location_sync": {
+                    // 服务端请求立即上报位置+步数
+                    Log.i(TAG, "📍 Force sync requested via WS");
+                    new Thread(() -> {
+                        try {
+                            if (latestStepCounter < 0) initStepCounter();
+                            requestLocationOnce();
+                        } catch (Exception e) {
+                            Log.e(TAG, "📍 Force sync error: " + e.getMessage());
+                        }
+                    }, "ForceSyncLocation").start();
+                    break;
+                }
+                case "request_step_diag": {
+                    // 诊断步数传感器状态，在主线程执行
+                    mainHandler.post(() -> {
+                        try {
+                            boolean hasPerm = ContextCompat.checkSelfPermission(
+                                    AionPushService.this,
+                                    Manifest.permission.ACTIVITY_RECOGNITION)
+                                    == PackageManager.PERMISSION_GRANTED;
+                            SharedPreferences dp = getSharedPreferences("aion_prefs", MODE_PRIVATE);
+                            String diagInfo = "perm=" + hasPerm
+                                    + " sensorObj=" + (stepSensor != null)
+                                    + " latestVal=" + latestStepCounter
+                                    + " dayStart=" + dp.getFloat(PREF_STEP_DAY_START, -1)
+                                    + " offset=" + dp.getFloat(PREF_STEP_REBOOT_OFFSET, 0)
+                                    + " lastKnown=" + dp.getFloat(PREF_STEP_LAST_KNOWN, -1)
+                                    + " resetDate=" + dp.getString(PREF_STEP_RESET_DATE, "")
+                                    + " todaySteps=" + getTodaySteps();
+                            Log.i(TAG, "\uD83D\uDC63 DIAG: " + diagInfo);
+                            // 尝试重新初始化
+                            if (stepSensor == null) initStepCounter();
+                            // 通过 HTTP POST 发给服务端（不走 WS，更可靠）
+                            String httpBase = serverUrl
+                                    .replace("ws://", "http://")
+                                    .replace("wss://", "https://")
+                                    .replace("/ws", "");
+                            new Thread(() -> {
+                                try {
+                                    JSONObject body = new JSONObject();
+                                    body.put("info", diagInfo);
+                                    MediaType JSON_T = MediaType.get("application/json; charset=utf-8");
+                                    RequestBody reqBody = RequestBody.create(body.toString(), JSON_T);
+                                    Request req = new Request.Builder()
+                                            .url(httpBase + "/api/location/step-diag-report")
+                                            .post(reqBody).build();
+                                    try (Response resp = client.newCall(req).execute()) {
+                                        Log.i(TAG, "\uD83D\uDC63 diag posted: " + resp.code());
+                                    }
+                                } catch (Exception e) {
+                                    Log.e(TAG, "\uD83D\uDC63 diag post failed: " + e.getMessage());
+                                }
+                            }, "StepDiag").start();
+                        } catch (Exception e) {
+                            Log.e(TAG, "\uD83D\uDC63 diag error: " + e.getMessage());
+                        }
+                    });
                     break;
                 }
             }
@@ -1040,5 +1162,120 @@ public class AionPushService extends Service {
             try { unregisterReceiver(screenReceiver); } catch (Exception ignored) {}
             screenReceiver = null;
         }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  步数计数 — TYPE_STEP_COUNTER 传感器 + 重启补偿 + 5:00 重置
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * 获取当前"逻辑日期"字符串（以凌晨 5:00 为分界）。
+     * 例如：若当前时间是 2026-05-15 03:00，逻辑上仍属于 "2026-05-14"。
+     */
+    private String getLogicalDate() {
+        Calendar cal = Calendar.getInstance();
+        if (cal.get(Calendar.HOUR_OF_DAY) < STEP_RESET_HOUR) {
+            cal.add(Calendar.DATE, -1);
+        }
+        return new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(cal.getTime());
+    }
+
+    private void initStepCounter() {
+        if (sensorManager == null) {
+            sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        }
+        if (sensorManager == null) {
+            Log.w(TAG, "\uD83D\uDC63 SensorManager not available");
+            return;
+        }
+        if (stepSensor != null) return;  // 已经注册过了
+        stepSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER);
+        if (stepSensor == null) {
+            Log.w(TAG, "\uD83D\uDC63 No step counter sensor on this device");
+            return;
+        }
+        // 传感器回调必须在有 Looper 的线程上注册，用主线程 Handler
+        sensorManager.registerListener(stepListener, stepSensor,
+                SensorManager.SENSOR_DELAY_NORMAL, mainHandler);
+        Log.i(TAG, "\uD83D\uDC63 Step counter sensor registered (mainHandler)");
+    }
+
+    private final SensorEventListener stepListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            if (event.sensor.getType() != Sensor.TYPE_STEP_COUNTER) return;
+            float currentCounter = event.values[0];
+            latestStepCounter = currentCounter;
+
+            SharedPreferences prefs = getSharedPreferences("aion_prefs", MODE_PRIVATE);
+            String savedDate = prefs.getString(PREF_STEP_RESET_DATE, "");
+            String logicalDate = getLogicalDate();
+
+            float dayStart = prefs.getFloat(PREF_STEP_DAY_START, -1);
+            float lastKnown = prefs.getFloat(PREF_STEP_LAST_KNOWN, -1);
+            float rebootOffset = prefs.getFloat(PREF_STEP_REBOOT_OFFSET, 0);
+
+            // 首次启动或跨逻辑日 → 重置
+            if (!logicalDate.equals(savedDate) || dayStart < 0) {
+                Log.i(TAG, "\uD83D\uDC63 Step reset for logical day " + logicalDate
+                        + " (was " + savedDate + ")");
+                prefs.edit()
+                        .putFloat(PREF_STEP_DAY_START, currentCounter)
+                        .putFloat(PREF_STEP_REBOOT_OFFSET, 0)
+                        .putFloat(PREF_STEP_LAST_KNOWN, currentCounter)
+                        .putString(PREF_STEP_RESET_DATE, logicalDate)
+                        .apply();
+                return;
+            }
+
+            // 重启检测：传感器值小于上次记录值 → 手机重启了
+            if (lastKnown >= 0 && currentCounter < lastKnown) {
+                float rescued = lastKnown - dayStart;
+                rebootOffset += rescued;
+                dayStart = 0;  // TYPE_STEP_COUNTER 重启后从 0 开始
+                Log.i(TAG, "\uD83D\uDC63 Reboot detected! rescued=" + (int) rescued
+                        + " newOffset=" + (int) rebootOffset);
+                prefs.edit()
+                        .putFloat(PREF_STEP_DAY_START, dayStart)
+                        .putFloat(PREF_STEP_REBOOT_OFFSET, rebootOffset)
+                        .putFloat(PREF_STEP_LAST_KNOWN, currentCounter)
+                        .apply();
+                return;
+            }
+
+            // 正常更新 lastKnown
+            prefs.edit().putFloat(PREF_STEP_LAST_KNOWN, currentCounter).apply();
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {}
+    };
+
+    /**
+     * 获取今日步数。返回 -1 表示传感器不可用。
+     */
+    private int getTodaySteps() {
+        if (latestStepCounter < 0) return -1;
+
+        SharedPreferences prefs = getSharedPreferences("aion_prefs", MODE_PRIVATE);
+        String savedDate = prefs.getString(PREF_STEP_RESET_DATE, "");
+        String logicalDate = getLogicalDate();
+
+        // 跨日但传感器回调还没触发重置，先算旧日步数返回 0 也行
+        // 但更安全的做法是在这里也做重置
+        if (!logicalDate.equals(savedDate)) {
+            prefs.edit()
+                    .putFloat(PREF_STEP_DAY_START, latestStepCounter)
+                    .putFloat(PREF_STEP_REBOOT_OFFSET, 0)
+                    .putFloat(PREF_STEP_LAST_KNOWN, latestStepCounter)
+                    .putString(PREF_STEP_RESET_DATE, logicalDate)
+                    .apply();
+            return 0;
+        }
+
+        float dayStart = prefs.getFloat(PREF_STEP_DAY_START, latestStepCounter);
+        float rebootOffset = prefs.getFloat(PREF_STEP_REBOOT_OFFSET, 0);
+        int steps = (int) ((latestStepCounter - dayStart) + rebootOffset);
+        return Math.max(steps, 0);
     }
 }

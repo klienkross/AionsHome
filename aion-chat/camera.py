@@ -9,7 +9,7 @@ import cv2, httpx, numpy as np, aiosqlite
 
 from config import (
     DB_PATH, SCREENSHOTS_DIR, MONITOR_LOGS_DIR,
-    load_worldbook, load_chat_status, load_cam_config, save_cam_config, DEFAULT_MODEL, SETTINGS,
+    get_key, get_sentinel_config, load_worldbook, load_chat_status, load_cam_config, save_cam_config, DEFAULT_MODEL, SETTINGS,
 )
 from database import get_db
 from ws import manager
@@ -594,6 +594,11 @@ class CameraMonitor:
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
 
+    def reset_patrol_timer(self):
+        """用户发送新消息时重置巡逻计时器，避免聊天中触发哨兵"""
+        if self.monitoring:
+            self._next_capture_at = time.time() + self._random_interval_seconds()
+
     def stop_monitoring(self):
         self.monitoring = False
         self._next_capture_at = 0
@@ -733,21 +738,27 @@ class CameraMonitor:
 {log_history if log_history else "（暂无历史日志）"}
 
 请严格按照以下JSON格式回复，不要包含其他任何内容：
-{{"monitoringlog":"用恋人的视角分析{user_name}当前在做什么，所处的状态，位置，以及如果看得到用户的电脑，注意用户屏幕上的内容。例如：{user_name}穿着毛绒睡衣，正在电脑桌前，看起来有些困。电脑屏幕上播放着一部小动物电影。","summary":"根据历史日志，概括{user_name}这段时间以来的整体状况，去掉重复无用的信息，保留关键事件和状态变化，一两句话即可。","call_core":false,"core_reason":""}}
+{{"monitoringlog":"这是用户的当前状态{user_name}以及电脑的桌面，用恋人的视角分析{user_name}当前在做什么，所处的状态，位置，例如：{user_name}穿着毛绒睡衣，正在电脑桌前，看起来有些困。电脑屏幕上播放着一部小动物电影。","summary":"根据历史日志，概括{user_name}这段时间以来的整体状况，去掉重复无用的信息，保留关键事件和状态变化，一两句话即可。注意力重点应当放在截图上半部分的摄像头内容","call_core":false,"core_reason":""}}
 
 字段说明：
-- monitoringlog: 当前画面的客观描述，禁止胡编猜测。没有看到人就说没看到，如果最后状态没有说去睡觉，则不能猜测{user_name}可能去睡觉了。
+- monitoringlog: 当前画面的客观描述，禁止胡编猜测。没有看到人就说没看到，如果最后状态没有说去睡觉，则不能推测{user_name}可能去睡觉了。
 - summary: 综合最后的聊天状态和上下文内容，概括{user_name}这段时间的整体状态变化和关键事件，禁止胡编猜测。{user_name}
-- call_core: 是否唤醒主脑主动联系{user_name}
-- core_reason: 仅当call_core为true时填写，说明为什么要主动联系{user_name}，让核心了解情况
+- call_core: 判断是否需要主动联系{user_name}
+- core_reason: 仅当call_core为true时填写，说明为什么要主动联系{user_name}，让核心模型了解情况
 
 call_core判断依据：
-- false: {user_name}一切正常 /夜间在睡觉 /前不久才发过消息 /状态良好。
-- true: {user_name}处于危险状态 / 故意引起注意 / 距离最后一次和{ai_name}聊天的时间已经过去很久 / 长时间同一姿势需提醒活动 / 长时间未看到{user_name} / 或你觉得可以主动联系{user_name}（例如看起来状态不佳，或者发现用户在偷看其他帅哥😈）主动联系大概可以在20%的概率，不要太频繁，但也不能完全没有。
-- 结合设备活动动态综合判断：根据上下文分析，如果动态显示{user_name}不符合上下文讨论到的内容，例如：说去睡觉了，却在刷抖音小红书。说去工作了，却在浏览不相干的内容，进行评估，自行决定是否向Core报告情况。"""
+- false: {user_name}一切正常复合聊天内容 /夜间在睡觉 /前不久才发过消息 /状态良好。
+- true: {user_name}和上下文聊天内容不符/ 故意引起注意 / 距离最后一次和{ai_name}聊天的时间已经过去很久 / 长时间同一姿势需提醒活动 / 长时间未看到{user_name} / 或你觉得可以主动联系{user_name}（例如看起来状态不佳，或者发现她在偷看其他帅哥😈）。
+- 结合设备活动动态综合判断：根据上下文分析，如果动态显示{user_name}不符合上下文讨论到的内容，例如：说去睡觉了，却在刷抖音小红书。说去工作了，却在摸鱼，在偷偷吃零食等，自行决定是否主动联系。"""
 
         img_b64 = base64.b64encode(filepath.read_bytes()).decode()
-        print("[Monitor] 正在调用 Sentinel")
+        scfg = get_sentinel_config()
+        if not scfg["api_key"]:
+            print("[Monitor] 哨兵模型 API Key 未配置，跳过分析")
+            return
+
+        sentinel_model = scfg["model"]
+        print(f"[Monitor] 正在调用 Sentinel 模型: {sentinel_model} ({'OpenAI兼容' if scfg['use_openai'] else 'Gemini'})")
 
         monitoring_log = ""
         call_core = False

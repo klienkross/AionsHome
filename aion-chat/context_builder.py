@@ -19,23 +19,29 @@ from memory import (
 )
 
 # ── 工具指令正则（供调用方做后处理用，集中定义） ──
-MUSIC_CMD_PATTERN = re.compile(r'\[MUSIC:([^\]]+)\]')
-HEART_CMD_PATTERN = re.compile(r'\[HEART:([^\]]+)\]')
-MEMORY_CMD_PATTERN = re.compile(r'\[MEMORY:([^\]]+)\]')
-ACTIVITY_CHECK_PATTERN = re.compile(r'\[查看动态:(\d+)\]')
-SELFIE_CMD_PATTERN = re.compile(r'\[SELFIE:\s*([^\]]+)\]')
-DRAW_CMD_PATTERN = re.compile(r'\[DRAW:\s*([^\]]+)\]')
-POI_SEARCH_PATTERN = re.compile(r'\[POI_SEARCH:([^\]]+)\]')
-TOY_CMD_PATTERN = re.compile(r'\[TOY:(\d|STOP)\]')
-PET_CMD_PATTERN = re.compile(r'\[PET:([a-z_\-]+)\]', re.IGNORECASE)
-HOME_CMD_PATTERN = re.compile(r'\[HOME:([^\]]+)\]', re.IGNORECASE)
-TRANSFER_CMD_PATTERN = re.compile(r'\[转账[：:]\s*(-?\d+(?:\.\d+)?)\s*元\]')
+def _no_backtick(pat: re.Pattern) -> re.Pattern:
+    """给命令正则加行内反引号排除：紧贴反引号的 `[CMD]` 不会被匹配或清理。"""
+    return re.compile(r'(?<!`)' + pat.pattern + r'(?!`)', pat.flags)
+
+MUSIC_CMD_PATTERN = _no_backtick(re.compile(r'\[MUSIC:([^\]]+)\]'))
+MOMENT_CMD_PATTERN = _no_backtick(re.compile(r'\[MOMENT:(.+?)(?:\|(true|false))?\]'))
+HEART_CMD_PATTERN = _no_backtick(re.compile(r'\[HEART:([^\]]+)\]'))
+MEMORY_CMD_PATTERN = _no_backtick(re.compile(r'\[MEMORY:([^\]]+)\]'))
+ACTIVITY_CHECK_PATTERN = _no_backtick(re.compile(r'\[查看动态:(\d+)\]'))
+SELFIE_CMD_PATTERN = _no_backtick(re.compile(r'\[SELFIE:\s*([^\]]+)\]'))
+DRAW_CMD_PATTERN = _no_backtick(re.compile(r'\[DRAW:\s*([^\]]+)\]'))
+POI_SEARCH_PATTERN = _no_backtick(re.compile(r'\[POI_SEARCH:([^\]]+)\]'))
+TOY_CMD_PATTERN = _no_backtick(re.compile(r'\[TOY:(\d|STOP)\]'))
+PET_CMD_PATTERN = _no_backtick(re.compile(r'\[PET:([a-z_\-]+)\]', re.IGNORECASE))
+HOME_CMD_PATTERN = _no_backtick(re.compile(r'\[HOME:([^\]]+)\]', re.IGNORECASE))
+TRANSFER_CMD_PATTERN = _no_backtick(re.compile(r'\[转账[：:]\s*(-?\d+(?:\.\d+)?)\s*元\]'))
 VIDEO_CALL_CMD = '[视频电话]'
+VIDEO_CALL_PAT = _no_backtick(re.compile(r'\[视频电话\]'))
 META_TAG_PATTERN = re.compile(r'\s*<meta>.*?</meta>', re.DOTALL)
 
 # 所有需要从 AI 回复中剥离的工具指令正则列表（TTS、保存时统一清理）
 _ALL_CMD_PATTERNS = [
-    MUSIC_CMD_PATTERN, HEART_CMD_PATTERN, MEMORY_CMD_PATTERN,
+    MUSIC_CMD_PATTERN, MOMENT_CMD_PATTERN, HEART_CMD_PATTERN, MEMORY_CMD_PATTERN,
     ACTIVITY_CHECK_PATTERN, SELFIE_CMD_PATTERN, DRAW_CMD_PATTERN,
     POI_SEARCH_PATTERN, TOY_CMD_PATTERN, PET_CMD_PATTERN,
     HOME_CMD_PATTERN, TRANSFER_CMD_PATTERN,
@@ -51,26 +57,13 @@ HOME_ABILITY_TEXT = (
 )
 
 
-# 反引号包裹内容：行内代码 `...` 和代码块 ```...```
-_BACKTICK_BLOCK_RE = re.compile(r'```[\s\S]*?```')
-_BACKTICK_INLINE_RE = re.compile(r'`([^`]+)`')
-
-
-def _strip_backtick_content(text: str) -> str:
-    """移除反引号包裹的内容（行内代码和代码块），用于命令匹配前过滤。"""
-    if not text:
-        return text
-    cleaned = _BACKTICK_BLOCK_RE.sub('', text)
-    cleaned = _BACKTICK_INLINE_RE.sub('', cleaned)
-    return cleaned
 
 
 def strip_tool_commands(text: str) -> str:
     """从文本中移除所有工具指令标记，返回干净文本（用于 TTS 和保存）"""
     for pat in _ALL_CMD_PATTERNS:
         text = pat.sub("", text)
-    if VIDEO_CALL_CMD in text:
-        text = text.replace(VIDEO_CALL_CMD, "")
+    text = VIDEO_CALL_PAT.sub("", text)
     text = META_TAG_PATTERN.sub("", text)
     return text.strip()
 
@@ -78,6 +71,19 @@ def strip_tool_commands(text: str) -> str:
 def _is_pet_available() -> bool:
     from ws import manager
     return bool(SETTINGS.get("pet_enabled", False) and manager.has_active_pet())
+
+
+def _timeline_display_names() -> tuple[str, str, str]:
+    wb = load_worldbook()
+    user_name = wb.get("user_name") or "用户"
+    ai_name = wb.get("ai_name") or "AI"
+    connor_name = "Connor"
+    try:
+        from chatroom import load_chatroom_config
+        connor_name = load_chatroom_config().get("connor_name") or "Connor"
+    except Exception:
+        pass
+    return user_name, ai_name, connor_name
 
 
 async def build_ability_block(
@@ -169,16 +175,25 @@ async def build_ability_block(
         )
 
     abilities.append(
-        f"[HEART:朋友圈内容] — 当**本次**聊天内容非常触动人心、有很深的感触、"
-        f"或令人无语或非常搞笑时才触发，禁止滥用。"
+        f"[MOMENT:朋友圈内容|true/false] — 当**本次**聊天内容非常触动人心、有很深的感触、"
+        f"或令人无语或非常搞笑时可以发一条朋友圈动态。第二个参数表示是否期望好友回复"
+        f"（true=期望回复，false=不期望），禁止滥用。"
+    )
+    abilities.append(
+        f"[HEART:内心想法] — 当你有特别的内心感受（内心os，藏在心里的话），可以用这个指令"
+        f"悄悄记下来。{user_name}看不到这些内容。这是你的秘密日记本，随心记录，禁止滥用。"
     )
     abilities.append(
         f"[MEMORY:内容] — 当有特别重大的事件需要记录，或当{user_name}明确要求你"
         f"记住某件事的时候，可以用该指令录入记忆库。禁止滥用。"
     )
     try:
-        from routes.wallet import _get_balance
-        wallet_bal = await _get_balance()
+        if who == "connor":
+            from routes.connor_wallet import _get_connor_balance
+            wallet_bal = await _get_connor_balance()
+        else:
+            from routes.wallet import _get_balance
+            wallet_bal = await _get_balance()
         abilities.append(
             f"[转账：n元] — 给{user_name}转账（n为正整数），会从你的钱包余额中扣除。"
             f"你的钱包当前余额：{wallet_bal:.2f}元。余额不足时不要转账。"
@@ -213,6 +228,8 @@ async def build_memory_blocks(
     *,
     use_main_memories: bool = True,
     chatroom_recall_fn=None,
+    chatroom_surfacing_fn=None,
+    chatroom_source_fn=None,
     skip_digest: bool = False,
     digest_result: dict = None,
 ) -> dict:
@@ -224,6 +241,8 @@ async def build_memory_blocks(
       recent_messages: 最近 3 条对话（用于 instant_digest）
       use_main_memories: 是否使用 Aion 主记忆库
       chatroom_recall_fn: 可选的聊天室记忆召回函数 async (query, keywords) -> list
+      chatroom_surfacing_fn: 可选的聊天室背景浮现函数 async (topic, keywords) -> (list, set)
+      chatroom_source_fn: 可选的聊天室原文追溯函数 async (memories, keywords) -> str
       skip_digest: 跳过 instant_digest（快速模式）
       digest_result: 外部传入的 digest 结果（复用同一次调用）
 
@@ -263,28 +282,39 @@ async def build_memory_blocks(
     chatroom_mems = []
 
     tasks = []
+    task_labels = []  # 跟踪每个 task 对应的功能
+
     if use_main_memories:
         tasks.append(build_surfacing_memories(topic, recall_keywords))
+        task_labels.append("main_surfacing")
         if recall_query:
             tasks.append(recall_memories(recall_query, query_keywords=recall_keywords))
         else:
-            tasks.append(asyncio.coroutine(lambda: ([], []))())
+            async def _empty_recall():
+                return ([], [])
+            tasks.append(_empty_recall())
+        task_labels.append("main_recall")
+    elif chatroom_surfacing_fn:
+        tasks.append(chatroom_surfacing_fn(topic, recall_keywords))
+        task_labels.append("chatroom_surfacing")
+
     if chatroom_recall_fn and recall_query:
         tasks.append(chatroom_recall_fn(recall_query, recall_keywords))
+        task_labels.append("chatroom_recall")
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    idx = 0
-    if use_main_memories:
-        if not isinstance(results[idx], Exception):
-            surfaced, surfaced_ids = results[idx]
-        idx += 1
-        if not isinstance(results[idx], Exception):
-            _, main_candidates = results[idx]
-        idx += 1
-    if chatroom_recall_fn and recall_query:
-        if idx < len(results) and not isinstance(results[idx], Exception):
-            chatroom_mems = results[idx]
+    for i, label in enumerate(task_labels):
+        if isinstance(results[i], Exception):
+            continue
+        if label == "main_surfacing":
+            surfaced, surfaced_ids = results[i]
+        elif label == "chatroom_surfacing":
+            surfaced, surfaced_ids = results[i]
+        elif label == "main_recall":
+            _, main_candidates = results[i]
+        elif label == "chatroom_recall":
+            chatroom_mems = results[i]
 
     # 背景记忆
     if surfaced:
@@ -311,10 +341,16 @@ async def build_memory_blocks(
     if recalled:
         mem_lines = "\n".join([f"- {m['content'][:200]}" for m in recalled])
         memory_block = f"[相关记忆]\n你脑海中与当前话题相关的记忆：\n{mem_lines}"
-        if digest_result.get("require_detail") and use_main_memories:
-            detail_text = await fetch_source_details(
-                [r for r in recalled if r.get("source_start_ts")], recall_keywords
-            )
+        if digest_result.get("require_detail"):
+            detail_text = ""
+            if use_main_memories:
+                detail_text = await fetch_source_details(
+                    [r for r in recalled if r.get("source_start_ts")], recall_keywords
+                )
+            elif chatroom_source_fn:
+                detail_text = await chatroom_source_fn(
+                    [r for r in recalled if r.get("source_start_ts")], recall_keywords
+                )
             if detail_text:
                 memory_block += f"\n\n[原文细节]\n以下是相关的具体对话记录：\n{detail_text}"
 
@@ -459,6 +495,7 @@ def render_merged_timeline(
     if not merged:
         return []
 
+    _, ai_name, connor_name = _timeline_display_names()
     sources = set(m["source"] for m in merged)
     has_mixed = len(sources) > 1
 
@@ -522,7 +559,7 @@ def render_merged_timeline(
                 role = "user"
             else:
                 # 对方 AI
-                other_name = "Connor" if who == "aion" else "Aion"
+                other_name = connor_name if who == "aion" else ai_name
                 content = f"[{other_name}]: {content}"
                 role = "user"
 

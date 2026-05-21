@@ -14,8 +14,12 @@ from location import (
     amap_poi_search, format_nearby_pois_for_prompt,
     is_location_quiet_hours,
 )
+from ws import manager
 
 router = APIRouter()
+
+# 存储最新诊断信息（内存即可）
+_step_diag_info = {"info": "", "ts": 0}
 
 
 # ── 心跳上报 ──────────────────────────────────────
@@ -25,21 +29,33 @@ class HeartbeatBody(BaseModel):
     accuracy: float = 0.0
     is_gcj02: bool = False   # 默认 WGS84，Android GPS 原始数据
     force: bool = False      # 强制处理（即使未启用，如浏览器设家）
+    steps: Optional[int] = None  # 今日步数（Android 步数传感器，可选）
+    step_diag: Optional[str] = None  # 步数传感器诊断信息
 
 @router.post("/api/location/heartbeat")
 async def location_heartbeat(body: HeartbeatBody):
     """接收手机端定位心跳"""
+    if body.step_diag:
+        print(f"[StepDiag] {body.step_diag}")
+        _step_diag_info["info"] = body.step_diag
+        import time as _t
+        _step_diag_info["ts"] = _t.time()
+
     cfg = load_location_config()
     if not cfg.get("enabled") and not body.force:
         return {"ok": False, "error": "定位功能未启用"}
 
-    result = await process_heartbeat(body.lng, body.lat, body.accuracy, body.is_gcj02)
+    result = await process_heartbeat(body.lng, body.lat, body.accuracy, body.is_gcj02, steps=body.steps)
     return {"ok": True, **result}
 
 
 # ── 立即同步（强制全量刷新）────────────────────────
+
+class ForceSyncBody(BaseModel):
+    steps: Optional[int] = None  # 手动填入步数（测试用）
+
 @router.post("/api/location/force-sync")
-async def location_force_sync():
+async def location_force_sync(body: ForceSyncBody = ForceSyncBody()):
     """用当前已有坐标强制做一次全量刷新（地理编码+天气+POI）"""
     cfg = load_location_config()
     if not cfg.get("enabled"):
@@ -49,9 +65,43 @@ async def location_force_sync():
         return {"ok": False, "error": "当前位置未知，请先上报一次定位"}
     result = await process_heartbeat(
         status["lng"], status["lat"], status.get("accuracy", 0),
-        is_gcj02=True, force_full=True
+        is_gcj02=True, force_full=True, steps=body.steps
     )
     return {"ok": True, **result}
+
+
+@router.post("/api/location/request-phone-sync")
+async def request_phone_sync():
+    """通过 WebSocket 通知手机立即上报位置+步数"""
+    await manager.broadcast({"type": "request_location_sync"})
+    return {"ok": True}
+
+
+@router.post("/api/location/request-step-diag")
+async def request_step_diag():
+    """通过 WebSocket 请求手机上报步数传感器诊断信息"""
+    await manager.broadcast({"type": "request_step_diag"})
+    return {"ok": True}
+
+
+class StepDiagReport(BaseModel):
+    info: str
+
+
+@router.post("/api/location/step-diag-report")
+async def step_diag_report(body: StepDiagReport):
+    """接收手机 POST 过来的步数传感器诊断信息"""
+    import time as _t
+    _step_diag_info["info"] = body.info
+    _step_diag_info["ts"] = _t.time()
+    print(f"[StepDiag] {body.info}")
+    return {"ok": True}
+
+
+@router.get("/api/location/step-diag")
+async def get_step_diag():
+    """获取最新的步数传感器诊断信息"""
+    return _step_diag_info
 
 
 # ── 状态查询 ──────────────────────────────────────

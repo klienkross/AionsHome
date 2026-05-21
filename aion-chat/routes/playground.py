@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 
-from config import load_worldbook, SETTINGS, get_key, MODELS
+from config import load_worldbook, SETTINGS, get_key, MODELS, DEFAULT_MODEL
 from database import get_db
 from ws import manager
 from mcp_client import mcp_manager
@@ -121,19 +121,23 @@ async def _call_ai_with_tools(messages: list, tools: list, model_cfg: dict,
         url = "https://vip.aipro.love/v1/chat/completions"
         headers = {"Authorization": f"Bearer {get_key('aipro')}", "Content-Type": "application/json"}
     elif provider == "gemini":
-        # Gemini 原生 API 不直接支持 OpenAI tools 格式，用 aipro 中转
         url = "https://vip.aipro.love/v1/chat/completions"
         headers = {"Authorization": f"Bearer {get_key('aipro')}", "Content-Type": "application/json"}
-        model = model_cfg["model"]
+    elif provider == "custom":
+        base_url = model_cfg.get("base_url", "").rstrip("/")
+        key_name = model_cfg.get("key_name", "")
+        url = base_url + "/chat/completions"
+        headers = {"Authorization": f"Bearer {get_key(key_name)}", "Content-Type": "application/json"}
     else:
         raise ValueError(f"不支持的 provider: {provider}")
 
     payload = {
         "model": model,
         "messages": messages,
-        "tools": tools,
         "temperature": 0.8,
     }
+    if tools:
+        payload["tools"] = tools
 
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(url, json=payload, headers=headers)
@@ -144,10 +148,13 @@ async def _call_ai_with_tools(messages: list, tools: list, model_cfg: dict,
 
     choice = data.get("choices", [{}])[0]
     msg = choice.get("message", {})
-    return {
+    result = {
         "content": msg.get("content"),
         "tool_calls": msg.get("tool_calls"),
     }
+    if msg.get("reasoning_content"):
+        result["reasoning_content"] = msg["reasoning_content"]
+    return result
 
 
 # ── 流式文本 AI 调用（最终回复用）──
@@ -167,6 +174,11 @@ async def _stream_ai_text(messages: list, model_cfg: dict, cancel_event: asyncio
     elif provider == "gemini":
         url = "https://vip.aipro.love/v1/chat/completions"
         headers = {"Authorization": f"Bearer {get_key('aipro')}", "Content-Type": "application/json"}
+    elif provider == "custom":
+        base_url = model_cfg.get("base_url", "").rstrip("/")
+        key_name = model_cfg.get("key_name", "")
+        url = base_url + "/chat/completions"
+        headers = {"Authorization": f"Bearer {get_key(key_name)}", "Content-Type": "application/json"}
     else:
         raise ValueError(f"不支持的 provider: {provider}")
 
@@ -238,29 +250,26 @@ async def _insert_system_message(conv_id: str, server_name: str, brief: str):
         return
     now = time.time()
     msg_id = f"msg_{int(now * 1000)}_pg"
-    content = f"🎮 AI去{server_name}逛了一圈：{brief[:200]}"
+    content = brief[:400]
 
     async with get_db() as db:
         await db.execute(
             "INSERT INTO messages (id, conv_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-            (msg_id, conv_id, "system", content, now, "[]")
+            (msg_id, conv_id, "assistant", content, now, "[]")
         )
         await db.commit()
 
-    sys_msg = {"id": msg_id, "conv_id": conv_id, "role": "system",
-               "content": content, "created_at": now, "attachments": []}
-    await manager.broadcast({"type": "msg_created", "data": sys_msg})
+    msg = {"id": msg_id, "conv_id": conv_id, "role": "assistant",
+           "content": content, "created_at": now, "attachments": []}
+    await manager.broadcast({"type": "msg_created", "data": msg})
 
 
 # ── 获取模型配置 ──
 def _get_model_cfg(model_key: str) -> dict:
     if model_key and model_key in MODELS:
         return MODELS[model_key]
-    # 默认使用一个支持 tool calling 的模型
-    for key in ["硅基GLM-5.1", "硅基GLM-5", "硅基Kimi2.6"]:
-        if key in MODELS:
-            return MODELS[key]
-    # fallback
+    if DEFAULT_MODEL in MODELS:
+        return MODELS[DEFAULT_MODEL]
     first_key = next(iter(MODELS))
     return MODELS[first_key]
 
@@ -307,6 +316,7 @@ async def run_instruction(req: RunRequest):
             system_parts.append(f"你是{ai_name}，{user_name}的AI伴侣。你现在正在外出探索一个线上空间。")
             system_parts.append(f"\n【行动指南】")
             system_parts.append(f"你现在正在访问「{server}」。请根据{user_name}的指令，自主使用可用的工具进行探索和互动。")
+            system_parts.append(f"你必须积极使用工具来完成任务，不要只用文字回复。如果不确定该用哪个工具，先尝试最相关的那个。")
             system_parts.append(f"每次行动后，描述你看到了什么、做了什么、有什么感受。")
             system_parts.append(f"始终保持你的性格和说话风格，像是在给{user_name}实时汇报见闻。")
 
@@ -372,9 +382,10 @@ async def run_instruction(req: RunRequest):
                 tool_calls = ai_result.get("tool_calls")
 
                 if tool_calls:
-                    # 构建 assistant message with tool_calls
                     assistant_msg = {"role": "assistant", "content": ai_content or ""}
                     assistant_msg["tool_calls"] = tool_calls
+                    if ai_result.get("reasoning_content"):
+                        assistant_msg["reasoning_content"] = ai_result["reasoning_content"]
                     messages.append(assistant_msg)
 
                     for tc in tool_calls:
@@ -441,7 +452,7 @@ async def run_instruction(req: RunRequest):
                     mem_summary = f"去{server}逛了一圈"
 
                 # 插入系统消息到主聊天
-                await _insert_system_message(conv_id, server, mem_summary[:100])
+                await _insert_system_message(conv_id, server, mem_summary)
 
             yield _sse("done", "探索完成！", log_events)
 

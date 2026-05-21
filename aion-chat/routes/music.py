@@ -13,7 +13,7 @@ from music import search_songs, get_song_detail, get_audio_url
 
 router = APIRouter()
 
-MUSIC_CMD_PATTERN = re.compile(r"\[MUSIC:(.+?)\]")
+MUSIC_CMD_PATTERN = re.compile(r"(?<!`)\[MUSIC:(.+?)\](?!`)")
 
 
 @router.get("/api/music/search")

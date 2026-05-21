@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx, aiosqlite
 
 from config import (
-    DATA_DIR, SETTINGS, get_key,
+    DATA_DIR, SETTINGS, get_key, get_sentinel_config,
     load_worldbook, load_chat_status, save_chat_status,
 )
 from database import get_db
@@ -274,6 +274,9 @@ def format_location_for_prompt() -> str:
             weather_text += f" {w['winddirection']}风{w.get('windpower', '')}级"
         lines.append(weather_text)
 
+    if status.get("steps") is not None:
+        lines.append(f"今日运动步数：{status['steps']} 步")
+
     if status.get("updated_at"):
         lines.append(f"位置更新时间：{time.strftime('%H:%M:%S', time.localtime(status['updated_at']))}")
 
@@ -346,7 +349,7 @@ def is_location_quiet_hours() -> bool:
 
 
 # ── 心跳处理核心逻辑 ─────────────────────────────
-async def process_heartbeat(lng: float, lat: float, accuracy: float = 0.0, is_gcj02: bool = False, skip_sentinel: bool = False, force_full: bool = False) -> dict:
+async def process_heartbeat(lng: float, lat: float, accuracy: float = 0.0, is_gcj02: bool = False, skip_sentinel: bool = False, force_full: bool = False, steps: int | None = None) -> dict:
     """
     处理一次定位心跳。
     lng/lat: 坐标（默认 WGS84，is_gcj02=True 时为 GCJ-02）
@@ -369,6 +372,8 @@ async def process_heartbeat(lng: float, lat: float, accuracy: float = 0.0, is_gc
         old_status["lat"] = round(gcj_lat, 6)
         old_status["accuracy"] = accuracy
         old_status["updated_at"] = time.time()
+        if steps is not None:
+            old_status["steps"] = steps
         save_location_status(old_status)
         return {"state": old_status.get("state", "unknown"), "error": "高德 API Key 未配置，仅保存坐标"}
 
@@ -379,6 +384,8 @@ async def process_heartbeat(lng: float, lat: float, accuracy: float = 0.0, is_gc
         old_status["lat"] = round(gcj_lat, 6)
         old_status["accuracy"] = accuracy
         old_status["updated_at"] = time.time()
+        if steps is not None:
+            old_status["steps"] = steps
         save_location_status(old_status)
         print("[Location] 当前处于静默时段，仅保存坐标")
         return {"skipped": True, "reason": "quiet_hours", "state": old_status.get("state", "unknown")}
@@ -504,6 +511,11 @@ async def process_heartbeat(lng: float, lat: float, accuracy: float = 0.0, is_gc
         "last_api_lng": api_lng,
         "last_api_lat": api_lat,
     }
+    # 步数：有值时更新，无值时保留上次
+    if steps is not None:
+        new_status["steps"] = steps
+    elif "steps" in old_status:
+        new_status["steps"] = old_status["steps"]
     save_location_status(new_status)
 
     # WebSocket 广播（轻量级也广播坐标更新）
@@ -659,6 +671,10 @@ async def _notify_sentinel(old_state: str, new_state: str, status: dict, event_d
     ai_name = wb.get("ai_name", "AI")
     now_str = time.strftime("%Y年%m月%d日 %H:%M:%S")
 
+    scfg = get_sentinel_config()
+    if not scfg["api_key"]:
+        print("[Location] 哨兵模型 API Key 未配置，跳过哨兵通知")
+        return
     last_user_ts = await async_get_last_user_msg_time()
     last_user_time_str = (
         time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(last_user_ts))
@@ -726,18 +742,25 @@ async def _notify_sentinel(old_state: str, new_state: str, status: dict, event_d
 请严格按照以下JSON格式回复，不要包含其他内容：
 {{"monitoringlog":"位置变化事件记录，例如：检测到{user_name}离开了家，当前位于XX。","call_core":false,"core_reason":""}}"""
 
-    from sentinel import call_sentinel
-
     monitoring_log = event_desc
     call_core = False
     core_reason = ""
 
-    parsed = await call_sentinel(prompt, timeout=60)
-    if parsed is None:
-        print("[Location] 哨兵分析失败")
+    try:
+        from memory import _call_sentinel_text
+        raw_text = await _call_sentinel_text(scfg, prompt, timeout=60)
+
+        cleaned = raw_text.strip() if raw_text else ""
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```\w*\n?", "", cleaned)
+            cleaned = re.sub(r"\n?```$", "", cleaned)
+            cleaned = cleaned.strip()
+        parsed = json.loads(cleaned) if cleaned else {}
+    except Exception as e:
+        print(f"[Location] 哨兵分析失败: {e}")
         call_core = True
         core_reason = f"位置变化哨兵分析失败，默认唤醒Core通知：{event_desc}"
-    else:
+        parsed = {}
         monitoring_log = parsed.get("monitoringlog", event_desc)
         call_core = bool(parsed.get("call_core", False))
         core_reason = parsed.get("core_reason", "")

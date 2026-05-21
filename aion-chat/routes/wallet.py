@@ -5,6 +5,7 @@
 import time
 from fastapi import APIRouter
 from pydantic import BaseModel
+from typing import Optional
 
 from database import get_db
 
@@ -12,6 +13,7 @@ router = APIRouter()
 
 
 async def _get_balance() -> float:
+    """内部工具：获取钱包余额"""
     async with get_db() as db:
         cur = await db.execute(
             "SELECT COALESCE(SUM(amount), 0) FROM bookkeeping "
@@ -45,18 +47,20 @@ async def record_transfer(amount: float, source: str, description: str) -> dict:
 
 class TransferIn(BaseModel):
     amount: float
-    source: str = "user"
+    source: str = "user"          # "user" | "ai"
     description: str = ""
 
 
 @router.get("/api/wallet/balance")
 async def get_balance():
+    """查询钱包余额（所有 wallet_* 类型记录的 amount 求和）"""
     balance = await _get_balance()
     return {"balance": balance}
 
 
 @router.get("/api/wallet/transactions")
 async def list_transactions(limit: int = 50, offset: int = 0):
+    """获取转账记录列表，按时间倒序"""
     async with get_db() as db:
         db.row_factory = __import__('aiosqlite').Row
         cur = await db.execute(
@@ -70,4 +74,5 @@ async def list_transactions(limit: int = 50, offset: int = 0):
 
 @router.post("/api/wallet/transfer")
 async def do_transfer(body: TransferIn):
+    """执行转账入账"""
     return await record_transfer(body.amount, body.source, body.description)

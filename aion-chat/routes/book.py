@@ -5,6 +5,7 @@
 - 阅读进度保存
 - 图片服务
 - AI 批注（邀请共读）
+- 用户高亮（框选提问持久化）
 """
 
 import asyncio, hashlib, json, logging, re, time, os
@@ -18,9 +19,11 @@ from pydantic import BaseModel
 
 from config import DATA_DIR, load_worldbook, MODELS, DEFAULT_MODEL
 from database import get_db
-from ai_providers import stream_ai
+from ai_providers import stream_ai, CLI_STATUS_PREFIX
 from book import parse_epub, parse_pdf, delete_book_files, build_annotate_text, BOOKS_DIR
 from sentinel import get_embedding, _pack_embedding
+from context_builder import fetch_merged_timeline, render_merged_timeline
+from chatroom import stream_connor_cli, check_connor_online, _read_connor_persona, load_chatroom_config
 
 router = APIRouter()
 logger = logging.getLogger("book")
@@ -165,29 +168,46 @@ async def get_chapter(book_id: str, ch_idx: int):
         if not chapter:
             raise HTTPException(404, "章节不存在")
 
-        # 获取已有批注
+        # 获取已有批注（区分 annotator）
         ann_rows = await db.execute("""
-            SELECT segment_index, annotations, summary, updated_at
+            SELECT segment_index, annotations, summary, updated_at, COALESCE(annotator, 'aion') as annotator
             FROM book_annotations
             WHERE book_id = ? AND chapter_index = ?
             ORDER BY segment_index
         """, (book_id, ch_idx))
         annotations_raw = await ann_rows.fetchall()
 
-    # 解析批注
-    annotations_map = {}  # p_idx -> annotation
-    summaries = []
+        # 获取用户高亮（含 annotator 和 connor_answer）
+        hl_rows = await db.execute("""
+            SELECT id, selected_text, start_p, start_offset, end_p, end_offset,
+                   question, answer, created_at,
+                   COALESCE(annotator, 'aion') as annotator,
+                   COALESCE(connor_answer, '') as connor_answer
+            FROM book_highlights
+            WHERE book_id = ? AND chapter_index = ?
+            ORDER BY created_at
+        """, (book_id, ch_idx))
+        highlights_raw = await hl_rows.fetchall()
+
+    # 解析批注（按 annotator 分组）
+    aion_annotations_map = {}  # p_idx -> annotation
+    connor_annotations_map = {}
+    aion_summaries = []
+    connor_summaries = []
     for ann in annotations_raw:
+        annotator = ann.get('annotator', 'aion')
+        target_map = aion_annotations_map if annotator == 'aion' else connor_annotations_map
+        target_summaries = aion_summaries if annotator == 'aion' else connor_summaries
         try:
             ann_list = json.loads(ann['annotations'])
             for a in ann_list:
                 p = a.get('p')
                 if p is not None:
-                    annotations_map[p] = a
+                    target_map[p] = a
         except:
             pass
         if ann.get('summary'):
-            summaries.append({
+            target_summaries.append({
                 "segment_index": ann['segment_index'],
                 "summary": ann['summary']
             })
@@ -195,13 +215,36 @@ async def get_chapter(book_id: str, ch_idx: int):
     chapter['paragraphs'] = json.loads(chapter.get('paragraphs', '[]'))
     chapter['segments_meta'] = json.loads(chapter.get('segments_meta', '[]'))
 
+    # 解析高亮
+    highlights = []
+    for hl in highlights_raw:
+        highlights.append({
+            "id": hl['id'],
+            "selected_text": hl['selected_text'],
+            "start_p": hl['start_p'],
+            "start_offset": hl['start_offset'],
+            "end_p": hl['end_p'],
+            "end_offset": hl['end_offset'],
+            "question": hl['question'],
+            "answer": hl['answer'],
+            "created_at": hl['created_at'],
+            "annotator": hl.get('annotator', 'aion'),
+            "connor_answer": hl.get('connor_answer', ''),
+        })
+
     wb = load_worldbook()
+    cfg = load_chatroom_config()
+    connor_name = cfg.get("connor_name", "Connor")
     return {
         "chapter": chapter,
-        "annotations": annotations_map,
-        "summaries": summaries,
+        "annotations": aion_annotations_map,
+        "connor_annotations": connor_annotations_map,
+        "summaries": aion_summaries,
+        "connor_summaries": connor_summaries,
+        "highlights": highlights,
         "ai_name": wb.get("ai_name", "AI"),
         "user_name": wb.get("user_name", "你"),
+        "connor_name": connor_name,
     }
 
 
@@ -252,6 +295,44 @@ async def serve_book_image(book_id: str, filename: str):
     return FileResponse(img_path)
 
 
+# =============================================
+#  用户高亮（框选提问持久化）
+# =============================================
+class HighlightCreate(BaseModel):
+    selected_text: str
+    start_p: int
+    start_offset: int
+    end_p: int
+    end_offset: int
+    question: str
+    answer: str
+    annotator: Optional[str] = 'aion'  # 'aion', 'connor', 'group'
+    connor_answer: Optional[str] = ''
+
+@router.post("/api/books/{book_id}/chapters/{ch_idx}/highlights")
+async def create_highlight(book_id: str, ch_idx: int, body: HighlightCreate):
+    async with get_db() as db:
+        cursor = await db.execute("""
+            INSERT INTO book_highlights
+                (book_id, chapter_index, selected_text, start_p, start_offset,
+                 end_p, end_offset, question, answer, created_at, annotator, connor_answer)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (book_id, ch_idx, body.selected_text, body.start_p, body.start_offset,
+              body.end_p, body.end_offset, body.question, body.answer, time.time(),
+              body.annotator, body.connor_answer))
+        await db.commit()
+        return {"ok": True, "id": cursor.lastrowid}
+
+@router.delete("/api/books/{book_id}/highlights/{hl_id}")
+async def delete_highlight(book_id: str, hl_id: int):
+    async with get_db() as db:
+        await db.execute(
+            "DELETE FROM book_highlights WHERE id = ? AND book_id = ?",
+            (hl_id, book_id))
+        await db.commit()
+    return {"ok": True}
+
+
 # ── 工具 ──
 def _row_dict(cursor, row):
     """aiosqlite row_factory: 返回 dict"""
@@ -284,7 +365,7 @@ ANNOTATE_PROMPT_TEMPLATE = """你正在和{user_name}共同阅读《{book_title}
 @router.post("/api/books/{book_id}/chapters/{ch_idx}/annotate")
 async def annotate_segment(book_id: str, ch_idx: int, body: AnnotateRequest):
     """
-    对指定章节的指定段落段进行 AI 批注。
+    对指定章节的指定段落段进行 AI 批注（Aion + Connor 并行）。
     使用 SSE 返回进度，最终返回批注结果。
     """
     seg_idx = body.segment_index
@@ -325,61 +406,68 @@ async def annotate_segment(book_id: str, ch_idx: int, body: AnnotateRequest):
     # 构建文本
     annotate_text = build_annotate_text(paragraphs, start_p, end_p)
 
-    # 加载之前章节的摘要作为上下文
+    # 加载上下文
     prev_summaries = await _get_prev_summaries(book_id, ch_idx, limit=3)
-    chat_context = await _get_recent_chat_messages(limit=15)
+    chat_context = await _get_chat_context_merged(limit=15)
 
-    # 构建 prompt
+    # 构建 Aion prompt
     wb = load_worldbook()
+    ai_name = wb.get("ai_name", "AI")
+    connor_name = load_chatroom_config().get("connor_name", "Connor")
     model_key = body.model_key or DEFAULT_MODEL
     if model_key not in MODELS:
         model_key = DEFAULT_MODEL
+    if model_key not in MODELS:
+        model_key = next(iter(MODELS)) if MODELS else None
+    if not model_key:
+        raise HTTPException(500, "没有可用的 AI 模型")
 
-    messages = _build_annotate_messages(wb, annotate_text, chapter['title'],
-                                         prev_summaries, start_p, end_p, chat_context, book_title)
+    aion_messages = _build_annotate_messages(wb, annotate_text, chapter['title'],
+                                              prev_summaries, start_p, end_p, chat_context, book_title)
+
+    # 检查 Connor 是否可用
+    connor_available = await _is_connor_available()
 
     # SSE 流式返回
     async def generate():
         async with lock:
-            full_text = ""
-            meta = {}
+            yield f"data: {json.dumps({'type': 'start', 'segment_index': seg_idx, 'connor_available': connor_available})}\n\n"
 
-            yield f"data: {json.dumps({'type': 'start', 'segment_index': seg_idx})}\n\n"
+            # 并行执行 Aion 和 Connor 批注
+            aion_task = asyncio.create_task(_run_aion_annotation(aion_messages, model_key))
+            connor_task = None
+            if connor_available:
+                connor_messages = _build_connor_annotate_messages(
+                    wb, annotate_text, chapter['title'], prev_summaries, start_p, end_p, chat_context, book_title)
+                connor_task = asyncio.create_task(_run_connor_annotation(connor_messages))
 
-            try:
-                async for chunk in stream_ai(messages, model_key, meta=meta):
-                    full_text += chunk
-                    yield f"data: {json.dumps({'type': 'chunk', 'content': chunk})}\n\n"
-            except Exception as e:
-                logger.error(f"AI 批注生成失败: {e}")
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-                yield "data: {\"type\": \"done\"}\n\n"
-                return
+            # 等待 Aion 完成
+            aion_text, aion_error = await aion_task
+            if aion_error:
+                yield f"data: {json.dumps({'type': 'aion_error', 'message': aion_error})}\n\n"
+            else:
+                aion_result = _parse_annotation_json(aion_text, start_p, end_p)
+                if aion_result:
+                    await _save_annotations(book_id, ch_idx, seg_idx, aion_result, annotator='aion')
+                    yield f"data: {json.dumps({'type': 'aion_result', 'annotations': aion_result['annotations'], 'summary': aion_result['summary'], 'segment_index': seg_idx})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'aion_error', 'message': f'{ai_name} 返回格式解析失败'})}\n\n"
 
-            # 检测 provider 错误（HTTP 4xx/5xx 被 yield 为文本）
-            ai_err = _extract_ai_error(full_text)
-            if ai_err:
-                logger.error(f"AI provider 错误: {ai_err}")
-                yield f"data: {json.dumps({'type': 'error', 'message': ai_err})}\n\n"
-                yield "data: {\"type\": \"done\"}\n\n"
-                return
-
-            # 解析 JSON
-            result = _parse_annotation_json(full_text, start_p, end_p)
-            if result is None:
-                logger.warning(f"批注 JSON 解析失败，原文前200字: {full_text[:200]}")
-                yield f"data: {json.dumps({'type': 'error', 'message': 'AI 返回格式解析失败，请重试'})}\n\n"
-                yield "data: {\"type\": \"done\"}\n\n"
-                return
-
-            # 保存到数据库（覆盖合并策略）+ 写入向量记忆
-            await _save_annotations(book_id, ch_idx, seg_idx, result,
-                                    book_title=book_title, ch_title=chapter['title'])
+            # 等待 Connor 完成
+            if connor_task:
+                connor_text, connor_error = await connor_task
+                if connor_error:
+                    yield f"data: {json.dumps({'type': 'connor_error', 'message': connor_error})}\n\n"
+                else:
+                    connor_result = _parse_annotation_json(connor_text, start_p, end_p)
+                    if connor_result:
+                        await _save_annotations(book_id, ch_idx, seg_idx, connor_result, annotator='connor')
+                        yield f"data: {json.dumps({'type': 'connor_result', 'annotations': connor_result['annotations'], 'summary': connor_result['summary'], 'segment_index': seg_idx})}\n\n"
+                    else:
+                        yield f"data: {json.dumps({'type': 'connor_error', 'message': f'{connor_name} 返回格式解析失败'})}\n\n"
 
             # 更新 segments_meta 状态
             await _update_segment_status(book_id, ch_idx, seg_idx, 'done')
-
-            yield f"data: {json.dumps({'type': 'result', 'annotations': result['annotations'], 'summary': result['summary'], 'segment_index': seg_idx})}\n\n"
             yield "data: {\"type\": \"done\"}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -393,7 +481,7 @@ class AnnotateAllRequest(BaseModel):
 
 @router.post("/api/books/{book_id}/chapters/{ch_idx}/annotate-all")
 async def annotate_all_segments(book_id: str, ch_idx: int, body: AnnotateAllRequest):
-    """对章节的所有未批注段逐个批注，SSE 流式返回每段的进度和结果"""
+    """对章节的所有未批注段逐个批注（Aion+Connor并行），SSE 流式返回每段的进度和结果"""
     async with get_db() as db:
         db.row_factory = _row_dict
         row = await db.execute("""
@@ -416,9 +504,16 @@ async def annotate_all_segments(book_id: str, ch_idx: int, body: AnnotateAllRequ
     model_key = body.model_key or DEFAULT_MODEL
     if model_key not in MODELS:
         model_key = DEFAULT_MODEL
+    if model_key not in MODELS:
+        model_key = next(iter(MODELS)) if MODELS else None
+    if not model_key:
+        raise HTTPException(500, "没有可用的 AI 模型")
+
+    # 预先检测 Connor 可用性（整个批注流程中只检查一次）
+    connor_available = await _is_connor_available()
 
     async def generate():
-        yield f"data: {json.dumps({'type': 'start', 'total_segments': total})}\n\n"
+        yield f"data: {json.dumps({'type': 'start', 'total_segments': total, 'connor_available': connor_available})}\n\n"
 
         for seg_idx, seg in enumerate(segments_meta):
             lock_key = f"{book_id}:{ch_idx}:{seg_idx}"
@@ -434,41 +529,53 @@ async def annotate_all_segments(book_id: str, ch_idx: int, body: AnnotateAllRequ
                 start_p, end_p = seg['start_p'], seg['end_p']
                 annotate_text = build_annotate_text(paragraphs, start_p, end_p)
                 prev_summaries = await _get_prev_summaries(book_id, ch_idx, limit=3)
-                chat_context = await _get_recent_chat_messages(limit=15)
+                chat_context = await _get_chat_context_merged(limit=15)
 
-                messages = _build_annotate_messages(wb, annotate_text, chapter['title'],
-                                                     prev_summaries, start_p, end_p, chat_context, book_title)
+                ai_name = wb.get("ai_name", "AI")
+                connor_name = load_chatroom_config().get("connor_name", "Connor")
+                aion_messages = _build_annotate_messages(wb, annotate_text, chapter['title'],
+                                                         prev_summaries, start_p, end_p, chat_context, book_title)
 
                 yield f"data: {json.dumps({'type': 'segment_start', 'segment_index': seg_idx, 'total': total})}\n\n"
 
-                full_text = ""
-                meta = {}
-                try:
-                    async for chunk in stream_ai(messages, model_key, meta=meta):
-                        full_text += chunk
-                        yield f"data: {json.dumps({'type': 'chunk', 'segment_index': seg_idx, 'content': chunk})}\n\n"
-                except Exception as e:
-                    logger.error(f"AI 批注 seg={seg_idx} 失败: {e}")
-                    yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': str(e)})}\n\n"
-                    continue
+                # 并行执行 Aion + Connor
+                aion_task = asyncio.create_task(_run_aion_annotation(aion_messages, model_key))
+                connor_task = None
+                if connor_available:
+                    connor_messages = _build_connor_annotate_messages(
+                        wb, annotate_text, chapter['title'], prev_summaries, start_p, end_p, chat_context, book_title)
+                    connor_task = asyncio.create_task(_run_connor_annotation(connor_messages))
 
-                ai_err = _extract_ai_error(full_text)
-                if ai_err:
-                    logger.error(f"AI provider 错误 seg={seg_idx}: {ai_err}")
-                    yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': ai_err})}\n\n"
-                    continue
+                # Aion 结果
+                aion_text, aion_error = await aion_task
+                aion_result = None
+                if aion_error:
+                    logger.error(f"{ai_name} 批注 seg={seg_idx} 失败: {aion_error}")
+                    yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': f'{ai_name}: {aion_error}', 'who': 'aion'})}\n\n"
+                else:
+                    aion_result = _parse_annotation_json(aion_text, start_p, end_p)
+                    if aion_result:
+                        await _save_annotations(book_id, ch_idx, seg_idx, aion_result, annotator='aion')
+                    else:
+                        yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': f'{ai_name} 格式解析失败', 'who': 'aion'})}\n\n"
 
-                result = _parse_annotation_json(full_text, start_p, end_p)
-                if result is None:
-                    logger.warning(f"批注 JSON 解析失败 seg={seg_idx}，原文前200字: {full_text[:200]}")
-                    yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': '格式解析失败'})}\n\n"
-                    continue
+                # Connor 结果
+                connor_result = None
+                if connor_task:
+                    connor_text, connor_error = await connor_task
+                    if connor_error:
+                        logger.error(f"{connor_name} 批注 seg={seg_idx} 失败: {connor_error}")
+                        yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': f'{connor_name}: {connor_error}', 'who': 'connor'})}\n\n"
+                    else:
+                        connor_result = _parse_annotation_json(connor_text, start_p, end_p)
+                        if connor_result:
+                            await _save_annotations(book_id, ch_idx, seg_idx, connor_result, annotator='connor')
+                        else:
+                            yield f"data: {json.dumps({'type': 'segment_error', 'segment_index': seg_idx, 'message': f'{connor_name} 格式解析失败', 'who': 'connor'})}\n\n"
 
-                await _save_annotations(book_id, ch_idx, seg_idx, result,
-                                        book_title=book_title, ch_title=chapter['title'])
                 await _update_segment_status(book_id, ch_idx, seg_idx, 'done')
 
-                yield f"data: {json.dumps({'type': 'segment_done', 'segment_index': seg_idx, 'annotations': result['annotations'], 'summary': result['summary']})}\n\n"
+                yield f"data: {json.dumps({'type': 'segment_done', 'segment_index': seg_idx, 'aion_annotations': aion_result['annotations'] if aion_result else [], 'aion_summary': aion_result['summary'] if aion_result else '', 'connor_annotations': connor_result['annotations'] if connor_result else [], 'connor_summary': connor_result['summary'] if connor_result else ''})}\n\n"
 
         yield "data: {\"type\": \"done\"}\n\n"
 
@@ -477,25 +584,56 @@ async def annotate_all_segments(book_id: str, ch_idx: int, body: AnnotateAllRequ
 
 # ── 内部辅助函数 ──────────────────────────────────
 
-async def _get_recent_chat_messages(limit: int = 15) -> list:
-    """获取最近对话中的最后 N 条消息作为上下文"""
+async def _is_connor_available() -> bool:
+    """检查 Connor 是否可用（persona 文件存在 + CLI 路径存在）"""
     try:
-        async with get_db() as db:
-            # 找最新的对话
-            row = await db.execute(
-                "SELECT id FROM conversations ORDER BY updated_at DESC LIMIT 1")
-            conv = await row.fetchone()
-            if not conv:
-                return []
-            conv_id = conv[0]
-            rows = await db.execute(
-                "SELECT role, content FROM messages WHERE conv_id=? AND role IN ('user','assistant') ORDER BY created_at DESC LIMIT ?",
-                (conv_id, limit))
-            msgs = await rows.fetchall()
-            # 反转为时间正序
-            return [{"role": m[0], "content": m[1][:200]} for m in reversed(msgs)]
+        persona = _read_connor_persona()
+        if not persona:
+            return False
+        cli_path = Path(__file__).parent.parent.parent / "Connor-Codex" / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+        return cli_path.exists()
+    except Exception:
+        return False
+
+
+async def _get_chat_context_merged(limit: int = 15) -> list:
+    """获取合并的私聊+群聊时间线作为上下文（替代旧的仅查私聊逻辑）"""
+    try:
+        merged = await fetch_merged_timeline("aion", limit)
+        # 简化为 role+content 格式供批注 prompt 使用
+        timeline = render_merged_timeline(merged, "aion")
+        result = []
+        for m in timeline:
+            content = m.get("content", "")[:200]
+            if content:
+                result.append({"role": m["role"], "content": content})
+        return result
     except Exception:
         return []
+
+
+async def _run_aion_annotation(messages: list, model_key: str) -> tuple[str, str]:
+    """执行 Aion 批注，返回 (full_text, error_msg)"""
+    try:
+        full_text = ""
+        async for chunk in stream_ai(messages, model_key, meta={}):
+            full_text += chunk
+        return full_text, ""
+    except Exception as e:
+        return "", str(e)
+
+
+async def _run_connor_annotation(messages: list) -> tuple[str, str]:
+    """执行 Connor 批注（Codex CLI），返回 (full_text, error_msg)"""
+    try:
+        full_text = ""
+        async for chunk in stream_connor_cli(messages=messages):
+            if chunk.startswith(CLI_STATUS_PREFIX):
+                continue  # 跳过状态事件
+            full_text += chunk
+        return full_text, ""
+    except Exception as e:
+        return "", str(e)
 
 
 def _build_annotate_messages(wb: dict, text: str, ch_title: str,
@@ -550,6 +688,46 @@ def _extract_ai_error(text: str) -> Optional[str]:
         if stripped.startswith(prefix):
             return stripped
     return None
+
+
+def _build_connor_annotate_messages(wb: dict, text: str, ch_title: str,
+                                     prev_summaries: list, start_p: int, end_p: int,
+                                     chat_context: list = None, book_title: str = '未知') -> list:
+    """构建 Connor 的批注 messages（使用 Connor 人设）"""
+    cfg = load_chatroom_config()
+    connor_name = cfg.get("connor_name", "Connor")
+    user_name = wb.get("user_name", "你")
+    connor_persona = _read_connor_persona()
+    user_persona = wb.get("user_persona", "")
+
+    system_parts = []
+    if connor_persona:
+        system_parts.append(f"【你的人设】\n{connor_persona}")
+    if user_persona:
+        system_parts.append(f"【{user_name}的信息】\n{user_persona}")
+
+    now_str = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+    system_parts.append(f"【当前时间】{now_str}")
+
+    system_parts.append(ANNOTATE_PROMPT_TEMPLATE.format(user_name=user_name, book_title=book_title))
+
+    if prev_summaries:
+        ctx = "\n".join(f"- {s}" for s in prev_summaries)
+        system_parts.append(f"【之前章节摘要（供参考）】\n{ctx}")
+
+    if chat_context:
+        chat_lines = []
+        for m in chat_context:
+            role_label = connor_name if m['role'] == 'assistant' else user_name
+            chat_lines.append(f"{role_label}: {m['content']}")
+        system_parts.append(f"【你和{user_name}最近的聊天（供参考，了解当前状态和心情）】\n" + "\n".join(chat_lines))
+
+    messages = [
+        {"role": "user", "content": "\n\n".join(system_parts)},
+        {"role": "assistant", "content": f"好的，我{connor_name}来认真读这段内容，然后给出我的批注～"},
+        {"role": "user", "content": f"这是「{ch_title}」的段落 P{start_p}-P{end_p}：\n\n{text}"},
+    ]
+    return messages
 
 
 def _parse_annotation_json(text: str, start_p: int, end_p: int) -> Optional[dict]:
@@ -631,16 +809,16 @@ async def _get_prev_summaries(book_id: str, ch_idx: int, limit: int = 3) -> list
 
 
 async def _save_annotations(book_id: str, ch_idx: int, seg_idx: int, result: dict,
-                            book_title: str = '', ch_title: str = ''):
-    """保存批注，覆盖合并策略；同时将 summary 写入向量记忆库供 RAG 召回"""
+                            annotator: str = 'aion', book_title: str = '', ch_title: str = ''):
+    """保存批注，覆盖合并策略，区分 annotator；同时将 summary 写入向量记忆库供 RAG 召回"""
     now = time.time()
     async with get_db() as db:
         db.row_factory = _row_dict
-        # 检查是否已有旧批注
+        # 检查是否已有旧批注（同 annotator）
         row = await db.execute("""
             SELECT annotations FROM book_annotations
-            WHERE book_id = ? AND chapter_index = ? AND segment_index = ?
-        """, (book_id, ch_idx, seg_idx))
+            WHERE book_id = ? AND chapter_index = ? AND segment_index = ? AND COALESCE(annotator, 'aion') = ?
+        """, (book_id, ch_idx, seg_idx, annotator))
         existing = await row.fetchone()
 
         new_annotations = result['annotations']
@@ -658,17 +836,17 @@ async def _save_annotations(book_id: str, ch_idx: int, seg_idx: int, result: dic
             await db.execute("""
                 UPDATE book_annotations
                 SET annotations = ?, summary = ?, updated_at = ?
-                WHERE book_id = ? AND chapter_index = ? AND segment_index = ?
+                WHERE book_id = ? AND chapter_index = ? AND segment_index = ? AND COALESCE(annotator, 'aion') = ?
             """, (json.dumps(final_annotations, ensure_ascii=False),
-                  result['summary'], now, book_id, ch_idx, seg_idx))
+                  result['summary'], now, book_id, ch_idx, seg_idx, annotator))
         else:
             await db.execute("""
                 INSERT INTO book_annotations (book_id, chapter_index, segment_index,
-                    annotations, summary, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    annotations, summary, created_at, updated_at, annotator)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (book_id, ch_idx, seg_idx,
                   json.dumps(new_annotations, ensure_ascii=False),
-                  result['summary'], now, now))
+                  result['summary'], now, now, annotator))
 
         await db.commit()
 

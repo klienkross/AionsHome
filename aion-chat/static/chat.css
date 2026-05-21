@@ -227,6 +227,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-se
 .music-candidates .cand-item:hover { color:var(--accent); }
 .music-capsule { display:inline-flex; align-items:center; gap:4px; margin-top:6px; padding:4px 12px; background:linear-gradient(135deg, rgba(220,38,38,0.06), rgba(239,68,68,0.03)); border:1px solid rgba(220,38,38,0.15); border-radius:16px; font-size:12px; color:var(--text2); cursor:pointer; transition:background 0.15s; }
 .music-capsule:hover { background:linear-gradient(135deg, rgba(220,38,38,0.12), rgba(239,68,68,0.08)); color:var(--text); }
+.toy-capsule { display:inline-flex; align-items:center; gap:4px; margin-top:6px; padding:4px 12px; background:linear-gradient(135deg, rgba(232,83,122,0.08), rgba(247,141,167,0.04)); border:1px solid rgba(232,83,122,0.2); border-radius:16px; font-size:12px; color:#e8537a; }
 @media (max-width: 768px) {
   .music-card { max-width:100%; }
   .music-card .music-cover { width:48px; height:48px; }
@@ -1637,4 +1638,221 @@ body[data-theme="light"] .plus-menu-item { text-shadow: none; }
     height: 32px;
     font-size: 18px;
   }
+}
+
+/* ── 转账弹窗 ── */
+.transfer-dialog-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  z-index: 9000;
+  justify-content: center; align-items: center;
+}
+.transfer-dialog-overlay.show { display: flex; }
+.transfer-dialog {
+  background: #fff8f2;
+  border-radius: 16px;
+  padding: 24px 28px;
+  min-width: 280px;
+  max-width: 340px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  text-align: center;
+}
+.transfer-dialog-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #5a3e28;
+  margin-bottom: 18px;
+}
+.transfer-amount-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 14px;
+  font-size: 22px;
+  text-align: center;
+  border: 2px solid #f0c8a0;
+  border-radius: 10px;
+  outline: none;
+  background: #fff;
+  color: #5a3e28;
+  font-weight: 600;
+}
+.transfer-amount-input:focus { border-color: #ff8359; }
+.transfer-dialog-hint {
+  font-size: 12px;
+  color: #b08060;
+  margin: 8px 0 18px;
+}
+.transfer-dialog-btns {
+  display: flex; gap: 12px;
+}
+.transfer-btn-cancel, .transfer-btn-confirm {
+  flex: 1;
+  padding: 9px 0;
+  border-radius: 10px;
+  border: none;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.transfer-btn-cancel {
+  background: #f0e0d0;
+  color: #8a6a50;
+}
+.transfer-btn-confirm {
+  background: linear-gradient(135deg, #ff8359, #ffb347);
+  color: #fff;
+}
+
+/* ── 钱包面板 ── */
+.wallet-panel-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 9000;
+  justify-content: center; align-items: center;
+}
+.wallet-panel-overlay.show { display: flex; }
+.wallet-panel {
+  background: #fff8f2;
+  border-radius: 18px;
+  width: 340px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  overflow: hidden;
+}
+.wallet-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px 12px;
+  font-size: 17px;
+  font-weight: 600;
+  color: #5a3e28;
+}
+.wallet-close-btn {
+  background: none; border: none;
+  font-size: 18px; color: #b08060;
+  cursor: pointer;
+}
+.wallet-balance-section {
+  text-align: center;
+  padding: 12px 20px 20px;
+  background: linear-gradient(135deg, #ff8359, #ffb347);
+  margin: 0 16px;
+  border-radius: 14px;
+  color: #fff;
+}
+.wallet-balance-label {
+  font-size: 13px;
+  opacity: 0.85;
+  margin-bottom: 4px;
+}
+.wallet-balance-value {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.wallet-tx-header {
+  padding: 14px 20px 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #8a6a50;
+}
+.wallet-tx-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 16px 16px;
+}
+.wallet-tx-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 8px;
+  border-bottom: 1px solid #f0e0d0;
+}
+.wallet-tx-item:last-child { border-bottom: none; }
+.wallet-tx-desc {
+  font-size: 13px;
+  color: #5a3e28;
+}
+.wallet-tx-time {
+  font-size: 11px;
+  color: #b08060;
+  margin-top: 2px;
+}
+.wallet-tx-amount {
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.wallet-tx-amount.positive { color: #e05530; }
+.wallet-tx-amount.negative { color: #40a060; }
+.wallet-tx-empty {
+  text-align: center;
+  color: #b08060;
+  padding: 30px 0;
+  font-size: 14px;
+}
+
+/* ── 转账卡片（消息内嵌，微信风格） ── */
+.transfer-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f89b40;
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin: 4px 0;
+  min-width: 170px;
+  max-width: 230px;
+  color: #fff;
+  flex-wrap: wrap;
+}
+.transfer-card.deduct {
+  background: #4caf50;
+}
+.transfer-card-icon-wrap {
+  width: 28px; height: 28px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.transfer-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0px;
+}
+.transfer-card-amount {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+}
+.transfer-card-desc {
+  font-size: 10px;
+  color: rgba(255,255,255,0.85);
+}
+.transfer-card-footer {
+  width: 100%;
+  font-size: 10px;
+  color: rgba(255,255,255,0.7);
+  margin-top: -2px;
+}
+.msg-bubble:has(.transfer-card),
+.msg-row.user .msg-bubble:has(.transfer-card),
+.msg-row.assistant .msg-bubble:has(.transfer-card) {
+  background: transparent !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  border: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  text-shadow: none !important;
+}
+.msg-bubble:has(.transfer-card)::after {
+  display: none !important;
 }

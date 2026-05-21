@@ -85,6 +85,15 @@ async def init_db():
             await db.execute("ALTER TABLE schedules ADD COLUMN repeat TEXT DEFAULT NULL")
         except:
             pass
+        # schedules 表新增字段（向后兼容迁移）
+        for col, defn in [
+            ("origin", "TEXT DEFAULT 'aion'"),        # 'aion' | 'connor'
+            ("origin_room_id", "TEXT DEFAULT ''"),     # 创建时所在的群聊/Connor私聊 room_id（空=Aion私聊）
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE schedules ADD COLUMN {col} {defn}")
+            except:
+                pass
         # ── 背景思考表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS background_thoughts (
@@ -98,7 +107,7 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_bg_thoughts_used ON background_thoughts(used, created_at DESC)")
-        # ── 心语表 ──
+        # ── 心语表（保留兼容，不再写入新数据） ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS heart_whispers (
                 id TEXT PRIMARY KEY,
@@ -109,6 +118,48 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_heart_whispers_created ON heart_whispers(created_at DESC)")
+        # ── 朋友圈表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS moments (
+                id TEXT PRIMARY KEY,
+                author TEXT NOT NULL,
+                content TEXT NOT NULL,
+                source_conv TEXT,
+                source_msg_id TEXT,
+                expect_reply INTEGER DEFAULT 0,
+                created_at REAL NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_moments_created ON moments(created_at DESC)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS moment_comments (
+                id TEXT PRIMARY KEY,
+                moment_id TEXT NOT NULL,
+                author TEXT NOT NULL,
+                content TEXT NOT NULL,
+                reply_to_id TEXT,
+                created_at REAL NOT NULL
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_moment_comments_moment ON moment_comments(moment_id, created_at)")
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS moment_reactions (
+                id TEXT PRIMARY KEY,
+                moment_id TEXT NOT NULL,
+                author TEXT NOT NULL,
+                type TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(moment_id, author)
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_moment_reactions_moment ON moment_reactions(moment_id)")
+        # ── 朋友圈已读锚点 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS moment_read_anchor (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_read_at REAL NOT NULL DEFAULT 0
+            )
+        """)
         # ── 书籍表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS books (
@@ -156,6 +207,77 @@ async def init_db():
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_book_annotations_ch ON book_annotations(book_id, chapter_index)")
+        # 迁移：为 book_annotations 添加 annotator 字段（aion/connor）
+        try:
+            await db.execute("ALTER TABLE book_annotations ADD COLUMN annotator TEXT DEFAULT 'aion'")
+        except:
+            pass
+        # 迁移：去掉旧的 UNIQUE(book_id, chapter_index, segment_index) 约束
+        # SQLite 不支持 DROP CONSTRAINT，需要重建表
+        try:
+            cur = await db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='book_annotations'")
+            row = await cur.fetchone()
+            if row:
+                create_sql = row[0] if isinstance(row, (list, tuple)) else row['sql']
+                if 'UNIQUE(book_id,chapter_index,segment_index)' in create_sql.replace(' ', ''):
+                    await db.execute("PRAGMA foreign_keys = OFF")
+                    await db.commit()
+                    await db.execute("ALTER TABLE book_annotations RENAME TO _book_annotations_old")
+                    await db.execute("""
+                        CREATE TABLE book_annotations (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            book_id TEXT NOT NULL,
+                            chapter_index INTEGER NOT NULL,
+                            segment_index INTEGER NOT NULL,
+                            annotations TEXT DEFAULT '[]',
+                            summary TEXT DEFAULT '',
+                            created_at REAL NOT NULL,
+                            updated_at REAL,
+                            annotator TEXT DEFAULT 'aion',
+                            FOREIGN KEY (book_id) REFERENCES books(book_id) ON DELETE CASCADE
+                        )
+                    """)
+                    await db.execute("""
+                        INSERT INTO book_annotations (id, book_id, chapter_index, segment_index,
+                            annotations, summary, created_at, updated_at, annotator)
+                        SELECT id, book_id, chapter_index, segment_index,
+                            annotations, summary, created_at, updated_at, COALESCE(annotator, 'aion')
+                        FROM _book_annotations_old
+                    """)
+                    await db.execute("DROP TABLE _book_annotations_old")
+                    await db.execute("CREATE INDEX IF NOT EXISTS idx_book_annotations_ch ON book_annotations(book_id, chapter_index)")
+                    await db.commit()
+                    await db.execute("PRAGMA foreign_keys = ON")
+        except Exception:
+            pass
+        await db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_book_anno_unique ON book_annotations(book_id, chapter_index, segment_index, annotator)")
+        # ── 书籍高亮（用户框选提问）表 ──
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS book_highlights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id TEXT NOT NULL,
+                chapter_index INTEGER NOT NULL,
+                selected_text TEXT NOT NULL,
+                start_p INTEGER NOT NULL,
+                start_offset INTEGER NOT NULL,
+                end_p INTEGER NOT NULL,
+                end_offset INTEGER NOT NULL,
+                question TEXT NOT NULL,
+                answer TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                FOREIGN KEY (book_id) REFERENCES books(book_id) ON DELETE CASCADE
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_book_highlights_ch ON book_highlights(book_id, chapter_index)")
+        # 迁移：为 book_highlights 添加 annotator 和 connor_answer 字段
+        try:
+            await db.execute("ALTER TABLE book_highlights ADD COLUMN annotator TEXT DEFAULT 'aion'")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE book_highlights ADD COLUMN connor_answer TEXT DEFAULT ''")
+        except:
+            pass
         # ── 小剧场对话表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS theater_conversations (
@@ -251,6 +373,11 @@ async def init_db():
         # Rename old memories table for reference (one-time migration)
         try:
             await db.execute("ALTER TABLE memories RENAME TO memories_v1")
+        except:
+            pass
+        # gifts 表新增字段（向后兼容迁移）
+        try:
+            await db.execute("ALTER TABLE gifts ADD COLUMN sender TEXT DEFAULT 'aion'")
         except:
             pass
         # ── 基金持仓表 ──

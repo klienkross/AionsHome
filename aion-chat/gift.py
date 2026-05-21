@@ -21,6 +21,8 @@ async def judge_and_send_gift(
     user_name: str,
     model_key: str,
     conv_id: str,
+    *,
+    sender: str = "aion",
 ):
     """
     在记忆总结完成后调用，让 AI 判断是否需要给用户送礼。
@@ -75,7 +77,17 @@ async def _judge_and_send_gift_inner(
     messages = context_msgs + [{"role": "user", "content": judge_prompt}]
 
     try:
-        raw = await simple_ai_call(messages, model_key)
+        if sender == "connor":
+            # Connor 使用 Codex CLI 调用
+            from chatroom import simple_connor_cli_call
+            # 将 messages 拼接为单个 prompt（Codex CLI 简单调用模式）
+            prompt_text = "\n\n".join(m["content"] for m in messages if m["role"] == "user")
+            raw = await simple_connor_cli_call(prompt_text)
+            if not raw:
+                print("[gift] Connor Codex CLI 无响应")
+                return
+        else:
+            raw = await simple_ai_call(messages, model_key)
         raw = raw.strip()
         # 清理可能的 markdown 代码块
         if raw.startswith("```"):
@@ -117,8 +129,8 @@ async def _judge_and_send_gift_inner(
 
     async with get_db() as db:
         await db.execute(
-            "INSERT INTO gifts (id, image_path, message, created_at, status) VALUES (?,?,?,?,?)",
-            (gift_id, image_path, gift_message, created_at, "pending"),
+            "INSERT INTO gifts (id, image_path, message, created_at, status, sender) VALUES (?,?,?,?,?,?)",
+            (gift_id, image_path, gift_message, created_at, "pending", sender),
         )
         await db.commit()
 
@@ -130,6 +142,7 @@ async def _judge_and_send_gift_inner(
             "image_path": image_path,
             "message": gift_message,
             "created_at": created_at,
+            "sender": sender,
         },
     })
     print(f"[gift] 礼物已创建: {gift_id}")

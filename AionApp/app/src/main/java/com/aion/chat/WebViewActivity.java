@@ -387,10 +387,12 @@ public class WebViewActivity extends AppCompatActivity {
     private static final int PERM_STEP_AUDIO = 1;
     private static final int PERM_STEP_CAMERA = 2;
     private static final int PERM_STEP_LOCATION = 3;
-    private static final int PERM_STEP_BLUETOOTH = 4;
-    private static final int PERM_STEP_BATTERY = 5;
-    private static final int PERM_STEP_DONE = 6;
+    private static final int PERM_STEP_ACTIVITY_RECOGNITION = 4;
+    private static final int PERM_STEP_BLUETOOTH = 5;
+    private static final int PERM_STEP_BATTERY = 6;
+    private static final int PERM_STEP_DONE = 7;
     private static final int REQ_BLUETOOTH = 4001;
+    private static final int REQ_ACTIVITY_RECOGNITION = 4002;
 
     /**
      * 串行请求权限：step 0→通知, 1→麦克风, 2→定位, 3→蓝牙, 4→电池优化
@@ -445,6 +447,17 @@ public class WebViewActivity extends AppCompatActivity {
                 requestBackgroundLocationOrNext();
                 break;
 
+            case PERM_STEP_ACTIVITY_RECOGNITION:
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                        && ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION)
+                        != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(this,
+                            new String[]{Manifest.permission.ACTIVITY_RECOGNITION}, REQ_ACTIVITY_RECOGNITION);
+                    return;
+                }
+                requestPermissionsSequentially(PERM_STEP_BLUETOOTH);
+                break;
+
             case PERM_STEP_BLUETOOTH:
                 requestBluetoothOrNext();
                 break;
@@ -470,7 +483,7 @@ public class WebViewActivity extends AppCompatActivity {
                                     REQ_BACKGROUND_LOCATION);
                         })
                         .setNegativeButton("跳过", (d, w) -> {
-                            requestPermissionsSequentially(PERM_STEP_BLUETOOTH);
+                            requestPermissionsSequentially(PERM_STEP_ACTIVITY_RECOGNITION);
                         })
                         .show();
                 return;
@@ -481,7 +494,7 @@ public class WebViewActivity extends AppCompatActivity {
                 return;
             }
         }
-        requestPermissionsSequentially(PERM_STEP_BLUETOOTH);
+        requestPermissionsSequentially(PERM_STEP_ACTIVITY_RECOGNITION);
     }
 
     private void requestBluetoothOrNext() {
@@ -490,10 +503,13 @@ public class WebViewActivity extends AppCompatActivity {
                     != PackageManager.PERMISSION_GRANTED;
             boolean needConnect = ContextCompat.checkSelfPermission(this, "android.permission.BLUETOOTH_CONNECT")
                     != PackageManager.PERMISSION_GRANTED;
-            if (needScan || needConnect) {
+            boolean needAdvertise = ContextCompat.checkSelfPermission(this, "android.permission.BLUETOOTH_ADVERTISE")
+                    != PackageManager.PERMISSION_GRANTED;
+            if (needScan || needConnect || needAdvertise) {
                 java.util.List<String> perms = new java.util.ArrayList<>();
                 if (needScan) perms.add("android.permission.BLUETOOTH_SCAN");
                 if (needConnect) perms.add("android.permission.BLUETOOTH_CONNECT");
+                if (needAdvertise) perms.add("android.permission.BLUETOOTH_ADVERTISE");
                 ActivityCompat.requestPermissions(this,
                         perms.toArray(new String[0]), REQ_BLUETOOTH);
                 return;
@@ -533,6 +549,9 @@ public class WebViewActivity extends AppCompatActivity {
                 }
                 break;
             case REQ_BACKGROUND_LOCATION:
+                requestPermissionsSequentially(PERM_STEP_ACTIVITY_RECOGNITION);
+                break;
+            case REQ_ACTIVITY_RECOGNITION:
                 requestPermissionsSequentially(PERM_STEP_BLUETOOTH);
                 break;
             case REQ_BLUETOOTH:
