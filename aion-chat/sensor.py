@@ -225,6 +225,7 @@ def _format_events_for_prompt(events: list[dict]) -> str:
 
 async def _analyze_events(events: list[dict], source: str = "window"):
     """调用 Sentinel 分析事件集合"""
+    from location import load_location_status
     wb = load_worldbook()
     user_name = wb.get("user_name", "你")
     ai_name = wb.get("ai_name", "AI")
@@ -365,6 +366,7 @@ async def _analyze_events(events: list[dict], source: str = "window"):
         "core_reason": core_reason,
         "screenshot": "",
         "source": "sensor",
+        "steps": load_location_status().get("steps"),
     }
     append_monitor_log(log_entry)
     await manager.broadcast({"type": "monitor_log", "data": log_entry})

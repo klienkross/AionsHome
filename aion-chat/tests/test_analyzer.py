@@ -146,6 +146,45 @@ class TestProlongedScreenTime:
         result = should_wake(entry, logs)
         assert result["rule"] != "prolonged_screen_time"
 
+    def test_triggers_with_low_step_delta(self):
+        _cooldowns.clear()
+        logs = []
+        for i in range(8):
+            h = 10 + (i * 15) // 60
+            m = (i * 15) % 60
+            log = _make_log(f"{h:02d}:{m:02d}:00", "📱 K在用小红书和Edge")
+            log["steps"] = 1000 + i * 10  # 总共 70 步
+            logs.append(log)
+        entry = logs[-1]
+        result = should_wake(entry, logs)
+        assert result["wake"] is True
+        assert "70步" in result["reason"]
+
+    def test_no_trigger_with_high_step_delta(self):
+        _cooldowns.clear()
+        logs = []
+        for i in range(8):
+            h = 10 + (i * 15) // 60
+            m = (i * 15) % 60
+            log = _make_log(f"{h:02d}:{m:02d}:00", "📱 K在用小红书和Edge")
+            log["steps"] = 1000 + i * 50  # 总共 350 步，在走动
+            logs.append(log)
+        entry = logs[-1]
+        result = should_wake(entry, logs)
+        assert result["wake"] is False
+
+    def test_triggers_when_no_step_data(self):
+        _cooldowns.clear()
+        logs = []
+        for i in range(8):
+            h = 10 + (i * 15) // 60
+            m = (i * 15) % 60
+            logs.append(_make_log(f"{h:02d}:{m:02d}:00", "📱 K在用小红书和Edge"))
+        entry = logs[-1]
+        result = should_wake(entry, logs)
+        assert result["wake"] is True
+        assert "步" not in result["reason"]
+
 
 class TestCooldown:
     def setup_method(self):

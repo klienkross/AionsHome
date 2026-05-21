@@ -114,6 +114,15 @@ def _rule_late_night_active(log_entry: dict, recent_logs: list[dict]) -> dict | 
     return None
 
 
+def _step_delta(tail: list[dict]) -> int | None:
+    """计算 log 列表首尾的步数差值，任一端缺数据返回 None"""
+    s0 = tail[0].get("steps")
+    s1 = tail[-1].get("steps")
+    if s0 is None or s1 is None:
+        return None
+    return abs(s1 - s0)
+
+
 def _rule_prolonged_screen_time(log_entry: dict, recent_logs: list[dict]) -> dict | None:
     cfg = ANALYZER_CONFIG["prolonged_screen_time"]
     hour = _get_hour(log_entry)
@@ -128,12 +137,21 @@ def _rule_prolonged_screen_time(log_entry: dict, recent_logs: list[dict]) -> dic
         return None
 
     tail = recent_logs[-n:]
-    if all(is_active(e.get("monitoringlog", "")) for e in tail):
-        _record_cooldown("prolonged_screen_time")
-        hours = n * 15 / 60
+    if not all(is_active(e.get("monitoringlog", "")) for e in tail):
+        return None
+
+    delta = _step_delta(tail)
+    # 步数差 >= 200 说明人在走动，不打扰
+    if delta is not None and delta >= 200:
+        return None
+
+    _record_cooldown("prolonged_screen_time")
+    hours = n * 15 / 60
+    if delta is not None:
         return {"wake": True, "rule": "prolonged_screen_time",
-                "reason": f"已连续{hours:.0f}小时在屏幕前，该起来活动一下"}
-    return None
+                "reason": f"已连续{hours:.0f}小时在屏幕前，期间只走了{delta}步，该起来活动一下"}
+    return {"wake": True, "rule": "prolonged_screen_time",
+            "reason": f"已连续{hours:.0f}小时在屏幕前，该起来活动一下"}
 
 
 # ── 入口 ──────────────────────────────────────────
