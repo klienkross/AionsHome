@@ -332,12 +332,8 @@ async def _analyze_events(events: list[dict], source: str = "window"):
 字段说明：
 - monitoringlog: 基于传感器数据的客观记录，只写事实，禁止推测情绪或心理状态
 - summary: 综合最近的状态变化和关键事件，一两句话
-- call_core: 是否唤醒主脑主动联系{user_name}
-- core_reason: 仅当call_core为true时填写，限一句话
-
-call_core判断依据（默认false，只有明确理由才设true）：
-- false: {user_name}正常使用手机 / 夜间在睡觉 / 前不久才发过消息 / 没有显著变化
-- true: 地理围栏变化且{ai_name}还不知道 / 超过2小时无任何活动需关心 / 深夜2点后仍活跃"""
+- call_core: 始终填 false（唤醒判断由系统另行处理）
+- core_reason: 始终留空"""
 
     log.info("调用 Sentinel 分析 %d 个事件 (source=%s, has_image=%s)", len(events), source, bool(image_b64))
 
@@ -373,8 +369,16 @@ call_core判断依据（默认false，只有明确理由才设true）：
     append_monitor_log(log_entry)
     await manager.broadcast({"type": "monitor_log", "data": log_entry})
 
-    if call_core:
-        await _call_core_sensor(monitoring_log, last_user_ts, summary, core_reason, recent_logs)
+    if SETTINGS.get("analyzer_enabled", False):
+        from analyzer import should_wake
+        result = should_wake(log_entry, recent_logs)
+        if result["wake"]:
+            log_entry["call_core"] = True
+            log_entry["core_reason"] = f"[{result['rule']}] {result['reason']}"
+            await _call_core_sensor(monitoring_log, last_user_ts, summary, result["reason"], recent_logs)
+    else:
+        if call_core:
+            await _call_core_sensor(monitoring_log, last_user_ts, summary, core_reason, recent_logs)
 
 
 from ai_providers import stream_ai

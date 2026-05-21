@@ -2,7 +2,7 @@
 设备活动日志：上报接收、JSONL 存储、自动清理（保留最近 N 小时）、PC 活动窗口采集、10 分钟摘要
 """
 
-import json, time, threading, logging
+import json, time, threading, logging, shutil
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -20,6 +20,8 @@ _CLEANUP_INTERVAL = 300  # 每 5 分钟清理一次
 # ── 路径 ──────────────────────────────────────────
 ACTIVITY_LOGS_DIR = DATA_DIR / "activity_logs"
 ACTIVITY_LOGS_DIR.mkdir(exist_ok=True)
+ACTIVITY_ARCHIVE_DIR = DATA_DIR / "activity_archive"
+ACTIVITY_ARCHIVE_DIR.mkdir(exist_ok=True)
 
 # 保留最近 N 小时的活动日志和摘要
 KEEP_HOURS = 3
@@ -206,6 +208,20 @@ def get_available_dates() -> list[str]:
     return dates
 
 
+def _archive_before_delete(logfile: Path):
+    """清理前将完整文件归档到 activity_archive/，已存在则追加新条目"""
+    archive_path = ACTIVITY_ARCHIVE_DIR / logfile.name
+    if not archive_path.exists():
+        shutil.copy2(logfile, archive_path)
+    else:
+        existing_lines = set(archive_path.read_text(encoding="utf-8").splitlines())
+        with open(logfile, "r", encoding="utf-8") as f:
+            new_lines = [l.strip() for l in f if l.strip() and l.strip() not in existing_lines]
+        if new_lines:
+            with open(archive_path, "a", encoding="utf-8") as f:
+                f.write("\n".join(new_lines) + "\n")
+
+
 def cleanup_old_activity_logs():
     """清理过期条目：只保留最近 KEEP_HOURS 小时的数据（每 5 分钟最多执行一次）"""
     global _last_cleanup_ts
@@ -225,14 +241,15 @@ def cleanup_old_activity_logs():
         except ValueError:
             continue
 
-        # 比截止日期还早的文件整个删除
+        # 比截止日期还早的文件：归档后删除
         if file_date < cutoff_date:
+            _archive_before_delete(logfile)
             logfile.unlink(missing_ok=True)
             continue
 
         # 截止日期当天的文件需要过滤条目
         if file_date == cutoff_date and file_date != today:
-            # 加锁读取、过滤、回写
+            _archive_before_delete(logfile)
             with _file_lock:
                 kept = []
                 with open(logfile, "r", encoding="utf-8") as f:

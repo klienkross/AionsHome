@@ -1194,10 +1194,15 @@ public class AionPushService extends Service {
             Log.w(TAG, "\uD83D\uDC63 No step counter sensor on this device");
             return;
         }
-        // 传感器回调必须在有 Looper 的线程上注册，用主线程 Handler
-        sensorManager.registerListener(stepListener, stepSensor,
-                SensorManager.SENSOR_DELAY_NORMAL, mainHandler);
-        Log.i(TAG, "\uD83D\uDC63 Step counter sensor registered (mainHandler)");
+        // maxReportLatencyUs=0 确保事件立即投递，不被系统批量缓存
+        boolean ok = sensorManager.registerListener(stepListener, stepSensor,
+                SensorManager.SENSOR_DELAY_NORMAL, 0, mainHandler);
+        if (ok) {
+            Log.i(TAG, "👣 Step counter registered (maxLatency=0)");
+        } else {
+            Log.e(TAG, "👣 registerListener FAILED");
+            stepSensor = null;
+        }
     }
 
     private final SensorEventListener stepListener = new SensorEventListener() {
