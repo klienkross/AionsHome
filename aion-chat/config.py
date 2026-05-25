@@ -95,6 +95,30 @@ def get_sentinel_config() -> dict:
         "use_openai": False,
     }
 
+import platform, secrets as _secrets
+
+def get_sync_config() -> dict:
+    """返回同步配置。首次调用时自动生成 device_id。"""
+    device_id = SETTINGS.get("device_id", "")
+    if not device_id:
+        hostname = platform.node()[:12]
+        suffix = _secrets.token_hex(2).upper()
+        device_id = f"{hostname}-{suffix}"
+        SETTINGS["device_id"] = device_id
+        save_settings(SETTINGS)
+    return {
+        "github_sync_token": SETTINGS.get("github_sync_token", ""),
+        "sync_repo": SETTINGS.get("sync_repo", ""),
+        "device_id": device_id,
+        "device_name": SETTINGS.get("device_name", device_id),
+    }
+
+
+def is_sync_configured() -> bool:
+    """检查同步是否已配置（token + repo 都有值）。"""
+    return bool(SETTINGS.get("github_sync_token")) and bool(SETTINGS.get("sync_repo"))
+
+
 def get_embedding_config() -> dict:
     """
     返回向量模型配置。

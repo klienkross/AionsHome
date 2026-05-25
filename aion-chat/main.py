@@ -50,6 +50,7 @@ from routes import chatroom as chatroom_routes
 from routes import wallet as wallet_routes
 from routes import toy_adv as toy_adv_routes
 from routes import connor_wallet as connor_wallet_routes
+from routes import sync as sync_routes
 from activity import pc_tracker
 # from memory import auto_digest  # V1
 from digest_v2 import auto_digest_v2 as auto_digest
@@ -224,6 +225,7 @@ app.include_router(chatroom_routes.router)
 app.include_router(wallet_routes.router)
 app.include_router(toy_adv_routes.router)
 app.include_router(connor_wallet_routes.router)
+app.include_router(sync_routes.router)
 
 # ── reading 辅助函数 ──────────────────────────────
 

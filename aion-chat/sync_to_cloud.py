@@ -1,68 +1,66 @@
-"""同步聊天记录和记忆库到云端 Aions_memory 仓库"""
+"""CLI 入口：多设备同步推送/拉取。
 
-import os
-import subprocess
-import shutil
-from pathlib import Path
-from datetime import datetime
+Usage:
+    python sync_to_cloud.py --push     # 推送本地增量到 GitHub
+    python sync_to_cloud.py --pull     # 从 GitHub 拉取增量到本地
+    python sync_to_cloud.py --status   # 查看同步状态
+"""
 
-AIONS_MEMORY_PATH = Path("D:/pyworks/Aions_memory")
-DATA_DIR = Path(__file__).resolve().parent / "data"
-_GIT_CONFIG = ["-c", "credential.helper=manager"]
-_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-
-
-def _git(*args: str, cwd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", *_GIT_CONFIG, *args],
-        cwd=cwd, capture_output=True, text=True, encoding="utf-8", env=_ENV,
-    )
+import asyncio
+import argparse
+import sys
 
 
-def sync_to_cloud(commit_summary: str) -> bool:
-    """将 data/chats/ 和 data/chat.db 同步到 Aions_memory 仓库并推送"""
-    if not (AIONS_MEMORY_PATH / ".git").exists():
-        print(f"[sync_to_cloud] Aions_memory repo not found at {AIONS_MEMORY_PATH}")
-        return False
-    try:
-        src_chats = DATA_DIR / "chats"
-        src_db = DATA_DIR / "chat.db"
-        dst_chats = AIONS_MEMORY_PATH / "chats"
-        dst_db = AIONS_MEMORY_PATH / "chat.db"
+async def main():
+    parser = argparse.ArgumentParser(description="Aion multi-device sync")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--push", action="store_true", help="Push local changes to cloud")
+    group.add_argument("--pull", action="store_true", help="Pull cloud changes to local")
+    group.add_argument("--status", action="store_true", help="Show sync status")
+    args = parser.parse_args()
 
-        if src_chats.exists():
-            if dst_chats.exists():
-                shutil.rmtree(str(dst_chats))
-            shutil.copytree(str(src_chats), str(dst_chats))
-        if src_db.exists():
-            shutil.copy2(str(src_db), str(dst_db))
+    from config import is_sync_configured, get_sync_config
 
-        cwd = str(AIONS_MEMORY_PATH)
+    if not is_sync_configured():
+        print("ERROR: Sync not configured.")
+        print("Set 'github_sync_token' and 'sync_repo' in data/settings.json")
+        print('Example: {"github_sync_token": "ghp_xxx", "sync_repo": "owner/Aions_memory"}')
+        sys.exit(1)
 
-        r = _git("add", ".", cwd=cwd)
-        if r.returncode != 0:
-            print(f"[sync_to_cloud] git add failed: {r.stderr}")
-            return False
+    if args.status:
+        cfg = get_sync_config()
+        print(f"Device ID:   {cfg['device_id']}")
+        print(f"Device Name: {cfg['device_name']}")
+        print(f"Repo:        {cfg['sync_repo']}")
+        token = cfg['github_sync_token']
+        print(f"Token:       ***{token[-4:]}")
+        return
 
-        r = _git("diff", "--cached", "--quiet", cwd=cwd)
-        if r.returncode == 0:
-            print("[sync_to_cloud] No changes to commit")
-            return True
+    if args.push:
+        from sync_engine import sync_push
+        print("Pushing local changes to cloud...")
+        result = await sync_push()
+        if result["ok"]:
+            print(f"Done! Pushed {result['conversations_pushed']} conversations, "
+                  f"{result['memories_pushed']} memories, {result['schedules_pushed']} schedules.")
+            print(f"Commit: {result['commit'][:12]}")
+        else:
+            print(f"ERROR: {result['error']}")
+            sys.exit(1)
 
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        full_msg = f"[{ts}] {commit_summary}"
-        r = _git("commit", "-m", full_msg, cwd=cwd)
-        if r.returncode != 0:
-            print(f"[sync_to_cloud] git commit failed: {r.stderr}")
-            return False
+    if args.pull:
+        from sync_engine import sync_pull
+        print("Pulling cloud changes to local...")
+        result = await sync_pull()
+        if result["ok"]:
+            print(f"Done! Imported:")
+            print(f"  Conversations: {result['conversations']}")
+            print(f"  Memories: {result['memories']}")
+            print(f"  Schedules: {result['schedules']}")
+        else:
+            print(f"ERROR: {result['error']}")
+            sys.exit(1)
 
-        r = _git("push", cwd=cwd)
-        if r.returncode != 0:
-            print(f"[sync_to_cloud] git push failed: {r.stderr}")
-            return False
 
-        print(f"[sync_to_cloud] Synced: {full_msg}")
-        return True
-    except Exception as e:
-        print(f"[sync_to_cloud] Error: {e}")
-        return False
+if __name__ == "__main__":
+    asyncio.run(main())
