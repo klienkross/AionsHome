@@ -29,11 +29,11 @@
 
 | 功能 | 触发方式 | 模型 | 提供商 | 需要的 key | 需梯子 |
 |---|---|---|---|---|---|
-| **SELFIE / DRAW**（用户主动要求画图） | AI 回复 `[SELFIE:提示词]` 或 `[DRAW:提示词]` | `gemini-3.1-flash-image-preview` | Google Gemini | `gemini_key` | 是 |
+| **SELFIE / DRAW**（用户主动要求画图） | AI 回复 `[SELFIE:提示词]` 或 `[DRAW:提示词]` | 优先 `qwen-image-2.0-pro`，fallback `gemini-3.1-flash-image-preview` | 阿里云百炼 / Google Gemini | `dashscope_key`（优先）或 `gemini_key` | 百炼否 / Gemini 是 |
 | **礼物生图**（AI 自动送礼时） | 记忆总结后 AI 判断送礼 | `Kwai-Kolors/Kolors` | 硅基流动 | `siliconflow_key` | 否 |
 
-- SELFIE 模式支持参考图（`public/生图锚点.jpg`），保证人物一致性；Kolors 不支持参考图
-- 两者互不影响：没有 `gemini_key` 只是 SELFIE/DRAW 不可用，礼物生图照常；反之亦然
+- SELFIE 模式支持参考图（`public/生图锚点.jpg`），Qwen-Image 和 Gemini 均支持，保证人物一致性；Kolors 不支持参考图
+- **有 `dashscope_key` 就优先走 Qwen-Image（国内直连、无需梯子）**，Qwen 失败才 fallback Gemini；都没有 key 则 SELFIE/DRAW 不可用
 - 前端设置页的「AI 生图」开关（`image_gen_enabled`）只控制 SELFIE/DRAW，礼物生图始终跟随记忆总结自动触发
 
 ## 不用梯子也能跑
@@ -48,7 +48,7 @@
   - **语音合成 TTS** → 小米 MiMo
   - 音乐 / 基金 / 高德定位本就是国内服务
 - **结论**：聊天、记忆、语音、监控哨兵这条主链路，配好上表的国内 key 即可，全程不用梯子。
-- 仍需梯子的只剩**可选项**：Gemini 系模型、AI 生图的 SELFIE/DRAW（Gemini）、Gemini CLI、ntfy.sh 公网中转——不碰这些完全不影响主程序。礼物生图走硅基流动 Kolors，不需要梯子。
+- 仍需梯子的只剩**可选项**：Gemini 系模型、Gemini CLI、ntfy.sh 公网中转——不碰这些完全不影响主程序。SELFIE/DRAW 生图现已支持 Qwen-Image（百炼），配了 `dashscope_key` 即可国内直连；礼物生图走硅基流动 Kolors，同样不需要梯子。
 
 ## 技术栈（增量）
 - **哨兵/向量改用阿里云百炼 DashScope**（OpenAI 兼容端点）：哨兵 `qwen-flash` / 视觉 `qwen3-vl-flash`，Embedding `text-embedding-v4`（1024维）——替代原版散落的 Gemini 哨兵/embedding 调用，前端可配置 base_url/key/model
