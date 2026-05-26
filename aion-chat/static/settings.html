@@ -9,65 +9,177 @@
 <link rel="manifest" href="/manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#ff8359">
+<style>
+.settings-group { margin:8px 0; border-radius:10px; background:var(--surface); border:1px solid var(--border); overflow:hidden; }
+.settings-group summary { display:flex; align-items:center; padding:14px 16px; cursor:pointer; font-size:15px; font-weight:600; color:var(--text); list-style:none; user-select:none; }
+.settings-group summary::-webkit-details-marker { display:none; }
+.group-dot { width:8px; height:8px; border-radius:50%; margin-right:10px; flex-shrink:0; background:transparent; }
+.group-dot.active { background:#4caf50; }
+.group-arrow { margin-left:auto; font-size:12px; color:var(--text3); transition:transform 0.2s; }
+.settings-group[open] .group-arrow { transform:rotate(90deg); }
+.group-body { padding:0 16px 16px; }
+.group-desc { font-size:12px; color:var(--text3); margin:0 0 12px; }
+.toggle-row { display:flex; align-items:center; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border); }
+.toggle-row:last-child { border-bottom:none; }
+.toggle-label { font-size:14px; color:var(--text); }
+.save-area { margin:16px 0; }
+</style>
 </head>
 <body>
 <div class="sub-page">
   <aion-topbar title="⚙ 设置"></aion-topbar>
   <div class="page-content">
-    <label class="form-label">Gemini API Key</label>
-    <input class="form-input" type="text" id="geminiKeyInput" placeholder="输入 Gemini API Key..." autocomplete="off" style="font-family:monospace">
-    <label class="form-label">Gemini Free Key</label>
-    <input class="form-input" type="text" id="geminiFreeKeyInput" placeholder="留空则复用上方 Key" autocomplete="off" style="font-family:monospace">
 
-    <hr style="border:none;border-top:1px solid #333;margin:16px 0 8px">
-    <label class="form-label" style="font-weight:600">哨兵模型（留空用默认 DashScope）</label>
-    <label class="form-label">哨兵 Base URL</label>
-    <input class="form-input" type="text" id="sentinelBaseUrlInput" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off" style="font-family:monospace">
-    <label class="form-label">哨兵 API Key</label>
-    <input class="form-input" type="text" id="sentinelApiKeyInput" placeholder="留空则用 DashScope Key" autocomplete="off" style="font-family:monospace">
-    <label class="form-label">哨兵模型名</label>
-    <input class="form-input" type="text" id="sentinelModelInput" placeholder="qwen-flash" autocomplete="off" style="font-family:monospace">
-    <label class="form-label">哨兵视觉模型名</label>
-    <input class="form-input" type="text" id="sentinelVlModelInput" placeholder="qwen3-vl-flash" autocomplete="off" style="font-family:monospace">
+    <!-- Group 1: 核心 Key -->
+    <details class="settings-group" id="grpCore" open>
+      <summary><span class="group-dot" id="dotCore"></span>核心 Key<span class="group-arrow">▸</span></summary>
+      <div class="group-body">
+        <p class="group-desc">聊天、记忆、哨兵、生图的基础 Key，配上就能跑</p>
+        <label class="form-label">DashScope API Key（阿里云百炼）</label>
+        <input class="form-input" type="text" id="dashscopeKeyInput" placeholder="sk-..." autocomplete="off" style="font-family:monospace">
+        <label class="form-label">硅基流动 API Key</label>
+        <input class="form-input" type="text" id="sfKeyInput" placeholder="sk-..." autocomplete="off" style="font-family:monospace">
+        <label class="form-label">默认模型</label>
+        <select class="form-input" id="defaultModelSelect"></select>
+      </div>
+    </details>
 
-    <label class="form-label" style="font-weight:600;margin-top:12px">向量模型（留空用默认 DashScope）</label>
-    <label class="form-label">向量 Base URL</label>
-    <input class="form-input" type="text" id="embeddingBaseUrlInput" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off" style="font-family:monospace">
-    <label class="form-label">向量 API Key</label>
-    <input class="form-input" type="text" id="embeddingApiKeyInput" placeholder="留空则用 DashScope Key" autocomplete="off" style="font-family:monospace">
-    <label class="form-label">向量模型名</label>
-    <input class="form-input" type="text" id="embeddingModelInput" placeholder="text-embedding-v4" autocomplete="off" style="font-family:monospace">
-    <hr style="border:none;border-top:1px solid #333;margin:16px 0 8px">
+    <!-- Group 2: 功能开关 -->
+    <details class="settings-group" id="grpToggles">
+      <summary><span class="group-dot" id="dotToggles"></span>功能开关<span class="group-arrow">▸</span></summary>
+      <div class="group-body">
+        <p class="group-desc">各功能的总开关，聊天页菜单里也能切</p>
+        <div class="toggle-row">
+          <span class="toggle-label">视频通话</span>
+          <label class="toggle-switch"><input type="checkbox" id="togVideoCall"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <span class="toggle-label">AI 生图（SELFIE / DRAW）</span>
+          <label class="toggle-switch"><input type="checkbox" id="togImageGen"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <span class="toggle-label">Gemini CLI 工具调用</span>
+          <label class="toggle-switch"><input type="checkbox" id="togGeminiCli"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <span class="toggle-label">桌宠</span>
+          <label class="toggle-switch"><input type="checkbox" id="togPet"><span class="toggle-slider"></span></label>
+        </div>
+      </div>
+    </details>
 
-    <label class="form-label">硅基流动 API Key</label>
-    <input class="form-input" type="text" id="sfKeyInput" placeholder="输入硅基流动 API Key..." autocomplete="off" style="font-family:monospace">
-    <label class="form-label">中转站 API Key</label>
-    <input class="form-input" type="text" id="aiproKeyInput" placeholder="输入中转站 API Key..." autocomplete="off" style="font-family:monospace">
-    <label class="form-label">默认模型</label>
-    <select class="form-input" id="defaultModelSelect"></select>
-    <label class="form-label">网易云 MUSIC_U Cookie（VIP 点歌）</label>
-    <input class="form-input" type="text" id="neteaseMusicUInput" placeholder="浏览器 F12 → Cookie → MUSIC_U" autocomplete="off" style="font-family:monospace">
-    <div class="btn-row">
-      <button class="btn-cancel" onclick="location.href='/'">取消</button>
-      <button class="btn-save" onclick="saveSettings()">保存</button>
+    <!-- Group 3: 语音 -->
+    <details class="settings-group" id="grpVoice">
+      <summary><span class="group-dot" id="dotVoice"></span>语音<span class="group-arrow">▸</span></summary>
+      <div class="group-body">
+        <p class="group-desc">语音合成（TTS），配了才有语音回复</p>
+        <label class="form-label">MiMo TTS API Key（小米）</label>
+        <input class="form-input" type="text" id="mimoKeyInput" placeholder="sk-..." autocomplete="off" style="font-family:monospace">
+      </div>
+    </details>
+
+    <!-- Group 4: 梯子可选 -->
+    <details class="settings-group" id="grpProxy">
+      <summary><span class="group-dot" id="dotProxy"></span>梯子可选<span class="group-arrow">▸</span></summary>
+      <div class="group-body">
+        <p class="group-desc">需要梯子的服务，不配不影响主功能</p>
+        <label class="form-label">Gemini API Key</label>
+        <input class="form-input" type="text" id="geminiKeyInput" placeholder="AIza..." autocomplete="off" style="font-family:monospace">
+        <label class="form-label">Gemini Free Key</label>
+        <input class="form-input" type="text" id="geminiFreeKeyInput" placeholder="留空则复用上方 Key" autocomplete="off" style="font-family:monospace">
+        <label class="form-label">中转站 API Key（AiPro）</label>
+        <input class="form-input" type="text" id="aiproKeyInput" placeholder="sk-..." autocomplete="off" style="font-family:monospace">
+      </div>
+    </details>
+
+    <!-- Group 5: 高级覆盖 -->
+    <details class="settings-group" id="grpAdvanced">
+      <summary><span class="group-dot" id="dotAdvanced"></span>高级覆盖<span class="group-arrow">▸</span></summary>
+      <div class="group-body">
+        <p class="group-desc">哨兵和向量模型的自定义端点，留空用默认 DashScope</p>
+        <label class="form-label" style="font-weight:600">哨兵模型</label>
+        <label class="form-label">哨兵 Base URL</label>
+        <input class="form-input" type="text" id="sentinelBaseUrlInput" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off" style="font-family:monospace">
+        <label class="form-label">哨兵 API Key</label>
+        <input class="form-input" type="text" id="sentinelApiKeyInput" placeholder="留空则用 DashScope Key" autocomplete="off" style="font-family:monospace">
+        <label class="form-label">哨兵模型名</label>
+        <input class="form-input" type="text" id="sentinelModelInput" placeholder="qwen-flash" autocomplete="off" style="font-family:monospace">
+        <label class="form-label">哨兵视觉模型名</label>
+        <input class="form-input" type="text" id="sentinelVlModelInput" placeholder="qwen3-vl-flash" autocomplete="off" style="font-family:monospace">
+        <label class="form-label" style="font-weight:600;margin-top:12px">向量模型</label>
+        <label class="form-label">向量 Base URL</label>
+        <input class="form-input" type="text" id="embeddingBaseUrlInput" placeholder="https://dashscope.aliyuncs.com/compatible-mode/v1" autocomplete="off" style="font-family:monospace">
+        <label class="form-label">向量 API Key</label>
+        <input class="form-input" type="text" id="embeddingApiKeyInput" placeholder="留空则用 DashScope Key" autocomplete="off" style="font-family:monospace">
+        <label class="form-label">向量模型名</label>
+        <input class="form-input" type="text" id="embeddingModelInput" placeholder="text-embedding-v4" autocomplete="off" style="font-family:monospace">
+      </div>
+    </details>
+
+    <!-- Group 6: 其他 -->
+    <details class="settings-group" id="grpOther">
+      <summary><span class="group-dot" id="dotOther"></span>其他<span class="group-arrow">▸</span></summary>
+      <div class="group-body">
+        <p class="group-desc">网易云、缓存等杂项</p>
+        <label class="form-label">网易云 MUSIC_U Cookie（VIP 点歌）</label>
+        <input class="form-input" type="text" id="neteaseMusicUInput" placeholder="浏览器 F12 → Cookie → MUSIC_U" autocomplete="off" style="font-family:monospace">
+        <button class="btn-cancel" onclick="clearAionCache()" style="width:100%;margin-top:16px">🗑 清除缓存并刷新</button>
+      </div>
+    </details>
+
+    <!-- Save button (outside groups) -->
+    <div class="save-area">
+      <div class="btn-row">
+        <button class="btn-cancel" onclick="location.href='/'">取消</button>
+        <button class="btn-save" onclick="saveSettings()">保存</button>
+      </div>
     </div>
 
-    <hr style="border:none;border-top:1px solid #333;margin:16px 0 8px">
-    <label class="form-label" style="font-weight:600">缓存管理</label>
-    <button class="btn-cancel" onclick="clearAionCache()" style="width:100%">🗑 清除缓存并刷新</button>
   </div>
 </div>
 <script src="/static/common.js"></script>
 <script>
 connectCommonWS();
 
+// ── Accordion: only one group open at a time ──
+document.querySelectorAll('.settings-group').forEach(det => {
+  det.addEventListener('toggle', () => {
+    if (det.open) {
+      document.querySelectorAll('.settings-group').forEach(other => {
+        if (other !== det) other.removeAttribute('open');
+      });
+    }
+  });
+});
+
+// ── Init ──
 (async function init() {
-  const [s, models] = await Promise.all([
+  const [s, models, vc, ig, gc, pet] = await Promise.all([
     api("GET", "/api/settings"),
-    api("GET", "/api/models")
+    api("GET", "/api/models"),
+    api("GET", "/api/settings/video-call"),
+    api("GET", "/api/settings/image-gen"),
+    api("GET", "/api/settings/gemini-cli-tools"),
+    api("GET", "/api/settings/pet"),
   ]);
+
+  // Core keys
+  $("dashscopeKeyInput").value = s.dashscope_key || "";
+  $("sfKeyInput").value = s.siliconflow_key || "";
+  const sel = $("defaultModelSelect");
+  sel.innerHTML = models.map(m =>
+    `<option value="${m.key}"${m.key === s.default_model ? ' selected' : ''}>${m.key}</option>`
+  ).join("");
+
+  // Voice
+  $("mimoKeyInput").value = s.mimo_key || "";
+
+  // Proxy
   $("geminiKeyInput").value = s.gemini_key || "";
   $("geminiFreeKeyInput").value = s.gemini_free_key || "";
+  $("aiproKeyInput").value = s.aipro_key || "";
+
+  // Advanced
   $("sentinelBaseUrlInput").value = s.sentinel_base_url || "";
   $("sentinelApiKeyInput").value = s.sentinel_api_key || "";
   $("sentinelModelInput").value = s.sentinel_model || "";
@@ -75,19 +187,53 @@ connectCommonWS();
   $("embeddingBaseUrlInput").value = s.embedding_base_url || "";
   $("embeddingApiKeyInput").value = s.embedding_api_key || "";
   $("embeddingModelInput").value = s.embedding_model || "";
-  $("sfKeyInput").value = s.siliconflow_key || "";
-  $("aiproKeyInput").value = s.aipro_key || "";
+
+  // Other
   $("neteaseMusicUInput").value = s.netease_music_u || "";
-  const sel = $("defaultModelSelect");
-  sel.innerHTML = models.map(m =>
-    `<option value="${m.key}"${m.key === s.default_model ? ' selected' : ''}>${m.key}</option>`
-  ).join("");
+
+  // Toggles
+  $("togVideoCall").checked = vc.video_call_enabled !== false;
+  $("togImageGen").checked = !!ig.image_gen_enabled;
+  $("togGeminiCli").checked = !!gc.gemini_cli_tools_enabled;
+  $("togPet").checked = !!pet.pet_enabled;
+
+  // Green dots
+  if (s.dashscope_key || s.siliconflow_key) $("dotCore").classList.add("active");
+  if (!vc.video_call_enabled || ig.image_gen_enabled || gc.gemini_cli_tools_enabled || pet.pet_enabled) {
+    $("dotToggles").classList.add("active");
+  }
+  if (s.mimo_key) $("dotVoice").classList.add("active");
+  if (s.gemini_key || s.gemini_free_key || s.aipro_key) $("dotProxy").classList.add("active");
+  if (s.sentinel_base_url || s.sentinel_api_key || s.sentinel_model || s.sentinel_vl_model ||
+      s.embedding_base_url || s.embedding_api_key || s.embedding_model) {
+    $("dotAdvanced").classList.add("active");
+  }
+  if (s.netease_music_u) $("dotOther").classList.add("active");
 })();
 
+// ── Toggle handlers (instant-apply) ──
+$("togVideoCall").addEventListener("change", async e => {
+  await api("PUT", "/api/settings/video-call", { enabled: e.target.checked });
+});
+$("togImageGen").addEventListener("change", async e => {
+  await api("PUT", "/api/settings/image-gen", { enabled: e.target.checked });
+});
+$("togGeminiCli").addEventListener("change", async e => {
+  await api("PUT", "/api/settings/gemini-cli-tools", { enabled: e.target.checked });
+});
+$("togPet").addEventListener("change", async e => {
+  await api("PUT", "/api/settings/pet", { enabled: e.target.checked });
+});
+
+// ── Save (keys + text fields, batched) ──
 async function saveSettings() {
   await api("PUT", "/api/settings", {
+    dashscope_key: $("dashscopeKeyInput").value.trim(),
+    siliconflow_key: $("sfKeyInput").value.trim(),
+    mimo_key: $("mimoKeyInput").value.trim(),
     gemini_key: $("geminiKeyInput").value.trim(),
     gemini_free_key: $("geminiFreeKeyInput").value.trim(),
+    aipro_key: $("aiproKeyInput").value.trim(),
     sentinel_base_url: $("sentinelBaseUrlInput").value.trim(),
     sentinel_api_key: $("sentinelApiKeyInput").value.trim(),
     sentinel_model: $("sentinelModelInput").value.trim(),
@@ -95,10 +241,8 @@ async function saveSettings() {
     embedding_base_url: $("embeddingBaseUrlInput").value.trim(),
     embedding_api_key: $("embeddingApiKeyInput").value.trim(),
     embedding_model: $("embeddingModelInput").value.trim(),
-    siliconflow_key: $("sfKeyInput").value.trim(),
-    aipro_key: $("aiproKeyInput").value.trim(),
     netease_music_u: $("neteaseMusicUInput").value.trim(),
-    default_model: $("defaultModelSelect").value
+    default_model: $("defaultModelSelect").value,
   });
   showToast("✅ 已保存");
 }
