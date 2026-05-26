@@ -21,6 +21,17 @@
 | **AI 读你的 Obsidian 日记** | `obsidian_vault_path` | `data/settings.json` | 指向本地 Obsidian vault 目录。配了之后 AI 才会获得 `[OBSIDIAN_READ/RECENT/SEARCH]` 日记指令 |
 | **手机传感器/地理围栏喂给 AI** | `ntfy_enabled` + `ntfy_topic` | `data/settings.json` | 启用后订阅 ntfy.sh topic，手机（MacroDroid）事件经 `/api/webhooks` 进哨兵管道 |
 | **智能家居 (Home Assistant)** | `ha_token` | `data/settings.json` | HA 长期访问令牌。MCP Server 读取优先级：环境变量 `HA_TOKEN` > `settings.json` > `home_assistant_mcp.json`。URL 等非敏感项仍在 `data/home_assistant_mcp.json` |
+| **多设备漫游同步** | `github_sync_token` + `sync_repo` | 前端 `/settings` | GitHub fine-grained PAT + 同步仓库地址。配了之后可在多台设备间同步对话和记忆。创建步骤见下方 |
+
+#### 如何创建 GitHub Token（设备漫游用）
+
+1. 打开 [GitHub Token 创建页](https://github.com/settings/tokens?type=beta)，点 **Generate new token**
+2. **Token name**：随便起，比如 `aion-sync`
+3. **Expiration**：建议选 90 天或 No expiration（无过期）
+4. **Repository access**：选 **Only select repositories**，然后选你的同步仓库（如 `Aions_memory`，没有就先去 GitHub 新建一个空仓库）
+5. **Permissions** → **Repository permissions** → 找到 **Contents**，设为 **Read and write**，其他保持默认不动
+6. 点最下面 **Generate token**，复制生成的 `github_pat_...` 粘到设置页的「GitHub Token」框里
+7. 「同步仓库」填 `你的用户名/Aions_memory`（如 `kleinkross/Aions_memory`）
 
 > 🎁 **MiMo TTS 当前限时免费**——目前性价比最高的语音方案，萌新建议第一个就配上它。
 

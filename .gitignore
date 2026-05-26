@@ -100,6 +100,9 @@ AionApp/local.properties
 .DS_Store
 Thumbs.db
 
+# ── 设计文档（过程产物，不入库） ──
+docs/superpowers/
+
 # ── Claude Code 本地状态（每台机器不同，不应上传） ──
 .claude/settings.local.json
 .claude/worktrees/

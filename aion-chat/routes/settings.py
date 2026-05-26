@@ -39,6 +39,9 @@ class SettingsUpdate(BaseModel):
     embedding_base_url: Optional[str] = None
     embedding_api_key: Optional[str] = None
     embedding_model: Optional[str] = None
+    github_sync_token: Optional[str] = None
+    sync_repo: Optional[str] = None
+    device_name: Optional[str] = None
 
 @router.get("/api/settings")
 async def get_settings():
@@ -77,6 +80,10 @@ async def get_settings():
         "embedding_api_key": SETTINGS.get("embedding_api_key", ""),
         "embedding_api_key_masked": mask(SETTINGS.get("embedding_api_key", "")),
         "embedding_model": SETTINGS.get("embedding_model", ""),
+        "github_sync_token": SETTINGS.get("github_sync_token", ""),
+        "github_sync_token_masked": mask(SETTINGS.get("github_sync_token", "")),
+        "sync_repo": SETTINGS.get("sync_repo", ""),
+        "device_name": SETTINGS.get("device_name", ""),
     }
 
 @router.put("/api/settings")
@@ -120,7 +127,7 @@ async def update_settings(body: SettingsUpdate):
         config.DEFAULT_MODEL = body.default_model
     for key in ("sentinel_base_url", "sentinel_api_key", "sentinel_model",
                 "sentinel_vl_model", "embedding_base_url", "embedding_api_key",
-                "embedding_model"):
+                "embedding_model", "github_sync_token", "sync_repo", "device_name"):
         val = getattr(body, key, None)
         if val is not None:
             SETTINGS[key] = val

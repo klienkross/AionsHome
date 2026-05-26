@@ -116,7 +116,21 @@
       </div>
     </details>
 
-    <!-- Group 6: 其他 -->
+    <!-- Group 6: 设备漫游 -->
+    <details class="settings-group" id="grpSync">
+      <summary><span class="group-dot" id="dotSync"></span>设备漫游<span class="group-arrow">▸</span></summary>
+      <div class="group-body">
+        <p class="group-desc">多设备间同步对话和记忆，基于 GitHub 仓库。<a href="https://github.com/settings/tokens?type=beta" target="_blank" style="color:var(--accent)">去 GitHub 创建 Token →</a>（权限勾 Contents 读写即可）</p>
+        <label class="form-label">GitHub Token（fine-grained PAT）</label>
+        <input class="form-input" type="text" id="syncTokenInput" placeholder="github_pat_..." autocomplete="off" style="font-family:monospace">
+        <label class="form-label">同步仓库</label>
+        <input class="form-input" type="text" id="syncRepoInput" placeholder="owner/Aions_memory" autocomplete="off" style="font-family:monospace">
+        <label class="form-label">设备名称（可选，留空自动生成）</label>
+        <input class="form-input" type="text" id="deviceNameInput" placeholder="如：我的电脑" autocomplete="off">
+      </div>
+    </details>
+
+    <!-- Group 7: 其他 -->
     <details class="settings-group" id="grpOther">
       <summary><span class="group-dot" id="dotOther"></span>其他<span class="group-arrow">▸</span></summary>
       <div class="group-body">
@@ -162,6 +176,11 @@ document.querySelectorAll('.settings-group').forEach(det => {
     api("GET", "/api/settings/gemini-cli-tools"),
     api("GET", "/api/settings/pet"),
   ]);
+
+  // Sync
+  $("syncTokenInput").value = s.github_sync_token || "";
+  $("syncRepoInput").value = s.sync_repo || "";
+  $("deviceNameInput").value = s.device_name || "";
 
   // Core keys
   $("dashscopeKeyInput").value = s.dashscope_key || "";
@@ -209,6 +228,7 @@ document.querySelectorAll('.settings-group').forEach(det => {
     $("dotAdvanced").classList.add("active");
   }
   if (s.netease_music_u) $("dotOther").classList.add("active");
+  if (s.github_sync_token && s.sync_repo) $("dotSync").classList.add("active");
 })();
 
 // ── Toggle handlers (instant-apply) ──
@@ -228,6 +248,9 @@ $("togPet").addEventListener("change", async e => {
 // ── Save (keys + text fields, batched) ──
 async function saveSettings() {
   await api("PUT", "/api/settings", {
+    github_sync_token: $("syncTokenInput").value.trim(),
+    sync_repo: $("syncRepoInput").value.trim(),
+    device_name: $("deviceNameInput").value.trim(),
     dashscope_key: $("dashscopeKeyInput").value.trim(),
     siliconflow_key: $("sfKeyInput").value.trim(),
     mimo_key: $("mimoKeyInput").value.trim(),
