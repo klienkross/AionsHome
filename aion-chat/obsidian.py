@@ -76,6 +76,50 @@ def _fallback_summary(content: str) -> str:
     return " ".join(result)[:200] if result else content[:200]
 
 
+def _strip_template(content: str) -> str:
+    """去掉 frontmatter 和模板打卡行，保留实质正文。"""
+    lines = content.splitlines()
+    result = []
+    in_frontmatter = False
+    skipping_template = True
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if i == 0 and stripped == "---":
+            in_frontmatter = True
+            continue
+        if in_frontmatter:
+            if stripped == "---":
+                in_frontmatter = False
+            continue
+        if skipping_template:
+            if not stripped or stripped.startswith("- ["):
+                continue
+            skipping_template = False
+        result.append(line)
+    return "\n".join(result).strip()
+
+
+def _build_diary_summary_prompt(entries: list[tuple[str, str]], user_name: str) -> str:
+    diary_block = "\n\n".join(
+        f"## {date_str}\n{text}" for date_str, text in entries
+    )
+    return (
+        f"以下是{user_name}最近 {len(entries)} 天的日记正文（已去除模板打卡部分）。\n"
+        f"请按以下分类整理出结构化摘要，每个分类只列要点，不展开原文：\n\n"
+        f"【完成的事】有明确证据做了的（含日期）\n"
+        f"【画饼/未完成】说了想做但没动的、flag、反复提到但没推进的（标注状态：纯想象/已否决/搁置）\n"
+        f"【持续推进中】跨天出现的项目或事务，用最后一次动作一句话概括\n"
+        f"【情绪/走神】只列话题关键词，不摘录原文，不评论\n"
+        f"【身体/作息】caffeine、喝水、睡眠等纯数据记录\n\n"
+        f"规则：\n"
+        f"- 某个分类无内容则写（无）\n"
+        f"- 不要劝学、不评判、不补充日记里没有的内容\n"
+        f"- 画饼是中性分类不是贬义\n"
+        f"- 整体控制在 300 字以内\n\n"
+        f"{diary_block}"
+    )
+
+
 async def read_recent(n: int) -> str:
     vault = _vault()
     if not vault:
@@ -92,8 +136,20 @@ async def read_recent(n: int) -> str:
         if not f.exists():
             continue
         content = f.read_text(encoding="utf-8")
-        summary = await summarize_diary(date_str, content)
-        entries.append(f"📅 {date_str}：{summary}")
+        stripped = _strip_template(content)
+        if stripped:
+            entries.append((date_str, stripped))
     if not entries:
         return f"最近 {n} 天暂无日记。"
-    return f"最近 {n} 天日记摘要：\n\n" + "\n\n".join(entries)
+
+    from sentinel import call_sentinel_text
+    from config import load_worldbook
+    user_name = load_worldbook().get("user_name", "用户")
+    prompt = _build_diary_summary_prompt(entries, user_name)
+    result = await call_sentinel_text(prompt, timeout=30)
+    if result:
+        return f"最近 {n} 天日记结构化摘要：\n\n{result}"
+    fallback = "\n\n".join(
+        f"📅 {d}: {_fallback_summary(t)}" for d, t in entries
+    )
+    return f"最近 {n} 天日记摘要（降级）：\n\n{fallback}"

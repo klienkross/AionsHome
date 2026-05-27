@@ -2753,18 +2753,19 @@ async def perform_obsidian_check(
 
 async def perform_background_think(conv_id: str, instruction: str, msg_id: str):
     """后台静默执行思考任务，结果存入 background_thoughts 表。"""
-    from sentinel import call_sentinel_text
+    from ai_providers import simple_ai_call
     from obsidian import read_recent, read_diary, search_diary
     from activity import get_activity_summary_for_prompt
+    from memory import _get_active_model_and_conv
 
     wb = load_worldbook()
     user_name = wb.get("user_name", "用户")
+    ai_name = wb.get("ai_name", "AI")
+    model_key, _ = await _get_active_model_and_conv()
 
-    # 根据指令关键词决定拉取哪些数据
     instr_lower = instruction.lower()
     data_parts = []
 
-    # 日记
     if any(k in instr_lower for k in ("日记", "diary", "obsidian", "记录")):
         try:
             diary = await read_recent(3)
@@ -2772,7 +2773,6 @@ async def perform_background_think(conv_id: str, instruction: str, msg_id: str):
         except Exception:
             pass
 
-    # 活动
     if any(k in instr_lower for k in ("活动", "动态", "activity", "使用", "设备")):
         try:
             activity = get_activity_summary_for_prompt(6)
@@ -2781,7 +2781,6 @@ async def perform_background_think(conv_id: str, instruction: str, msg_id: str):
         except Exception:
             pass
 
-    # 记忆
     if any(k in instr_lower for k in ("记忆", "memory", "回忆", "回顾")):
         try:
             from memory import recall_memories
@@ -2792,7 +2791,6 @@ async def perform_background_think(conv_id: str, instruction: str, msg_id: str):
         except Exception:
             pass
 
-    # 没命中任何关键词 → 默认拉日记
     if not data_parts:
         try:
             diary = await read_recent(3)
@@ -2802,16 +2800,21 @@ async def perform_background_think(conv_id: str, instruction: str, msg_id: str):
 
     data_block = "\n\n".join(data_parts) if data_parts else "（无可用数据）"
 
+    persona_block = ""
+    if wb.get("ai_persona"):
+        persona_block += f"[{ai_name}的人设]\n{wb['ai_persona']}\n\n"
+
     prompt = (
-        f"你是{user_name}的AI伴侣的后台思考引擎。\n"
-        f"请根据以下指令和数据，进行分析思考，输出简洁的思考结论（200字以内）。\n"
-        f"不要输出寒暄或格式标记，只输出思考结果。\n\n"
+        f"{persona_block}"
+        f"你是{ai_name}，正在后台独立思考一个问题。\n"
+        f"请根据以下指令和数据进行分析，输出你的思考结论（200字以内）。\n"
+        f"用你自己的语气和视角写，不要输出格式标记。\n\n"
         f"【思考指令】{instruction}\n\n"
         f"【可用数据】\n{data_block}"
     )
 
     try:
-        result = await call_sentinel_text(prompt, timeout=30)
+        result = await simple_ai_call([{"role": "user", "content": prompt}], model_key)
     except Exception as e:
         print(f"[THINK] 思考执行失败: {e}")
         return
