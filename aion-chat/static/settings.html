@@ -65,6 +65,10 @@
           <span class="toggle-label">桌宠</span>
           <label class="toggle-switch"><input type="checkbox" id="togPet"><span class="toggle-slider"></span></label>
         </div>
+        <div class="toggle-row">
+          <span class="toggle-label">记忆 Links 展开（实验）</span>
+          <label class="toggle-switch"><input type="checkbox" id="togRecallLinks"><span class="toggle-slider"></span></label>
+        </div>
       </div>
     </details>
 
@@ -168,13 +172,14 @@ document.querySelectorAll('.settings-group').forEach(det => {
 
 // ── Init ──
 (async function init() {
-  const [s, models, vc, ig, gc, pet] = await Promise.all([
+  const [s, models, vc, ig, gc, pet, rl] = await Promise.all([
     api("GET", "/api/settings"),
     api("GET", "/api/models"),
     api("GET", "/api/settings/video-call"),
     api("GET", "/api/settings/image-gen"),
     api("GET", "/api/settings/gemini-cli-tools"),
     api("GET", "/api/settings/pet"),
+    api("GET", "/api/settings/recall-links"),
   ]);
 
   // Sync
@@ -215,10 +220,11 @@ document.querySelectorAll('.settings-group').forEach(det => {
   $("togImageGen").checked = !!ig.image_gen_enabled;
   $("togGeminiCli").checked = !!gc.gemini_cli_tools_enabled;
   $("togPet").checked = !!pet.pet_enabled;
+  $("togRecallLinks").checked = !!rl.recall_use_links;
 
   // Green dots
   if (s.dashscope_key || s.siliconflow_key) $("dotCore").classList.add("active");
-  if (!vc.video_call_enabled || ig.image_gen_enabled || gc.gemini_cli_tools_enabled || pet.pet_enabled) {
+  if (!vc.video_call_enabled || ig.image_gen_enabled || gc.gemini_cli_tools_enabled || pet.pet_enabled || rl.recall_use_links) {
     $("dotToggles").classList.add("active");
   }
   if (s.mimo_key) $("dotVoice").classList.add("active");
@@ -243,6 +249,9 @@ $("togGeminiCli").addEventListener("change", async e => {
 });
 $("togPet").addEventListener("change", async e => {
   await api("PUT", "/api/settings/pet", { enabled: e.target.checked });
+});
+$("togRecallLinks").addEventListener("change", async e => {
+  await api("PUT", "/api/settings/recall-links", { enabled: e.target.checked });
 });
 
 // ── Save (keys + text fields, batched) ──

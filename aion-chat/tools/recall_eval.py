@@ -102,6 +102,36 @@ def load_cards() -> list[dict]:
     return cards
 
 
+def load_links() -> dict[str, set[str]]:
+    """加载 memory_links，返回双向邻接表 {card_id: {neighbor_ids}}"""
+    db = sqlite3.connect(str(DB_PATH))
+    rows = db.execute("SELECT from_id, to_id FROM memory_links").fetchall()
+    db.close()
+    adj: dict[str, set[str]] = defaultdict(set)
+    for f, t in rows:
+        adj[f].add(t)
+        adj[t].add(f)
+    return adj
+
+
+def expand_links(card_ids: set[str], links: dict[str, set[str]],
+                 max_depth: int = 1) -> set[str]:
+    """从 card_ids 出发，沿 links 展开 max_depth 层，返回所有触达的 id（含自身）"""
+    expanded = set(card_ids)
+    frontier = set(card_ids)
+    for _ in range(max_depth):
+        next_frontier = set()
+        for cid in frontier:
+            for neighbor in links.get(cid, set()):
+                if neighbor not in expanded:
+                    next_frontier.add(neighbor)
+                    expanded.add(neighbor)
+        frontier = next_frontier
+        if not frontier:
+            break
+    return expanded
+
+
 def load_dataset(path: Path) -> list[dict]:
     if not path.exists():
         print(f"ERROR: 评估集不存在: {path}")
@@ -164,9 +194,12 @@ def score_cards(query_keywords: list[str], query_vec: list[float] | None,
 def eval_one(sample: dict, cards: list[dict],
              k_values: list[int], use_vitality: bool, threshold: float, now: float,
              use_reranker: bool = False, no_vec: bool = False,
-             rerank_candidates: int = 20) -> dict:
+             rerank_candidates: int = 20,
+             links: dict[str, set[str]] | None = None,
+             link_depth: int = 1) -> dict:
     """
-    返回 {k: {'precision': float, 'recall': float, 'hit': bool}} 及调试信息
+    返回 {k: {'precision': float, 'recall': float, 'hit': bool}} 及调试信息。
+    links 不为 None 时，top-K 命中的卡片会沿 links 展开，展开的 id 也计入 retrieved。
     """
     query = sample['query']
     query_keywords = sample.get('query_keywords', [])
@@ -188,22 +221,25 @@ def eval_one(sample: dict, cards: list[dict],
             top_k = [r for r in top_k if r['score'] >= threshold]
 
         retrieved_ids = {r['id'] for r in top_k}
+
+        if links is not None:
+            retrieved_ids = expand_links(retrieved_ids, links, max_depth=link_depth)
+
         tp = len(retrieved_ids & expected_ids)
 
-        precision = tp / len(top_k) if top_k else 0.0
+        precision = tp / len(retrieved_ids) if retrieved_ids else 0.0
         recall = tp / len(expected_ids) if expected_ids else 0.0
-        hit = tp > 0  # 至少命中一个
+        hit = tp > 0
 
         result[k] = {
             'precision': precision,
             'recall': recall,
             'hit': hit,
-            'retrieved': len(top_k),
+            'retrieved': len(retrieved_ids),
             'expected': len(expected_ids),
             'tp': tp,
         }
 
-    # 附上调试：主目标卡片的 rank
     primary_id = sample.get('source_card_id') or (sample['expected_card_ids'][0] if sample['expected_card_ids'] else None)
     rank_of_primary = None
     if primary_id:
@@ -465,6 +501,10 @@ def main():
                         help='reranker 粗筛候选数（默认 20）')
     parser.add_argument('--no-vec', action='store_true',
                         help='去掉向量分量，公式改为 kw×0.7 + imp×0.3')
+    parser.add_argument('--links', action='store_true',
+                        help='启用 links 展开：top-K 命中后沿 memory_links 展开关联卡片')
+    parser.add_argument('--link-depth', type=int, default=1,
+                        help='links 展开深度（默认 1，即直接邻居）')
     args = parser.parse_args()
 
     k_values = [int(x.strip()) for x in args.k.split(',') if x.strip()]
@@ -517,8 +557,17 @@ def main():
         mode_parts.append("kw×0.5+vec×0.3+imp×0.2")
     if use_reranker:
         mode_parts.append(f"reranker(top-{args.rerank_candidates})")
+    if args.links:
+        mode_parts.append(f"links(depth={args.link_depth})")
     print(f"\n评估配置: K={k_values}, vitality={'on' if use_vitality else 'off'}, "
           f"threshold={threshold}, mode={'+'.join(mode_parts)}")
+    link_map = None
+    if args.links:
+        print("加载 memory_links...")
+        link_map = load_links()
+        total_edges = sum(len(v) for v in link_map.values()) // 2
+        print(f"  {len(link_map)} 个节点，{total_edges} 条边")
+
     if use_reranker:
         print(f"评估中（含 reranker API 调用，每条样本 ~500-700ms）...")
     else:
@@ -530,7 +579,8 @@ def main():
     for i, sample in enumerate(valid_samples):
         res = eval_one(sample, cards, k_values, use_vitality, threshold, now,
                        use_reranker=use_reranker, no_vec=no_vec,
-                       rerank_candidates=args.rerank_candidates)
+                       rerank_candidates=args.rerank_candidates,
+                       links=link_map, link_depth=args.link_depth)
         all_results.append(res)
 
         if args.verbose:

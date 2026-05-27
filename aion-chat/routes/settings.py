@@ -200,6 +200,20 @@ async def update_pet_setting(body: PetToggle):
     save_settings(SETTINGS)
     return {"ok": True, "pet_enabled": body.enabled}
 
+# ── 记忆 Links 展开开关 ──────────────────────────
+@router.get("/api/settings/recall-links")
+async def get_recall_links_setting():
+    return {"recall_use_links": SETTINGS.get("recall_use_links", False)}
+
+class RecallLinksToggle(BaseModel):
+    enabled: bool
+
+@router.put("/api/settings/recall-links")
+async def update_recall_links_setting(body: RecallLinksToggle):
+    SETTINGS["recall_use_links"] = body.enabled
+    save_settings(SETTINGS)
+    return {"ok": True, "recall_use_links": body.enabled}
+
 # ── 世界书 ────────────────────────────────────────
 class WorldBookUpdate(BaseModel):
     ai_persona: str = ""

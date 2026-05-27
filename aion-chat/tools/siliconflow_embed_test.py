@@ -1,14 +1,16 @@
 """
-测试脚本：对比硅基流动 Qwen3-Embedding-8B (4096维) 与当前 DashScope text-embedding-v4 (1024维)
+测试脚本：对比不同 embedding 模型与当前 DashScope text-embedding-v4 (1024维)
 在卡片聚类效果上的差异。
 
 不修改数据库。
 
 用法:
   cd aion-chat
-  python tools/siliconflow_embed_test.py
-  python tools/siliconflow_embed_test.py --sample 80   # 抽取卡片数量，默认 60
-  python tools/siliconflow_embed_test.py --no-compare  # 只跑新模型，跳过与旧向量对比
+  python tools/siliconflow_embed_test.py                          # 默认 siliconflow BGE-M3
+  python tools/siliconflow_embed_test.py --provider gemini        # Gemini embedding
+  python tools/siliconflow_embed_test.py --provider gemini --dims 768
+  python tools/siliconflow_embed_test.py --sample 80              # 抽取卡片数量，默认 60
+  python tools/siliconflow_embed_test.py --no-compare             # 跳过与旧向量对比
 """
 
 import asyncio
@@ -29,10 +31,23 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 from config import DB_PATH, get_key
 
-# ── 硅基流动配置 ─────────────────────────────────
-SF_BASE = "https://api.siliconflow.cn/v1"
-SF_MODEL = "BAAI/bge-m3"
-SF_DIMS = 1024
+# ── 提供商配置 ───────────────────────────────────
+PROVIDERS = {
+    "siliconflow": {
+        "base": "https://api.siliconflow.cn/v1",
+        "model": "BAAI/bge-m3",
+        "dims": 1024,
+        "key_name": "siliconflow",
+    },
+    "gemini": {
+        "base": "https://generativelanguage.googleapis.com/v1beta",
+        "model": "gemini-embedding-001",
+        "dims": 1024,
+        "key_name": "gemini_free",
+    },
+}
+
+_PROVIDER = None  # 运行时由 main() 设置
 
 
 # ── 工具函数 ─────────────────────────────────────
@@ -90,25 +105,48 @@ def load_cards(sample: int) -> list[dict]:
     return cards
 
 
-# ── 硅基流动 Embedding ───────────────────────────
-async def fetch_embedding(text: str, client: httpx.AsyncClient, key: str) -> list[float] | None:
+# ── Embedding 调用（多提供商）────────────────────
+async def _fetch_openai_compat(text: str, client: httpx.AsyncClient, key: str) -> list[float] | None:
+    cfg = PROVIDERS[_PROVIDER]
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     body = {
-        "model": SF_MODEL,
+        "model": cfg["model"],
         "input": text,
         "encoding_format": "float",
     }
+    if cfg["dims"]:
+        body["dimensions"] = cfg["dims"]
+    resp = await client.post(f"{cfg['base']}/embeddings", headers=headers, json=body, timeout=30)
+    resp.raise_for_status()
+    return resp.json()["data"][0]["embedding"]
+
+
+async def _fetch_gemini(text: str, client: httpx.AsyncClient, key: str) -> list[float] | None:
+    cfg = PROVIDERS["gemini"]
+    model = cfg["model"]
+    url = f"{cfg['base']}/models/{model}:embedContent?key={key}"
+    body = {
+        "model": f"models/{model}",
+        "content": {"parts": [{"text": text}]},
+        "outputDimensionality": cfg["dims"],
+    }
+    resp = await client.post(url, headers={"Content-Type": "application/json"}, json=body, timeout=30)
+    resp.raise_for_status()
+    return resp.json()["embedding"]["values"]
+
+
+async def fetch_embedding(text: str, client: httpx.AsyncClient, key: str) -> list[float] | None:
+    fetch_fn = _fetch_gemini if _PROVIDER == "gemini" else _fetch_openai_compat
     for attempt in range(3):
         try:
-            resp = await client.post(f"{SF_BASE}/embeddings", headers=headers, json=body, timeout=30)
-            if resp.status_code == 429:
-                await asyncio.sleep(3 * (attempt + 1))
-                continue
-            resp.raise_for_status()
-            return resp.json()["data"][0]["embedding"]
+            return await fetch_fn(text, client, key)
         except Exception as e:
             if attempt < 2:
-                await asyncio.sleep(2)
+                status = getattr(getattr(e, 'response', None), 'status_code', None)
+                if status == 429:
+                    await asyncio.sleep(3 * (attempt + 1))
+                else:
+                    await asyncio.sleep(2)
             else:
                 print(f"  [!] embedding 失败: {e}")
     return None
@@ -117,6 +155,7 @@ async def fetch_embedding(text: str, client: httpx.AsyncClient, key: str) -> lis
 async def batch_embed(cards: list[dict], key: str, concurrency: int = 5) -> int:
     sem = asyncio.Semaphore(concurrency)
     ok = 0
+    throttle = 0.25 if _PROVIDER != "gemini" else 0.08
 
     async def one(card: dict, client: httpx.AsyncClient):
         nonlocal ok
@@ -125,8 +164,7 @@ async def batch_embed(cards: list[dict], key: str, concurrency: int = 5) -> int:
             if vec:
                 card['_new_vec'] = vec
                 ok += 1
-            # 软限速
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(throttle)
 
     async with httpx.AsyncClient() as client:
         tasks = [one(c, client) for c in cards]
@@ -259,21 +297,34 @@ def print_clusters(clusters: list[list[dict]], label: str, max_show: int = 4):
 
 # ── 主流程 ────────────────────────────────────────
 async def main():
+    global _PROVIDER
     parser = argparse.ArgumentParser()
+    parser.add_argument('--provider', type=str, default='siliconflow',
+                        choices=list(PROVIDERS.keys()),
+                        help='embedding 提供商 (default: siliconflow)')
+    parser.add_argument('--dims', type=int, default=0,
+                        help='输出维度，0 = 用提供商默认值')
     parser.add_argument('--sample', type=int, default=60, help='抽取卡片数量 (default: 60)')
     parser.add_argument('--no-compare', action='store_true', help='跳过与旧向量对比')
     args = parser.parse_args()
 
-    key = get_key("siliconflow")
+    _PROVIDER = args.provider
+    cfg = PROVIDERS[_PROVIDER]
+    if args.dims > 0:
+        cfg["dims"] = args.dims
+    model_name = cfg["model"]
+    dims = cfg["dims"]
+
+    key = get_key(cfg["key_name"])
     if not key:
-        print("[错误] settings.json 中没有 siliconflow_key，请先配置。")
+        print(f"[错误] settings.json 中没有 {cfg['key_name']} key，请先配置。")
         sys.exit(1)
 
     print(f"加载卡片（最近 {args.sample} 张）...")
     cards = load_cards(args.sample)
     print(f"已加载 {len(cards)} 张，其中有旧向量 {sum(1 for c in cards if c['_old_vec'])} 张")
 
-    print(f"\n调用 {SF_MODEL} 获取 {SF_DIMS} 维向量...")
+    print(f"\n调用 {model_name} 获取 {dims} 维向量...")
     t0 = time.time()
     ok = await batch_embed(cards, key)
     elapsed = time.time() - t0
@@ -290,7 +341,7 @@ async def main():
         sim_distribution(old_cards, '_old_vec')
 
     print(f"\n{'#'*72}")
-    print(f"  新模型 {SF_MODEL} ({SF_DIMS}维)  n={len(new_cards)}")
+    print(f"  新模型 {model_name} ({dims}维)  n={len(new_cards)}")
     print(f"{'#'*72}")
     sim_distribution(new_cards, '_new_vec')
 
@@ -309,7 +360,7 @@ async def main():
             print_clusters(cs, f"旧模型 纯向量 threshold={t:.2f}")
 
     print(f"\n\n{'*'*72}")
-    print(f"  新模型聚类 ({SF_MODEL})")
+    print(f"  新模型聚类 ({model_name})")
     print(f"{'*'*72}")
     kw_cs = cluster(new_cards, '_new_vec', 0, mode='kw_only')
     print_clusters(kw_cs, "纯关键词（参照）")

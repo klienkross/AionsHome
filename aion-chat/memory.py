@@ -122,6 +122,39 @@ async def recall_memories(query_text: str, query_keywords: list[str] = None,
     # ── 3. 并集候选 ──────────────────────────────
     candidate_ids = top_kw_ids | top_emb_ids
 
+    # ── 3.5 links 展开（灰度）─────────────────────
+    from config import SETTINGS as _settings
+    _links_enabled = _settings.get("recall_use_links", False)
+    _links_expanded = 0
+    if _links_enabled and candidate_ids:
+        scored_for_links = []
+        for cid in candidate_ids:
+            v = vec_scores.get(cid, 0.0)
+            k = kw_scores.get(cid, 0.0)
+            scored_for_links.append((cid, v * 0.6 + k * 0.4))
+        scored_for_links.sort(key=lambda x: x[1], reverse=True)
+        seed_ids = [cid for cid, _ in scored_for_links[:10]]
+
+        async with get_db() as db:
+            placeholders = ",".join("?" for _ in seed_ids)
+            cur = await db.execute(
+                f"SELECT from_id, to_id FROM memory_links "
+                f"WHERE from_id IN ({placeholders}) OR to_id IN ({placeholders})",
+                seed_ids + seed_ids,
+            )
+            link_rows = await cur.fetchall()
+
+        seed_set = set(seed_ids)
+        neighbor_ids = set()
+        for f, t in link_rows:
+            if f in seed_set:
+                neighbor_ids.add(t)
+            if t in seed_set:
+                neighbor_ids.add(f)
+        new_ids = neighbor_ids - candidate_ids
+        _links_expanded = len(new_ids)
+        candidate_ids = candidate_ids | new_ids
+
     # ── 4. reranker 精排 ──────────────────────────
     rerank_scores = {}
     use_reranker = False
@@ -205,7 +238,8 @@ async def recall_memories(query_text: str, query_keywords: list[str] = None,
 
     _elapsed = (_time.perf_counter() - _t0) * 1000
     _mode = "reranker" if use_reranker else "composite"
-    print(f"[memory] recall({_mode}): q='{query_text[:40]}' kws={query_keywords} → {len(matched)}/{len(all_scored)} cards, {_elapsed:.0f}ms")
+    _links_tag = f" links+{_links_expanded}" if _links_enabled else ""
+    print(f"[memory] recall({_mode}{_links_tag}): q='{query_text[:40]}' kws={query_keywords} → {len(matched)}/{len(all_scored)} cards, {_elapsed:.0f}ms")
     return matched, debug_top6
 
 
