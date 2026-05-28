@@ -18,7 +18,7 @@ async def list_heart_whispers(page: int = Query(1, ge=1), page_size: int = Query
         cur = await db.execute("SELECT COUNT(*) as cnt FROM heart_whispers")
         total = (await cur.fetchone())["cnt"]
         cur = await db.execute(
-            "SELECT id, conv_id, msg_id, content, created_at FROM heart_whispers ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            "SELECT id, conv_id, msg_id, author, content, created_at FROM heart_whispers ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (page_size, offset)
         )
         rows = await cur.fetchall()
@@ -32,7 +32,7 @@ async def list_heart_whispers_by_conv(conv_id: str):
     async with get_db() as db:
         db.row_factory = __import__('aiosqlite').Row
         cur = await db.execute(
-            "SELECT id, conv_id, msg_id, content, created_at FROM heart_whispers WHERE conv_id=? ORDER BY created_at ASC",
+            "SELECT id, conv_id, msg_id, author, content, created_at FROM heart_whispers WHERE conv_id=? ORDER BY created_at ASC",
             (conv_id,)
         )
         rows = await cur.fetchall()

@@ -495,7 +495,7 @@ def render_merged_timeline(
     if not merged:
         return []
 
-    _, ai_name, connor_name = _timeline_display_names()
+    user_name, ai_name, connor_name = _timeline_display_names()
     sources = set(m["source"] for m in merged)
     has_mixed = len(sources) > 1
 
@@ -557,6 +557,7 @@ def render_merged_timeline(
                 content = f"[系统事件] {content}"
             elif sender == "user":
                 role = "user"
+                content = f"[{user_name}]: {content}"
             else:
                 # 对方 AI
                 other_name = connor_name if who == "aion" else ai_name

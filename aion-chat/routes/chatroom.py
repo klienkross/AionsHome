@@ -130,7 +130,7 @@ def _name_for_identity(identity: str) -> str:
 
 
 def _prefix_for_sender(sender: str) -> str:
-    if sender in ("aion", "connor"):
+    if sender in ("user", "aion", "connor"):
         return f"[{_name_for_identity(sender)}] "
     return ""
 
@@ -231,8 +231,8 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
                 author = "connor" if who.lower() == "connor" else "aion"
                 async with get_db() as ht_db:
                     await ht_db.execute(
-                        "INSERT INTO heart_whispers (id, author, content, source_conv, source_msg_id, created_at) VALUES (?,?,?,?,?,?)",
-                        (ht_id, author, ht_content, f"chatroom:{room_id}", msg_id, ht_now)
+                        "INSERT INTO heart_whispers (id, conv_id, msg_id, author, content, source_conv, source_msg_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                        (ht_id, f"chatroom:{room_id}", msg_id, author, ht_content, f"chatroom:{room_id}", msg_id, ht_now)
                     )
                     await ht_db.commit()
 

@@ -113,11 +113,26 @@ async def init_db():
                 id TEXT PRIMARY KEY,
                 conv_id TEXT,
                 msg_id TEXT,
+                author TEXT DEFAULT '',
+                source_conv TEXT DEFAULT '',
+                source_msg_id TEXT DEFAULT '',
                 content TEXT NOT NULL,
                 created_at REAL NOT NULL
             )
         """)
         await db.execute("CREATE INDEX IF NOT EXISTS idx_heart_whispers_created ON heart_whispers(created_at DESC)")
+        try:
+            await db.execute("ALTER TABLE heart_whispers ADD COLUMN author TEXT DEFAULT ''")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE heart_whispers ADD COLUMN source_conv TEXT DEFAULT ''")
+        except:
+            pass
+        try:
+            await db.execute("ALTER TABLE heart_whispers ADD COLUMN source_msg_id TEXT DEFAULT ''")
+        except:
+            pass
         # ── 朋友圈表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS moments (

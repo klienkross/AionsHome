@@ -99,9 +99,10 @@ function renderList() {
   for (const item of allItems) {
     const d = new Date(item.created_at * 1000);
     const timeStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    const authorLabel = item.author === 'connor' ? (window._connorName || 'Connor') : (window._aiName || 'Aion');
     html += `<div class="hw-card" data-id="${item.id}">
       <button class="hw-del" onclick="deleteWhisper('${item.id}')" title="删除">✕</button>
-      <div class="hw-time">💭 ${timeStr}</div>
+      <div class="hw-time">💭 ${authorLabel} · ${timeStr}</div>
       <div class="hw-content">${escapeHtml(item.content)}</div>
     </div>`;
   }
@@ -162,7 +163,11 @@ if (typeof connectWS === 'function') {
   hookWS();
 }
 
-loadWhispers();
+api('GET', '/api/chatroom/config').then(cfg => {
+  window._aiName = cfg.ai_name || 'Aion';
+  window._connorName = cfg.connor_name || 'Connor';
+  loadWhispers();
+}).catch(() => loadWhispers());
 </script>
 </body>
 </html>

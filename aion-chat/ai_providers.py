@@ -2,8 +2,12 @@
 AI 模型调用：硅基流动 / Gemini 流式 + 多模态消息构建
 """
 
-import asyncio, json, base64, logging, mimetypes, shutil, subprocess, os, re
+import asyncio, json, base64, logging, mimetypes, shutil, subprocess, os, re, sys
 from pathlib import Path
+
+_SUBPROCESS_FLAGS: dict = {}
+if sys.platform == "win32":
+    _SUBPROCESS_FLAGS["creationflags"] = subprocess.CREATE_NO_WINDOW
 
 import httpx
 
@@ -454,7 +458,8 @@ def _find_gemini_script() -> str | None:
     # 方式1: npm root -g
     try:
         npm_root = subprocess.check_output(["npm", "root", "-g"],
-                                           encoding="utf-8", stderr=subprocess.DEVNULL).strip()
+                                           encoding="utf-8", stderr=subprocess.DEVNULL,
+                                           **_SUBPROCESS_FLAGS).strip()
         script = Path(npm_root) / "@google" / "gemini-cli" / "bundle" / "gemini.js"
         if script.exists():
             return str(script)
@@ -613,6 +618,7 @@ async def _spawn_cli_process(cmd: list[str], prompt: str, env: dict | None = Non
         stdin=asyncio.subprocess.PIPE,
         env=env,
         limit=8 * 1024 * 1024,
+        **_SUBPROCESS_FLAGS,
     )
     proc.stdin.write(prompt.encode("utf-8"))
     await proc.stdin.drain()
@@ -807,7 +813,8 @@ def _find_codex_script() -> str | None:
     # 全局安装
     try:
         npm_root = subprocess.check_output(["npm", "root", "-g"],
-                                           encoding="utf-8", stderr=subprocess.DEVNULL).strip()
+                                           encoding="utf-8", stderr=subprocess.DEVNULL,
+                                           **_SUBPROCESS_FLAGS).strip()
         script = Path(npm_root) / "@openai" / "codex" / "bin" / "codex.js"
         if script.exists():
             return str(script)
@@ -965,6 +972,7 @@ async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
             stderr=asyncio.subprocess.PIPE,
             env=env,
             limit=1024 * 1024,  # 1MB line buffer，避免大 JSON 行超限
+            **_SUBPROCESS_FLAGS,
         )
 
         line_buf = ""

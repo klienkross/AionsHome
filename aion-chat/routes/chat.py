@@ -1141,8 +1141,8 @@ async def edit_resend_message(msg_id: str, body: MsgEditResend):
                         hw_id = f"hw_{int(hw_now*1000)}"
                         async with get_db() as hw_db:
                             await hw_db.execute(
-                                "INSERT INTO heart_whispers (id, conv_id, msg_id, content, created_at) VALUES (?,?,?,?,?)",
-                                (hw_id, conv_id, ai_msg_id, hw_content, hw_now)
+                                "INSERT INTO heart_whispers (id, conv_id, msg_id, author, content, created_at) VALUES (?,?,?,?,?,?)",
+                                (hw_id, conv_id, ai_msg_id, "aion", hw_content, hw_now)
                             )
                             await hw_db.commit()
 
@@ -1842,8 +1842,8 @@ async def send_message(conv_id: str, body: MsgCreate):
                         hw_id = f"hw_{int(hw_now*1000)}"
                         async with get_db() as hw_db:
                             await hw_db.execute(
-                                "INSERT INTO heart_whispers (id, conv_id, msg_id, content, created_at) VALUES (?,?,?,?,?)",
-                                (hw_id, conv_id, ai_msg_id, hw_content, hw_now)
+                                "INSERT INTO heart_whispers (id, conv_id, msg_id, author, content, created_at) VALUES (?,?,?,?,?,?)",
+                                (hw_id, conv_id, ai_msg_id, "aion", hw_content, hw_now)
                             )
                             await hw_db.commit()
 
@@ -3205,8 +3205,8 @@ async def regenerate_message(conv_id: str, context_limit: int = 30, whisper_mode
                         hw_id = f"hw_{int(hw_now*1000)}"
                         async with get_db() as hw_db:
                             await hw_db.execute(
-                                "INSERT INTO heart_whispers (id, conv_id, msg_id, content, created_at) VALUES (?,?,?,?,?)",
-                                (hw_id, conv_id, ai_msg_id, hw_content, hw_now)
+                                "INSERT INTO heart_whispers (id, conv_id, msg_id, author, content, created_at) VALUES (?,?,?,?,?,?)",
+                                (hw_id, conv_id, ai_msg_id, "aion", hw_content, hw_now)
                             )
                             await hw_db.commit()
 
