@@ -38,6 +38,7 @@ TRANSFER_CMD_PATTERN = _no_backtick(re.compile(r'\[转账[：:]\s*(-?\d+(?:\.\d+
 VIDEO_CALL_CMD = '[视频电话]'
 VIDEO_CALL_PAT = _no_backtick(re.compile(r'\[视频电话\]'))
 META_TAG_PATTERN = re.compile(r'\s*<meta>.*?</meta>', re.DOTALL)
+_SPEAKER_PREFIX_RE = re.compile(r'^\[[\w一-鿿]+\]\s*[:：]\s*')
 
 # 所有需要从 AI 回复中剥离的工具指令正则列表（TTS、保存时统一清理）
 _ALL_CMD_PATTERNS = [
@@ -557,10 +558,12 @@ def render_merged_timeline(
                 content = f"[系统事件] {content}"
             elif sender == "user":
                 role = "user"
+                content = _SPEAKER_PREFIX_RE.sub("", content)
                 content = f"[{user_name}]: {content}"
             else:
                 # 对方 AI
                 other_name = connor_name if who == "aion" else ai_name
+                content = _SPEAKER_PREFIX_RE.sub("", content)
                 content = f"[{other_name}]: {content}"
                 role = "user"
 

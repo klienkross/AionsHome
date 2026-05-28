@@ -30,27 +30,7 @@ from camera import cam
 from voice import voice
 from schedule import schedule_mgr
 
-from routes import chat, cam as cam_routes, files, settings, memories
-from routes import voice as voice_routes
-from routes import music as music_routes
-from routes import schedule as schedule_routes
-from routes import location as location_routes
-from routes import heart_whispers as heart_whispers_routes
-from routes import moments as moments_routes
-from routes import activity as activity_routes
-from routes import book as book_routes
-from routes import theater as theater_routes
-from routes import ghost_forest as ghost_forest_routes
-from routes import gift as gift_routes
-from routes import webhooks as webhooks_routes
-from routes import fund as fund_routes
-from routes import wallpaper as wallpaper_routes
-from routes import playground as playground_routes
-from routes import chatroom as chatroom_routes
-from routes import wallet as wallet_routes
-from routes import toy_adv as toy_adv_routes
-from routes import connor_wallet as connor_wallet_routes
-from routes import sync as sync_routes
+from plugin_loader import discover_routers, discover_pages
 from activity import pc_tracker
 # from memory import auto_digest  # V1
 from digest_v2 import auto_digest_v2 as auto_digest
@@ -200,32 +180,9 @@ app.mount("/public", StaticFiles(directory=str(PUBLIC_DIR)), name="public")
 app.mount("/screenshots", StaticFiles(directory=str(SCREENSHOTS_DIR)), name="screenshots")
 app.mount("/aion-pet", StaticFiles(directory=str(BASE_DIR.parent / "AionPet")), name="aion-pet")
 
-# 路由
-app.include_router(chat.router)
-app.include_router(cam_routes.router)
-app.include_router(files.router)
-app.include_router(settings.router)
-app.include_router(memories.router)
-app.include_router(voice_routes.router)
-app.include_router(music_routes.router)
-app.include_router(schedule_routes.router)
-app.include_router(location_routes.router)
-app.include_router(heart_whispers_routes.router)
-app.include_router(moments_routes.router)
-app.include_router(activity_routes.router)
-app.include_router(book_routes.router)
-app.include_router(theater_routes.router)
-app.include_router(ghost_forest_routes.router)
-app.include_router(gift_routes.router)
-app.include_router(webhooks_routes.router)
-app.include_router(fund_routes.router)
-app.include_router(wallpaper_routes.router)
-app.include_router(playground_routes.router)
-app.include_router(chatroom_routes.router)
-app.include_router(wallet_routes.router)
-app.include_router(toy_adv_routes.router)
-app.include_router(connor_wallet_routes.router)
-app.include_router(sync_routes.router)
+# 路由 + 页面自动发现
+discover_routers(app)
+discover_pages(app)
 
 # ── reading 辅助函数 ──────────────────────────────
 
@@ -233,92 +190,6 @@ def _reading_sessions_for_ws(ws):
     """Find active reading sessions initiated by this WS connection."""
     from reading import _sessions
     return [s for s in _sessions.values() if s._ws is ws]
-
-
-# 页面
-@app.get("/")
-async def home():
-    return FileResponse(BASE_DIR / "static" / "home.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/chat")
-async def chat_page():
-    return FileResponse(BASE_DIR / "static" / "chat.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/settings")
-async def settings_page():
-    return FileResponse(BASE_DIR / "static" / "settings.html")
-
-@app.get("/worldbook")
-async def worldbook_page():
-    return FileResponse(BASE_DIR / "static" / "worldbook.html")
-
-@app.get("/memory")
-async def memory_page():
-    return FileResponse(BASE_DIR / "static" / "memory.html")
-
-@app.get("/schedule")
-async def schedule_page():
-    return FileResponse(BASE_DIR / "static" / "schedule.html")
-
-@app.get("/camera")
-async def camera_page():
-    return FileResponse(BASE_DIR / "static" / "camera.html")
-
-@app.get("/monitor-logs")
-async def monitor_logs_page():
-    return FileResponse(BASE_DIR / "static" / "monitor-logs.html")
-
-@app.get("/location")
-async def location_page():
-    return FileResponse(BASE_DIR / "static" / "location.html")
-
-@app.get("/heart-whispers")
-async def heart_whispers_page():
-    return FileResponse(BASE_DIR / "static" / "heart-whispers.html")
-
-@app.get("/moments")
-async def moments_page():
-    return FileResponse(BASE_DIR / "static" / "moments.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/activity-logs")
-async def activity_logs_page():
-    return FileResponse(BASE_DIR / "static" / "activity-logs.html")
-
-@app.get("/reading")
-async def reading_page():
-    return FileResponse(BASE_DIR / "static" / "reading.html")
-
-@app.get("/theater")
-async def theater_page():
-    return FileResponse(BASE_DIR / "static" / "theater.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/ghost-forest")
-async def ghost_forest_page():
-    return FileResponse(BASE_DIR / "static" / "ghost-forest.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/gift")
-async def gift_page():
-    return FileResponse(BASE_DIR / "static" / "gift.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/fund")
-async def fund_page():
-    return FileResponse(BASE_DIR / "static" / "fund.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/wallpaper")
-async def wallpaper_page():
-    return FileResponse(BASE_DIR / "static" / "wallpaper.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/playground")
-async def playground_page():
-    return FileResponse(BASE_DIR / "static" / "playground.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/chatroom")
-async def chatroom_page():
-    return FileResponse(BASE_DIR / "static" / "chatroom.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-
-@app.get("/pet")
-async def pet_page():
-    return FileResponse(BASE_DIR / "static" / "pet.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 # PWA：Service Worker 必须从根路径提供，作用域才能覆盖所有页面
 @app.get("/sw.js")

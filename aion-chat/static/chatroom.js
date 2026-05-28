@@ -293,7 +293,7 @@ function msgHTML(m) {
 
   // 用户消息按单换行拆，AI消息按双换行拆
   const isUser = sender === 'user';
-  const raw = m.content || '';
+  const raw = (m.content || '').replace(/^\[[\w一-鿿]+\]\s*[:：]\s*/, '').trim();
   const fmt = isUser ? esc : crEscWithImages;
   const parts = raw.split(isUser ? /\n+/ : /\n{2,}/).filter(p => p.trim());
   let bubblesHtml;
@@ -448,6 +448,7 @@ function feedStreamingChunk(text) {
 function endStreamingBubble(attachments) {
   // 流结束后，按双换行拆分成多个气泡，并解析 [[image:...]]
   if (streamingBubble && streamingText) {
+    streamingText = streamingText.replace(/^\[[\w一-鿿]+\]\s*[:：]\s*/, '').trim();
     const parts = streamingText.split(/\n{2,}/).filter(p => p.trim());
     if (parts.length > 1) {
       const parent = streamingBubble.parentElement;
