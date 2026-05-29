@@ -15,6 +15,10 @@ from ai_providers import call_claude_cli, CLI_STATUS_PREFIX, _build_cli_prompt
 from context_builder import build_ability_block, build_memory_blocks, fetch_merged_timeline, render_merged_timeline
 from ws import manager
 
+# ── Connor CLI Session 复用 ──
+# room_id → session_id，同房间内复用 CLI 会话，避免每次重发全量上下文
+_cli_sessions: dict[str, str] = {}
+
 # ── Connor-Codex 服务配置 ──
 CHATROOM_CONFIG_PATH = DATA_DIR / "chatroom_config.json"
 
@@ -172,19 +176,69 @@ def _build_connor_messages(prompt: str) -> list[dict]:
     return messages
 
 
-async def stream_connor_cli(prompt: str = None, *, messages: list[dict] = None):
-    """流式调用 Codex CLI 获取 Connor 回复，yield text chunks 和 CLI_STATUS_PREFIX 状态。
-    可传入纯文本 prompt（旧方式）或完整 messages 列表（保留附件图片）。"""
+async def stream_connor_cli(prompt: str = None, *, messages: list[dict] = None,
+                            room_id: str = None):
+    """流式调用 Claude CLI 获取 Connor 回复，yield text chunks 和 CLI_STATUS_PREFIX 状态。
+
+    当 room_id 不为空时启用 session 复用：
+    - 首次调用：发送完整上下文，建立 session
+    - 后续调用：--resume session_id，只发送新的用户消息
+    这样 CLI 内部的系统提示和历史消息都走 prompt cache，大幅降低 token 消耗。
+    """
+    session_id = _cli_sessions.get(room_id) if room_id else None
+
+    if session_id and messages:
+        # resume 模式：只取最后一条用户消息（含附件）
+        last_user_msgs = []
+        for m in reversed(messages):
+            if m["role"] in ("user", "cam_user", "cam_trigger"):
+                last_user_msgs.insert(0, m)
+                break
+        if last_user_msgs:
+            messages = last_user_msgs
+        else:
+            session_id = None  # 找不到用户消息，回退到全量
+
     if messages is None:
         messages = _build_connor_messages(prompt)
     else:
-        # 注入 persona 作为 system（如果 messages 中没有）
-        if not any(m["role"] == "system" for m in messages):
-            persona = _read_connor_persona()
-            if persona:
-                messages = [{"role": "system", "content": persona}] + messages
-    async for chunk in call_claude_cli(messages, "", None):
+        if not session_id:
+            # 首次调用：注入 persona
+            if not any(m["role"] == "system" for m in messages):
+                persona = _read_connor_persona()
+                if persona:
+                    messages = [{"role": "system", "content": persona}] + messages
+
+    if session_id:
+        print(f"[CLI_SESSION] 复用 session {session_id[:12]}… room={room_id}, 只发 {len(messages)} 条消息")
+    elif room_id:
+        print(f"[CLI_SESSION] 新建 session, room={room_id}, 全量 {len(messages)} 条消息")
+
+    meta = {}
+    async for chunk in call_claude_cli(messages, "", meta, session_id=session_id):
         yield chunk
+
+    # 保存 session_id 供后续复用
+    new_sid = meta.get("session_id")
+    if room_id and new_sid:
+        _cli_sessions[room_id] = new_sid
+        if not session_id:
+            print(f"[CLI_SESSION] ✅ 获取到 session_id: {new_sid[:12]}…, 后续消息将复用")
+        else:
+            input_tokens = meta.get("prompt_tokens", "?")
+            print(f"[CLI_SESSION] ✅ resume 成功, input_tokens={input_tokens}")
+    elif room_id and not new_sid and session_id:
+        # resume 失败（进程出错），清掉旧 session
+        _cli_sessions.pop(room_id, None)
+        print(f"[CLI_SESSION] ⚠️ 未获取到 session_id, 下次将重建全量上下文")
+
+
+def clear_cli_session(room_id: str | None = None):
+    """清除 CLI session 缓存。不传 room_id 则清除全部。"""
+    if room_id:
+        _cli_sessions.pop(room_id, None)
+    else:
+        _cli_sessions.clear()
 
 
 async def simple_connor_cli_call(prompt: str) -> Optional[str]:

@@ -25,7 +25,7 @@ from chatroom import (
     build_connor_1v1_context, get_main_chat_recent, format_cross_context,
     recall_chatroom_memories, recall_main_chat_memories, save_chatroom_memory,
     digest_chatroom, connor_1v1_on_message, _CONNOR_TIMEOUT_SENTINEL,
-    stream_connor_cli,
+    stream_connor_cli, clear_cli_session,
 )
 from context_builder import (
     MUSIC_CMD_PATTERN, MOMENT_CMD_PATTERN, HEART_CMD_PATTERN, MEMORY_CMD_PATTERN,
@@ -905,7 +905,15 @@ async def delete_room(room_id: str):
         # 清理锚点（记忆跨房间共享，不随房间删除）
         await db.execute("DELETE FROM chatroom_digest_anchors WHERE room_id=?", (room_id,))
         await db.commit()
+    clear_cli_session(room_id)
     await manager.broadcast({"type": "chatroom_room_deleted", "data": {"id": room_id}})
+    return {"ok": True}
+
+
+@router.post("/rooms/{room_id}/clear-session")
+async def clear_room_session(room_id: str):
+    """清除指定房间的 CLI session 缓存，下次对话将重建完整上下文"""
+    clear_cli_session(room_id)
     return {"ok": True}
 
 
@@ -1135,7 +1143,7 @@ async def _generate_connor_reply(room_id, room, msgs, _q, context_minutes, *, tt
     full_text = ""
     has_reply = False
     try:
-        async for chunk in stream_connor_cli(messages=connor_messages):
+        async for chunk in stream_connor_cli(messages=connor_messages, room_id=room_id):
             if chunk.startswith(CLI_STATUS_PREFIX):
                 await _q.put({"type": "connor_status", "text": chunk[len(CLI_STATUS_PREFIX):]})
                 continue
@@ -1252,7 +1260,7 @@ async def _reply_connor(room_id, msgs, connor_persona, context_minutes, query_te
     # Connor 使用 Codex CLI，直接传 messages（保留附件），由 _build_cli_prompt 处理
     full_text = ""
     try:
-        async for chunk in stream_connor_cli(messages=connor_history):
+        async for chunk in stream_connor_cli(messages=connor_history, room_id=room_id):
             if chunk.startswith(CLI_STATUS_PREFIX):
                 await _q.put({"type": "connor_status", "text": chunk[len(CLI_STATUS_PREFIX):]})
                 continue

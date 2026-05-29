@@ -939,8 +939,10 @@ async def call_codex_cli(messages: list, model: str, meta: dict | None = None,
 # ── Claude CLI ───────────────────────────────────
 async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
                           temperature: float | None = None, max_tokens: int | None = None,
-                          cfg: dict | None = None):
-    """通过 claude CLI 子进程流式获取响应（stream-json 模式）"""
+                          cfg: dict | None = None, session_id: str | None = None):
+    """通过 claude CLI 子进程流式获取响应（stream-json 模式）。
+    若传入 session_id 则用 --resume 续接会话，只需发送新消息。
+    session_id 会通过 meta["session_id"] 返回给调用方。"""
     prompt = _build_cli_prompt(messages)
 
     claude_bin = shutil.which("claude")
@@ -951,6 +953,8 @@ async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
     cmd = [claude_bin, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
     if max_tokens:
         cmd.extend(["--max-turns", "3"])
+    if session_id:
+        cmd.extend(["--resume", session_id])
     cmd.extend(["-p", prompt])
 
     try:
@@ -992,6 +996,12 @@ async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
                     continue
 
                 etype = event.get("type", "")
+
+                # 任何事件携带 session_id 都收下（init/system/result 都可能带）
+                if meta is not None:
+                    _sid = event.get("session_id", "") or event.get("sessionId", "")
+                    if _sid:
+                        meta["session_id"] = _sid
 
                 if etype == "assistant":
                     subtype = event.get("subtype", "")
@@ -1045,6 +1055,8 @@ async def call_claude_cli(messages: list, model: str, meta: dict | None = None,
             err = stderr_out.decode("utf-8", errors="replace").strip()
             if err:
                 yield f"\n[ClaudeCLI错误 code={proc.returncode}] {err[:500]}"
+            if meta is not None:
+                meta.pop("session_id", None)
 
     except FileNotFoundError:
         yield "[ClaudeCLI错误] 无法启动 claude CLI 进程"

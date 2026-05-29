@@ -14,6 +14,13 @@ const AVATARS = {
   connor: '/public/codexicon.png?v=2',
 };
 
+// 页面关闭时清除当前房间的 CLI session 缓存
+window.addEventListener('beforeunload', () => {
+  if (currentRoom) {
+    navigator.sendBeacon(`${API}/rooms/${currentRoom.id}/clear-session`);
+  }
+});
+
 let NAMES = { user: '我', aion: 'Aion', connor: 'Connor' };
 
 // ── TTS 语音合成 ──
