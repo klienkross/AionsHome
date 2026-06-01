@@ -16,7 +16,7 @@ from config import DEFAULT_MODEL, DATA_DIR, CODEX_UPLOADS_DIR, SETTINGS
 from database import get_db
 from chain_hash import compute_chain_hash
 from ws import manager
-from ai_providers import stream_ai, CLI_STATUS_PREFIX
+from ai_providers import stream_ai, convert_images_to_text, CLI_STATUS_PREFIX
 from tts import TTSStreamer
 from chatroom import (
     send_to_connor, check_connor_online, load_chatroom_config, save_chatroom_config,
@@ -1211,6 +1211,8 @@ async def _reply_aion(room_id, msgs, aion_persona, context_minutes, query_text, 
         whisper_mode=whisper_mode,
     )
     _process_voice_attachments(aion_history)
+    if SETTINGS.get("image_to_text"):
+        await convert_images_to_text(aion_history)
     aion_msg_id = f"cm_{int(time.time() * 1000)}_a"
     await _q.put({"type": "aion_start", "id": aion_msg_id})
 
