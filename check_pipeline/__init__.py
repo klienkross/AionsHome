@@ -3,6 +3,7 @@ from .schemas import Schema, HeartbeatSchema, SensorSchema, CheckSchema
 from .recorder import Recorder, MemoryStore, Store
 from .ingress import Ingress
 from .notifier import Notifier, NotifyStrategy, MentionInChat, PushNotify, WebhookCallback
+from .watchdog import Watchdog
 
 __all__ = [
     "EventBus",
@@ -10,4 +11,5 @@ __all__ = [
     "Recorder", "MemoryStore", "Store",
     "Ingress",
     "Notifier", "NotifyStrategy", "MentionInChat", "PushNotify", "WebhookCallback",
+    "Watchdog",
 ]
