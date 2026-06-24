@@ -141,6 +141,10 @@ public class AionPushService extends Service {
     private volatile boolean screenOn = true;
     private BroadcastReceiver screenReceiver;
 
+    // ── 无障碍服务自动恢复（需 WRITE_SECURE_SETTINGS 权限，通过 ADB 授予）──
+    private volatile long lastAccessibilityRecoverAt = 0;
+    private static final long ACCESSIBILITY_RECOVER_COOLDOWN = 5_000;
+
     // ── 步数计数 ──
     // 使用 TYPE_STEP_COUNTER（硬件累计步数，低功耗），搭载定位线程 10 分钟上报
     // 凌晨 5:00 重置（逻辑日期以 5:00 为分界，适应晚睡作息）
@@ -1018,6 +1022,8 @@ public class AionPushService extends Service {
                     Log.e(TAG, "📱 activity error: " + e.getMessage());
                 }
 
+                checkAndRecoverAccessibility();
+
                 try { Thread.sleep(ACTIVITY_INTERVAL); }
                 catch (InterruptedException e) { break; }
             }
@@ -1120,6 +1126,66 @@ public class AionPushService extends Service {
             }
         } catch (Exception e) {
             Log.e(TAG, "📱 activity report failed: " + e.getMessage());
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  无障碍服务自动恢复 — 被 ROM 安全策略关闭后自动重新开启
+    //  需要 WRITE_SECURE_SETTINGS 权限（通过 ADB 一次性授予）：
+    //  adb shell pm grant com.aion.chat android.permission.WRITE_SECURE_SETTINGS
+    // ══════════════════════════════════════════════════════════
+
+    private void checkAndRecoverAccessibility() {
+        if (AionAccessibilityService.isReady()) return;
+
+        boolean userOptedIn = getSharedPreferences("aion_prefs", MODE_PRIVATE)
+                .getBoolean("accessibility_user_opted_in", false);
+        if (!userOptedIn) return;
+
+        long now = System.currentTimeMillis();
+        if (now - lastAccessibilityRecoverAt < ACCESSIBILITY_RECOVER_COOLDOWN) return;
+        lastAccessibilityRecoverAt = now;
+
+        boolean hasPermission = (checkCallingOrSelfPermission(
+                "android.permission.WRITE_SECURE_SETTINGS") == PackageManager.PERMISSION_GRANTED);
+        if (!hasPermission) {
+            Log.d(TAG, "♻️ No WRITE_SECURE_SETTINGS, cannot auto-recover accessibility");
+            return;
+        }
+
+        try {
+            String targetComponent = new android.content.ComponentName(
+                    this, AionAccessibilityService.class).flattenToString();
+
+            String current = Settings.Secure.getString(
+                    getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+
+            if (current == null || !current.contains(targetComponent)) {
+                String newValue = (current == null || current.isEmpty())
+                        ? targetComponent
+                        : current + ":" + targetComponent;
+                Settings.Secure.putString(getContentResolver(),
+                        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, newValue);
+                Settings.Secure.putString(getContentResolver(),
+                        "accessibility_enabled", "1");
+                Log.i(TAG, "♻️ Accessibility service re-enabled by WRITE_SECURE_SETTINGS");
+            } else {
+                String without = current.replace(targetComponent, "")
+                        .replace("::", ":").replaceAll("^:|:$", "");
+                Settings.Secure.putString(getContentResolver(),
+                        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, without);
+                try { Thread.sleep(500); } catch (InterruptedException ignored) {}
+                String restored = without.isEmpty()
+                        ? targetComponent
+                        : without + ":" + targetComponent;
+                Settings.Secure.putString(getContentResolver(),
+                        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, restored);
+                Log.i(TAG, "♻️ Accessibility service toggled to force rebind");
+            }
+        } catch (SecurityException e) {
+            Log.w(TAG, "♻️ WRITE_SECURE_SETTINGS permission revoked: " + e.getMessage());
+        } catch (Exception e) {
+            Log.e(TAG, "♻️ accessibility recover failed: " + e.getMessage());
         }
     }
 

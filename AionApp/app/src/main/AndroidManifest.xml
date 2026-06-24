@@ -88,5 +88,18 @@
             android:exported="false"
             android:foregroundServiceType="dataSync|location" />
 
+        <!-- 无障碍截屏服务（需用户手动开启，被系统关闭后可自动恢复） -->
+        <service
+            android:name=".AionAccessibilityService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/aion_accessibility_service" />
+        </service>
+
     </application>
 </manifest>
