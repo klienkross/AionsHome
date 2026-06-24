@@ -293,31 +293,6 @@ async def init_db():
             await db.execute("ALTER TABLE book_highlights ADD COLUMN connor_answer TEXT DEFAULT ''")
         except:
             pass
-        # ── 小剧场对话表 ──
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS theater_conversations (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                persona_id TEXT,
-                model TEXT NOT NULL DEFAULT 'gemini-3-flash',
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        """)
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_theater_conv_updated ON theater_conversations(updated_at DESC)")
-        # ── 小剧场消息表 ──
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS theater_messages (
-                id TEXT PRIMARY KEY,
-                conv_id TEXT NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                attachments TEXT DEFAULT '[]',
-                FOREIGN KEY (conv_id) REFERENCES theater_conversations(id) ON DELETE CASCADE
-            )
-        """)
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_theater_msg_conv ON theater_messages(conv_id, created_at)")
         # ── 礼物表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS gifts (
@@ -395,21 +370,6 @@ async def init_db():
             await db.execute("ALTER TABLE gifts ADD COLUMN sender TEXT DEFAULT 'aion'")
         except:
             pass
-        # ── 基金持仓表 ──
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS fund_holdings (
-                id TEXT PRIMARY KEY,
-                fund_code TEXT NOT NULL,
-                fund_name TEXT DEFAULT '',
-                shares REAL DEFAULT 0,
-                avg_cost REAL DEFAULT 0,
-                total_cost REAL DEFAULT 0,
-                warn_down REAL DEFAULT -3.0,
-                warn_up REAL DEFAULT 15.0,
-                created_at REAL NOT NULL
-            )
-        """)
-        await db.execute("CREATE INDEX IF NOT EXISTS idx_fund_holdings_code ON fund_holdings(fund_code)")
         # ── 娱乐室日志表 ──
         await db.execute("""
             CREATE TABLE IF NOT EXISTS playground_logs (

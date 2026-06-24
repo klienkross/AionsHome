@@ -30,7 +30,7 @@ from chatroom import (
 from context_builder import (
     MUSIC_CMD_PATTERN, MOMENT_CMD_PATTERN, HEART_CMD_PATTERN, MEMORY_CMD_PATTERN,
     ACTIVITY_CHECK_PATTERN, SELFIE_CMD_PATTERN, DRAW_CMD_PATTERN,
-    POI_SEARCH_PATTERN, TOY_CMD_PATTERN, PET_CMD_PATTERN,
+    POI_SEARCH_PATTERN, TOY_CMD_PATTERN,
     VIDEO_CALL_CMD, META_TAG_PATTERN, strip_tool_commands,
     _no_backtick,
 )
@@ -195,10 +195,6 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
     _origin = "connor" if who.lower() == "connor" else "aion"
     full_text = await process_schedule_commands(full_text, None, origin=_origin, origin_room_id=room_id)
 
-    # ── 智能家居 ──
-    from routes.chat import _process_home_commands
-    full_text = await _process_home_commands(full_text)
-
     # ── 查岗 ──
     cam_triggered = bool(CAM_CHECK_PAT.search(full_text))
     if cam_triggered:
@@ -296,12 +292,6 @@ async def _process_chatroom_commands(full_text: str, room_id: str, who: str, msg
         toy_data = {"type": "toy_command", "commands": toy_matches, "msg_id": msg_id}
         await _q.put(toy_data)
         await ws_manager.broadcast({"type": "toy_command", "data": toy_data})
-
-    # ── 桌宠 ──
-    pet_matches = PET_CMD_PATTERN.findall(full_text)
-    if pet_matches:
-        full_text = PET_CMD_PATTERN.sub("", full_text)
-        await ws_manager.broadcast({"type": "pet_command", "data": {"action": pet_matches[-1].lower()}})
 
     # ── Connor 钱包转账（AI 侧） ──
     transfer_matches = TRANSFER_CMD_PATTERN.findall(full_text)

@@ -32,8 +32,6 @@ SELFIE_CMD_PATTERN = _no_backtick(re.compile(r'\[SELFIE:\s*([^\]]+)\]'))
 DRAW_CMD_PATTERN = _no_backtick(re.compile(r'\[DRAW:\s*([^\]]+)\]'))
 POI_SEARCH_PATTERN = _no_backtick(re.compile(r'\[POI_SEARCH:([^\]]+)\]'))
 TOY_CMD_PATTERN = _no_backtick(re.compile(r'\[TOY:(\d|STOP)\]'))
-PET_CMD_PATTERN = _no_backtick(re.compile(r'\[PET:([a-z_\-]+)\]', re.IGNORECASE))
-HOME_CMD_PATTERN = _no_backtick(re.compile(r'\[HOME:([^\]]+)\]', re.IGNORECASE))
 TRANSFER_CMD_PATTERN = _no_backtick(re.compile(r'\[转账[：:]\s*(-?\d+(?:\.\d+)?)\s*元\]'))
 VIDEO_CALL_CMD = '[视频电话]'
 VIDEO_CALL_PAT = _no_backtick(re.compile(r'\[视频电话\]'))
@@ -44,18 +42,9 @@ _SPEAKER_PREFIX_RE = re.compile(r'^\[[\w一-鿿]+\]\s*[:：]\s*')
 _ALL_CMD_PATTERNS = [
     MUSIC_CMD_PATTERN, MOMENT_CMD_PATTERN, HEART_CMD_PATTERN, MEMORY_CMD_PATTERN,
     ACTIVITY_CHECK_PATTERN, SELFIE_CMD_PATTERN, DRAW_CMD_PATTERN,
-    POI_SEARCH_PATTERN, TOY_CMD_PATTERN, PET_CMD_PATTERN,
-    HOME_CMD_PATTERN, TRANSFER_CMD_PATTERN,
+    POI_SEARCH_PATTERN, TOY_CMD_PATTERN,
+    TRANSFER_CMD_PATTERN,
 ]
-
-HOME_ALIASES_HINT = (
-    "所有灯、客厅灯、屁股灯、入户灯、餐边柜灯带、厨房灯带、智米空调、"
-    "浴霸灯"
-)
-HOME_ABILITY_TEXT = (
-    "[HOME:on/off/state|别名] 或 [HOME:climate|别名|mode=cool|temperature=26] "
-    f"控制智能家居，仅限明确要求。别名：{HOME_ALIASES_HINT}。"
-)
 
 
 
@@ -69,9 +58,6 @@ def strip_tool_commands(text: str) -> str:
     return text.strip()
 
 
-def _is_pet_available() -> bool:
-    from ws import manager
-    return bool(SETTINGS.get("pet_enabled", False) and manager.has_active_pet())
 
 
 def _timeline_display_names() -> tuple[str, str, str]:
@@ -118,7 +104,6 @@ async def build_ability_block(
         f"是否在好好工作等，也可以当做下一次主动发送消息来使用，根据对话内容可以随时设定。日期时间用ISO格式。"
     )
     abilities.append("[SCHEDULE_DEL:日程id] — 删除指定日程/闹铃/定时监控。")
-    abilities.append(HOME_ABILITY_TEXT)
 
     if is_activity_tracking_enabled():
         abilities.append(
@@ -166,14 +151,6 @@ async def build_ability_block(
             f"提示词请使用英文。一次回复只用一个生图指令。"
         )
 
-    if _is_pet_available():
-        abilities.append(
-            "[PET:动作名] — 控制桌面宠物切换动画表情。"
-            "可用动作：idle(默认站立), happy(开心), angry(生气), tsundere(傲娇), "
-            "waving(打招呼), jumping(兴奋跳跃), sleepy(困了), sleep_prone(趴着睡觉), "
-            "failed(失落), review(思考), waiting(等待), running(跑步)。"
-            "根据对话情感自然使用，每条回复最多用一个。"
-        )
 
     abilities.append(
         f"[MOMENT:朋友圈内容|true/false] — 当**本次**聊天内容非常触动人心、有很深的感触、"

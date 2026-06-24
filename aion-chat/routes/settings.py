@@ -186,19 +186,6 @@ async def update_gemini_cli_tools_setting(body: GeminiCliToolsToggle):
     save_settings(SETTINGS)
     return {"ok": True, "gemini_cli_tools_enabled": body.enabled}
 
-# ── 桌宠开关 ──────────────────────────────────────
-@router.get("/api/settings/pet")
-async def get_pet_setting():
-    return {"pet_enabled": SETTINGS.get("pet_enabled", False)}
-
-class PetToggle(BaseModel):
-    enabled: bool
-
-@router.put("/api/settings/pet")
-async def update_pet_setting(body: PetToggle):
-    SETTINGS["pet_enabled"] = body.enabled
-    save_settings(SETTINGS)
-    return {"ok": True, "pet_enabled": body.enabled}
 
 # ── 记忆 Links 展开开关 ──────────────────────────
 @router.get("/api/settings/recall-links")

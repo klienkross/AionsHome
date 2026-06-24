@@ -36,7 +36,7 @@ CORE_MODULES = {
 }
 
 # 无对应路由模块的独立页面，不受模块开关影响
-_STANDALONE_PAGES = {"home", "worldbook", "pet"}
+_STANDALONE_PAGES = {"home", "worldbook"}
 
 
 # ── 内部工具 ─────────────────────────────────────────

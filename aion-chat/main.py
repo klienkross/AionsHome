@@ -3,11 +3,13 @@ Aion Chat — 入口文件
 FastAPI app 创建、lifespan、静态文件挂载、路由注册
 """
 
-import asyncio, json, logging
+import asyncio, json, logging, sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+
+IS_WINDOWS = sys.platform == "win32"
 
 # 过滤高频轮询路径的 access log，避免淹没有用的日志
 class _QuietCamFilter(logging.Filter):
@@ -20,22 +22,26 @@ logging.getLogger("uvicorn.access").addFilter(_QuietCamFilter())
 
 # 静默 Windows asyncio ProactorEventLoop 连接重置的噪音日志
 logging.getLogger("asyncio").setLevel(logging.CRITICAL)
+logging.getLogger("websockets").setLevel(logging.CRITICAL)
 from fastapi.responses import FileResponse, HTMLResponse
 
 from config import BASE_DIR, PUBLIC_DIR, UPLOADS_DIR, CODEX_UPLOADS_DIR, SCREENSHOTS_DIR, load_cam_config, SETTINGS, save_settings
 from database import init_db, get_db
 from ws import manager
 from reading import ReadingSession, get_session
-from camera import cam
-from voice import voice
 from schedule import schedule_mgr
 
+from camera import cam
 from plugin_loader import discover_routers, discover_pages
 from activity import pc_tracker
 # from memory import auto_digest  # V1
 from digest_v2 import auto_digest_v2 as auto_digest
 from chatroom import _connor_1v1_auto_digest_loop
-from fund import fund_scheduler
+
+if IS_WINDOWS:
+    from voice import voice
+else:
+    voice = None
 
 
 # ── 自动记忆总结定时任务 ──────────────────────────
@@ -95,17 +101,18 @@ async def lifespan(app: FastAPI):
     await embedding_cache.load()
     print(f"[embedding_cache] Loaded {embedding_cache.count()} vectors")
     loop = asyncio.get_event_loop()
-    cam.set_event_loop(loop)
-    cam_cfg = load_cam_config()
-    if cam_cfg.get("monitor_enabled"):
-        if cam_cfg.get("active_source") == "esp32":
-            cam.open_esp32()
-        else:
-            cam.open_camera(cam_cfg["camera_index"])
-        cam.start_monitoring()
-    # 语音模块初始化
-    voice.set_event_loop(loop)
-    voice.set_ws_manager(manager)
+    if cam:
+        cam.set_event_loop(loop)
+        cam_cfg = load_cam_config()
+        if cam_cfg.get("monitor_enabled"):
+            if cam_cfg.get("active_source") == "esp32":
+                cam.open_esp32()
+            else:
+                cam.open_camera(cam_cfg["camera_index"])
+            cam.start_monitoring()
+    if voice:
+        voice.set_event_loop(loop)
+        voice.set_ws_manager(manager)
     # 日程/闹铃模块初始化
     schedule_mgr.set_event_loop(loop)
     schedule_mgr.start()
@@ -115,15 +122,13 @@ async def lifespan(app: FastAPI):
     # ntfy.sh 公网中转桥接
     import ntfy_bridge
     ntfy_bridge.start(loop)
-    # PC 活动采集
-    pc_tracker.set_event_loop(loop)
-    try:
-        pc_tracker.start()
-    except Exception as e:
-        print(f"[PCActivity] ❌ 启动异常: {e}")
-    # 基金监控定时任务
-    fund_scheduler.set_event_loop(loop)
-    fund_scheduler.start()
+    # PC 活动采集（Windows only）
+    if IS_WINDOWS:
+        pc_tracker.set_event_loop(loop)
+        try:
+            pc_tracker.start()
+        except Exception as e:
+            print(f"[PCActivity] ❌ 启动异常: {e}")
     # 自动记忆总结定时任务
     digest_task = asyncio.create_task(_auto_digest_loop())
     # WS 心跳清理
@@ -137,11 +142,13 @@ async def lifespan(app: FastAPI):
     digest_task.cancel()
     decay_task.cancel()
     ntfy_bridge.stop()
-    fund_scheduler.stop()
-    pc_tracker.stop()
+    if IS_WINDOWS:
+        pc_tracker.stop()
     schedule_mgr.stop()
-    voice.stop()
-    cam.close_camera()
+    if voice:
+        voice.stop()
+    if cam:
+        cam.close_camera()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -178,7 +185,6 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 app.mount("/cr-uploads", StaticFiles(directory=str(CODEX_UPLOADS_DIR)), name="cr-uploads")
 app.mount("/public", StaticFiles(directory=str(PUBLIC_DIR)), name="public")
 app.mount("/screenshots", StaticFiles(directory=str(SCREENSHOTS_DIR)), name="screenshots")
-app.mount("/aion-pet", StaticFiles(directory=str(BASE_DIR.parent / "AionPet")), name="aion-pet")
 
 # 路由 + 页面自动发现
 discover_routers(app)
@@ -250,8 +256,6 @@ async def websocket_endpoint(ws: WebSocket):
                 elif msg_type == "reading_stop":
                     for s in list(_reading_sessions_for_ws(ws)):
                         s.on_stop()
-                elif msg_type == "pet_state":
-                    manager.set_pet_state(ws, msg.get("enabled", False))
                 elif msg.get("type") == "step_diag":
                     # 手机回传的步数传感器诊断 → 转发给所有浏览器客户端
                     await manager.broadcast(msg, exclude=ws)
