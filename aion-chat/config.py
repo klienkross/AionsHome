@@ -210,37 +210,15 @@ MODELS = {
     "硅基GLM-5":        {"provider": "siliconflow", "model": "Pro/zai-org/GLM-5"},
     "硅基Kimi-K2.5":    {"provider": "siliconflow", "model": "Pro/moonshotai/Kimi-K2.5"},
     "硅基Kimi2.6":      {"provider": "siliconflow", "model": "Pro/moonshotai/Kimi-K2.6"},
-    "gemini-3.1-flash-lite": {"provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
-    "gemini-2.5-pro":        {"provider": "gemini", "model": "gemini-2.5-pro"},
-    "gemini-3-flash":        {"provider": "gemini", "model": "gemini-3-flash-preview"},
-    "gemini-3.1-pro":        {"provider": "gemini", "model": "gemini-3.1-pro-preview"},
-    "gemini-3.1-lite":       {"provider": "gemini", "model": "gemini-3.1-flash-lite"},
-    "claude-sonnet-4-6":  {"provider": "aipro", "model": "claude-sonnet-4-6"},
-    "claude-opus4.6":    {"provider": "aipro", "model": "claude-opus-4-6"},
-    "claude-opus4.6T":    {"provider": "aipro", "model": "claude-opus-4-6-thinking"},
-    "哈基米opus4.7": {"provider": "aipro", "model": "claude-opus-4-7"},
-    "哈基米opus4.6":  {"provider": "aipro", "model": "claude-opus-4-6"},
-    "哈基米gpt-5.5":    {"provider": "aipro", "model": "gemini-3.1-pro-high"},
-    "哈基米3.1pro":     {"provider": "aipro", "model": "gemini-3.1-pro-high"},
-    "哈基米2.5pro":    {"provider": "aipro", "model": "gemini-2.5-pro"},
-    "CLI-2.5pro":       {"provider": "gemini_cli", "model": "gemini-2.5-pro"},
-    "CLI-3.1pro":       {"provider": "gemini_cli", "model": "gemini-3.1-pro-preview"},
-    "CLI-2.5flash":     {"provider": "gemini_cli", "model": "gemini-2.5-flash"},
-    "Codex":            {"provider": "codex_cli",  "model": ""},
+    "sil-dsv3.2":       {"provider": "siliconflow", "model": "deepseek-ai/DeepSeek-V3.2"},
     "CLI-Claude":       {"provider": "claude_cli",  "model": "",
         "cli_env": {"ANTHROPIC_MODEL": "claude-opus-4-6"}
         },
-    "CLI-DeepSeek":     {"provider": "claude_cli", "model": "deepseek-v4-pro[1m]", "key_name": "ds_key", "base_url": "https://api.deepseek.com/anthropic",
-        "cli_env": {
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
-            "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
-            "CLAUDE_CODE_EFFORT_LEVEL": "max",
-        }},
+
 
     # 自定义第三方 OpenAI 兼容端点示例（删掉注释#即可启用，填好 base_url 与 key_name）
     "ds":  {"provider": "custom", "model": "deepseek-v4-pro", "base_url": "https://api.deepseek.com/v1", "key_name": "ds_key"},
+    "ds_opencode":  {"provider": "custom", "model": "deepseek-v4-pro", "base_url": "https://opencode.ai/zen/go/v1", "key_name": "opencode_key"},
 }
 
 DEFAULT_MODEL = SETTINGS.get("default_model") or next(iter(MODELS), "gemini-3-flash")

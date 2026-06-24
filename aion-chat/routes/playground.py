@@ -127,7 +127,10 @@ async def _call_ai_with_tools(messages: list, tools: list, model_cfg: dict,
         base_url = model_cfg.get("base_url", "").rstrip("/")
         key_name = model_cfg.get("key_name", "")
         url = base_url + "/chat/completions"
-        headers = {"Authorization": f"Bearer {get_key(key_name)}", "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        key = get_key(key_name)
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
     else:
         raise ValueError(f"不支持的 provider: {provider}")
 
@@ -178,7 +181,10 @@ async def _stream_ai_text(messages: list, model_cfg: dict, cancel_event: asyncio
         base_url = model_cfg.get("base_url", "").rstrip("/")
         key_name = model_cfg.get("key_name", "")
         url = base_url + "/chat/completions"
-        headers = {"Authorization": f"Bearer {get_key(key_name)}", "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        key = get_key(key_name)
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
     else:
         raise ValueError(f"不支持的 provider: {provider}")
 
