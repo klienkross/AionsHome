@@ -77,9 +77,15 @@ def _process_voice_attachments(history: list):
                     non_media_atts.append(att.get("url", ""))
             elif isinstance(att, dict) and att.get("type") == "video_clip":
                 transcript = att.get("transcript", "")
+                frame_desc = att.get("frame_description", "")
+                parts = []
                 if transcript:
-                    media_transcripts.append(f"[视频通话] {transcript}")
-                if is_kept:
+                    parts.append(transcript)
+                if frame_desc:
+                    parts.append(f"（画面：{frame_desc}）")
+                if parts:
+                    media_transcripts.append(f"[视频通话] {' '.join(parts)}")
+                if is_kept and not frame_desc:
                     non_media_atts.append(att.get("url", ""))
             else:
                 if is_kept:

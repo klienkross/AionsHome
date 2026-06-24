@@ -54,6 +54,10 @@
           <label class="toggle-switch"><input type="checkbox" id="togVideoCall"><span class="toggle-slider"></span></label>
         </div>
         <div class="toggle-row">
+          <span class="toggle-label">视频通话画面描述</span>
+          <label class="toggle-switch"><input type="checkbox" id="togVideoCallVision"><span class="toggle-slider"></span></label>
+        </div>
+        <div class="toggle-row">
           <span class="toggle-label">AI 生图（SELFIE / DRAW）</span>
           <label class="toggle-switch"><input type="checkbox" id="togImageGen"><span class="toggle-slider"></span></label>
         </div>
@@ -168,10 +172,11 @@ document.querySelectorAll('.settings-group').forEach(det => {
 
 // ── Init ──
 (async function init() {
-  const [s, models, vc, ig, gc, rl] = await Promise.all([
+  const [s, models, vc, vcv, ig, gc, rl] = await Promise.all([
     api("GET", "/api/settings"),
     api("GET", "/api/models"),
     api("GET", "/api/settings/video-call"),
+    api("GET", "/api/settings/video-call-vision"),
     api("GET", "/api/settings/image-gen"),
     api("GET", "/api/settings/gemini-cli-tools"),
     api("GET", "/api/settings/recall-links"),
@@ -212,13 +217,14 @@ document.querySelectorAll('.settings-group').forEach(det => {
 
   // Toggles
   $("togVideoCall").checked = vc.video_call_enabled !== false;
+  $("togVideoCallVision").checked = !!vcv.video_call_vision;
   $("togImageGen").checked = !!ig.image_gen_enabled;
   $("togGeminiCli").checked = !!gc.gemini_cli_tools_enabled;
   $("togRecallLinks").checked = !!rl.recall_use_links;
 
   // Green dots
   if (s.dashscope_key || s.siliconflow_key) $("dotCore").classList.add("active");
-  if (!vc.video_call_enabled || ig.image_gen_enabled || gc.gemini_cli_tools_enabled || rl.recall_use_links) {
+  if (!vc.video_call_enabled || vcv.video_call_vision || ig.image_gen_enabled || gc.gemini_cli_tools_enabled || rl.recall_use_links) {
     $("dotToggles").classList.add("active");
   }
   if (s.mimo_key) $("dotVoice").classList.add("active");
@@ -234,6 +240,9 @@ document.querySelectorAll('.settings-group').forEach(det => {
 // ── Toggle handlers (instant-apply) ──
 $("togVideoCall").addEventListener("change", async e => {
   await api("PUT", "/api/settings/video-call", { enabled: e.target.checked });
+});
+$("togVideoCallVision").addEventListener("change", async e => {
+  await api("PUT", "/api/settings/video-call-vision", { enabled: e.target.checked });
 });
 $("togImageGen").addEventListener("change", async e => {
   await api("PUT", "/api/settings/image-gen", { enabled: e.target.checked });

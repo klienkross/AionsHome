@@ -79,9 +79,15 @@ def _process_voice_attachments_in_history(history: list, keep_idx: int = -1):
                     non_media_atts.append(att.get("url", ""))
             elif isinstance(att, dict) and att.get("type") == "video_clip":
                 transcript = att.get("transcript", "")
+                frame_desc = att.get("frame_description", "")
+                parts = []
                 if transcript:
-                    media_transcripts.append(f"[视频通话] {transcript}")
-                if is_kept:
+                    parts.append(transcript)
+                if frame_desc:
+                    parts.append(f"（画面：{frame_desc}）")
+                if parts:
+                    media_transcripts.append(f"[视频通话] {' '.join(parts)}")
+                if is_kept and not frame_desc:
                     non_media_atts.append(att.get("url", ""))
             else:
                 if is_kept:
@@ -1874,9 +1880,12 @@ async def perform_poi_check(conv_id: str, model_key: str, categories: list[str])
             if isinstance(_a, dict) and _a.get("type") == "voice" and _a.get("transcript"):
                 _orig = _c.strip() if _c else ""
                 _c = f"[语音消息] {_a['transcript']}" + (f"\n{_orig}" if _orig else "")
-            elif isinstance(_a, dict) and _a.get("type") == "video_clip" and _a.get("transcript"):
+            elif isinstance(_a, dict) and _a.get("type") == "video_clip" and (_a.get("transcript") or _a.get("frame_description")):
                 _orig = _c.strip() if _c else ""
-                _c = f"[视频通话] {_a['transcript']}" + (f"\n{_orig}" if _orig else "")
+                _parts = []
+                if _a.get("transcript"): _parts.append(_a["transcript"])
+                if _a.get("frame_description"): _parts.append(f"（画面：{_a['frame_description']}）")
+                _c = f"[视频通话] {' '.join(_parts)}" + (f"\n{_orig}" if _orig else "")
         recent.append({"role": r["role"], "content": _c, "attachments": []})
 
     loc_prompt = format_location_for_prompt()
@@ -2114,9 +2123,12 @@ async def perform_activity_check(conv_id: str, model_key: str, n: int = 6):
             if isinstance(_a, dict) and _a.get("type") == "voice" and _a.get("transcript"):
                 _orig = _c.strip() if _c else ""
                 _c = f"[语音消息] {_a['transcript']}" + (f"\n{_orig}" if _orig else "")
-            elif isinstance(_a, dict) and _a.get("type") == "video_clip" and _a.get("transcript"):
+            elif isinstance(_a, dict) and _a.get("type") == "video_clip" and (_a.get("transcript") or _a.get("frame_description")):
                 _orig = _c.strip() if _c else ""
-                _c = f"[视频通话] {_a['transcript']}" + (f"\n{_orig}" if _orig else "")
+                _parts = []
+                if _a.get("transcript"): _parts.append(_a["transcript"])
+                if _a.get("frame_description"): _parts.append(f"（画面：{_a['frame_description']}）")
+                _c = f"[视频通话] {' '.join(_parts)}" + (f"\n{_orig}" if _orig else "")
         recent.append({"role": r["role"], "content": _c, "attachments": []})
 
     activity_prompt = (

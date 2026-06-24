@@ -42,6 +42,7 @@ const videoCall = (() => {
   let _lastInteractionTime = 0;   // 最后交互时间（用于不活跃超时）
   let _inactivityTimer = null;
   const MAX_RECORD_SECONDS = 60;
+  let _visionEnabled = false;
 
   // ── 获取 AI 名称 ──
   function _getAiName() {
@@ -163,6 +164,12 @@ const videoCall = (() => {
     _removeOverlay();
     _active = true;
     _swapped = false;
+
+    try {
+      const r = await fetch('/api/settings/video-call-vision');
+      const d = await r.json();
+      _visionEnabled = !!d.video_call_vision;
+    } catch (_) { _visionEnabled = false; }
 
     _overlay = _createElement('div', { id: 'videoCallOverlay' }, {
       position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
@@ -691,17 +698,20 @@ const videoCall = (() => {
         return;
       }
 
-      // ASR 转写
+      // ASR 转写 + 视觉描述（并行）
       _updateStatus('识别中...');
-      let transcript = '';
-      if (audioBlob && audioBlob.size > 100) {
-        transcript = await _transcribeAudio(audioBlob);
+      const asrPromise = (audioBlob && audioBlob.size > 100) ? _transcribeAudio(audioBlob) : Promise.resolve('');
+      let frameDescPromise = Promise.resolve('');
+      if (_visionEnabled) {
+        const frameBlob = _captureFrame();
+        if (frameBlob) frameDescPromise = _describeFrame(frameBlob);
       }
+      const [transcript, frameDesc] = await Promise.all([asrPromise, frameDescPromise]);
 
       // 检查挂断关键词
       const hangupWords = ['再见', '拜拜', '挂断', '结束通话', '挂了'];
       if (transcript && hangupWords.some(kw => transcript.includes(kw))) {
-        const att = { type: 'video_clip', url: videoUrl, duration: Math.round(duration), transcript };
+        const att = { type: 'video_clip', url: videoUrl, duration: Math.round(duration), transcript, frame_description: frameDesc };
         await _sendToChat('', att);
         _hangup();
         return;
@@ -710,8 +720,8 @@ const videoCall = (() => {
       // 发送给模型
       _aiSpeaking = true;
       _updateStatus('AI 思考中...');
-      const att = { type: 'video_clip', url: videoUrl, duration: Math.round(duration), transcript };
-      await _sendToChat(transcript, att);
+      const att = { type: 'video_clip', url: videoUrl, duration: Math.round(duration), transcript, frame_description: frameDesc };
+      await _sendToChat('', att);
     } catch (e) {
       console.error('[VideoCall] Record process error:', e);
       _updateStatus('⚠ 处理出错');
@@ -795,6 +805,52 @@ const videoCall = (() => {
     } catch (e) {
       console.error('[VideoCall] Upload failed:', e);
       return null;
+    }
+  }
+
+  // ── 抓取当前视频帧 ──
+  function _captureFrame() {
+    try {
+      if (_useNativeCamera && window.AionCamera) {
+        const b64 = window.AionCamera.getFrame();
+        if (!b64) return null;
+        const bin = atob(b64);
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        return new Blob([arr], { type: 'image/jpeg' });
+      }
+      const video = document.getElementById('vcUserVideo');
+      if (!video || !video.videoWidth) return null;
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+      const b64 = dataUrl.split(',')[1];
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return new Blob([arr], { type: 'image/jpeg' });
+    } catch (e) {
+      console.error('[VideoCall] Capture frame error:', e);
+      return null;
+    }
+  }
+
+  // ── 调 VL 模型描述帧画面 ──
+  async function _describeFrame(frameBlob) {
+    try {
+      const form = new FormData();
+      form.append('file', frameBlob, 'vc_frame.jpg');
+      const resp = await fetch('/api/voice/describe-frame', { method: 'POST', body: form });
+      const data = await resp.json();
+      const desc = (data.description || '').trim();
+      console.log(`[VideoCall] Frame desc: "${desc}"`);
+      return desc;
+    } catch (e) {
+      console.error('[VideoCall] Describe frame error:', e);
+      return '';
     }
   }
 

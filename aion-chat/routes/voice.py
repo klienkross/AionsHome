@@ -96,6 +96,26 @@ async def remote_asr(file: UploadFile = File(...)):
         return {"text": "", "error": str(e)}
 
 
+@router.post("/api/voice/describe-frame")
+async def describe_video_frame(file: UploadFile = File(...)):
+    """视频通话抽帧描述：接收 JPEG 帧，调 VL 模型返回画面描述"""
+    from sentinel import describe_image_b64
+    import base64
+    content = await file.read()
+    if len(content) < 100:
+        return {"description": ""}
+    print(f"[DescribeFrame] Received {len(content)} bytes")
+    try:
+        b64 = base64.b64encode(content).decode()
+        desc = await describe_image_b64(b64)
+        text = (desc or "").strip()
+        print(f"[DescribeFrame] Result: '{text[:80]}'")
+        return {"description": text}
+    except Exception as e:
+        print(f"[DescribeFrame] Error: {e}")
+        return {"description": "", "error": str(e)}
+
+
 @router.post("/api/voice/transcribe")
 async def transcribe_voice_message(file: UploadFile = File(...)):
     """语音消息转写：接收上传的音频文件，调硅基流动 ASR 返回文本"""

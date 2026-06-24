@@ -158,6 +158,20 @@ async def update_video_call_setting(body: VideoCallToggle):
     save_settings(SETTINGS)
     return {"ok": True, "video_call_enabled": body.enabled}
 
+# ── 视频通话视觉描述开关 ──────────────────────────────
+@router.get("/api/settings/video-call-vision")
+async def get_video_call_vision_setting():
+    return {"video_call_vision": SETTINGS.get("video_call_vision", False)}
+
+class VideoCallVisionToggle(BaseModel):
+    enabled: bool
+
+@router.put("/api/settings/video-call-vision")
+async def update_video_call_vision_setting(body: VideoCallVisionToggle):
+    SETTINGS["video_call_vision"] = body.enabled
+    save_settings(SETTINGS)
+    return {"ok": True, "video_call_vision": body.enabled}
+
 # ── AI 生图开关 ───────────────────────────────────
 @router.get("/api/settings/image-gen")
 async def get_image_gen_setting():

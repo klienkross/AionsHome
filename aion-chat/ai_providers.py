@@ -255,8 +255,6 @@ def build_multimodal_messages(history: list):
                     b64 = base64.b64encode(fpath.read_bytes()).decode()
                     if mime.startswith("image/"):
                         parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-                    elif mime.startswith("video/"):
-                        parts.append({"type": "video_url", "video_url": {"url": f"data:{mime};base64,{b64}"}})
             result.append({"role": m["role"], "content": parts if parts else m["content"]})
         else:
             result.append({"role": m["role"], "content": m["content"]})
@@ -416,7 +414,10 @@ async def call_aipro(messages: list, model: str, meta: dict | None = None, tempe
 async def call_custom(messages: list, model: str, base_url: str, key_name: str,
                       meta: dict | None = None, temperature: float | None = None, max_tokens: int | None = None):
     url = base_url.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {get_key(key_name)}", "Content-Type": "application/json"}
+    headers = {"Content-Type": "application/json"}
+    key = get_key(key_name)
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     api_messages = build_multimodal_messages(messages)
     payload = {"model": model, "messages": api_messages, "stream": True}
     if temperature is not None:
