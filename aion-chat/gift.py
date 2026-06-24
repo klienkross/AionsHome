@@ -32,7 +32,7 @@ async def judge_and_send_gift(
     try:
         await _judge_and_send_gift_inner(
             all_summaries, context_msgs, persona_block,
-            ai_name, user_name, model_key, conv_id,
+            ai_name, user_name, model_key, conv_id, sender,
         )
     except Exception as e:
         print(f"[gift] 送礼流程异常: {e}")
@@ -46,6 +46,7 @@ async def _judge_and_send_gift_inner(
     user_name: str,
     model_key: str,
     conv_id: str,
+    sender: str = "aion",
 ):
     from ai_providers import simple_ai_call
 

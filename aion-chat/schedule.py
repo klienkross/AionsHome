@@ -15,8 +15,6 @@ from database import get_db
 from ws import manager
 from ai_providers import stream_ai, CLI_STATUS_PREFIX
 from memory import recall_memories
-from music import search_songs, get_audio_url
-from routes.music import MUSIC_CMD_PATTERN
 from tts import TTSStreamer
 
 log = logging.getLogger("schedule")
@@ -380,6 +378,8 @@ class ScheduleManager:
             return
 
         # 检测 [MUSIC:xxx] 指令
+        from routes.music import MUSIC_CMD_PATTERN
+        from music import search_songs, get_audio_url
         music_matches = MUSIC_CMD_PATTERN.findall(full_text)
         music_cards = []
         if music_matches:
@@ -446,7 +446,7 @@ class ScheduleManager:
         # 尝试截图（摄像头可能未开启）
         from camera import cam
         fname = None
-        if cam.running:
+        if cam and cam.running:
             # 播放提示音 + 5秒延迟，给用户反应时间
             await manager.broadcast({"type": "monitor_alert", "data": {"content": content}})
             await asyncio.sleep(5)
@@ -621,6 +621,8 @@ class ScheduleManager:
             return
 
         # 检测 [MUSIC:xxx] 指令
+        from routes.music import MUSIC_CMD_PATTERN
+        from music import search_songs, get_audio_url
         music_matches = MUSIC_CMD_PATTERN.findall(full_text)
         music_cards = []
         if music_matches:

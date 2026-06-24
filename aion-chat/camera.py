@@ -2,21 +2,14 @@
 摄像头监控：CameraMonitor 类、Sentinel 分析、Core 唤醒、监控日志读写
 """
 
-import json, time, re, base64, asyncio, threading, sqlite3, random, urllib.request
+import json, time, re, base64, asyncio, threading, sqlite3, random, urllib.request, sys
 from pathlib import Path
 
-import cv2, httpx, numpy as np, aiosqlite
-
-from config import (
-    DB_PATH, SCREENSHOTS_DIR, MONITOR_LOGS_DIR,
-    get_key, get_sentinel_config, load_worldbook, load_chat_status, load_cam_config, save_cam_config, DEFAULT_MODEL, SETTINGS,
-)
+from config import MONITOR_LOGS_DIR, DB_PATH
 from database import get_db
-from ws import manager
-from ai_providers import stream_ai, CLI_STATUS_PREFIX
-from memory import recall_memories
-from sentinel import call_sentinel
-from tts import TTSStreamer
+
+# ── 监控日志工具（跨平台，不依赖 cv2） ───────────────
+# 提前定义，保证 Linux 上 from camera import append_monitor_log 等可用
 
 
 # ── 监控日志文件读写 ──────────────────────────────
@@ -102,6 +95,30 @@ async def async_get_last_user_msg_time() -> float:
         cur = await db.execute("SELECT created_at FROM messages WHERE role='user' ORDER BY created_at DESC LIMIT 1")
         row = await cur.fetchone()
         return row[0] if row else 0
+
+
+CAM_CHECK_CMD = "[CAM_CHECK]"
+
+_IS_WINDOWS = sys.platform == "win32"
+
+if not _IS_WINDOWS:
+    import httpx, aiosqlite
+    try:
+        import cv2, numpy as np
+    except ImportError:
+        cv2 = None
+        np = None
+else:
+    import cv2, httpx, numpy as np, aiosqlite
+
+from config import (
+    SCREENSHOTS_DIR,
+    get_key, get_sentinel_config, load_worldbook, load_chat_status, load_cam_config, save_cam_config, DEFAULT_MODEL, SETTINGS,
+)
+from ai_providers import stream_ai, CLI_STATUS_PREFIX
+from memory import recall_memories
+from sentinel import call_sentinel
+from tts import TTSStreamer
 
 
 def detect_cameras(max_test: int = 5, skip_index: int = -1) -> list:
@@ -966,10 +983,18 @@ call_core判断依据：
         await manager.broadcast({"type": "monitor_log", "data": core_log})
 
 
-cam = CameraMonitor()
-
-# ── Core 主动查看监控 [CAM_CHECK] ─────────────────
-CAM_CHECK_CMD = "[CAM_CHECK]"
+if _IS_WINDOWS:
+    cam = CameraMonitor()
+else:
+    class _DummyCam:
+        running = False
+        def set_event_loop(self, *a): pass
+        def open_camera(self, *a): pass
+        def open_esp32(self, *a): pass
+        def close_camera(self): pass
+        def start_monitoring(self): pass
+        def get_frame_jpeg(self): return None
+    cam = _DummyCam()
 
 async def perform_cam_check(conv_id: str, model_key: str):
     """Core 在聊天中主动请求查看监控画面：截图 → 发给 Core → 保存为新消息"""
